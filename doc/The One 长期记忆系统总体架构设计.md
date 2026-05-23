@@ -850,6 +850,18 @@ resolveCodeRefs(memory.code_refs)
 | `theorem` | 定理、基础规则 | durable |
 | `temporary_state` | 临时任务状态 | 5 天 |
 
+记忆隔离策略优先由内容类型决定：
+
+| 内容类型 | 推荐 memory type | 推荐 scope | 隔离策略 |
+|---|---|---|---|
+| 定理、常识、行业基础知识、通用工程技能 | `theorem`、`common_knowledge`、`skill` | `global_common` | 不按 workspace/project/repo 隔离，作为共享知识召回 |
+| 用户长期偏好、跨项目工作方式、沟通风格 | `preference`、跨项目 `procedure` | `user_global` | 按用户隔离，不绑定具体项目 |
+| 项目事实、工程设计、架构决策、项目约束、设计复查 checkpoint | `project_fact`、`decision`、`constraint`、`review_checkpoint` | `project_local` | 必须按 `workspace_id + project_id` 隔离 |
+| 仓库实现细节、代码引用、与具体 repo 绑定的经验 | `failure`、`procedure`、带 code ref 的项目记忆 | `repo_local` | 必须按 `workspace_id + repo_id` 隔离 |
+| 当前任务状态、短期上下文、未巩固临时信息 | `temporary_state`、`session_summary` | `session` | 必须按 `workspace_id + session_id` 隔离，不进入长期稳定结论 |
+
+共享知识和项目记忆不能混写：如果内容是“某项目为什么这样设计”“某代码模块如何约束实现”“某次复查结论”，即使表述中包含通用技术概念，也应写入 `project_local` 或 `repo_local`；只有脱离具体项目仍成立的定理、常识、行业技能和基础知识，才应写入 `global_common`。
+
 ### 6.2 Scope
 
 一期按大粒度隔离：
@@ -864,10 +876,11 @@ resolveCodeRefs(memory.code_refs)
 
 默认规则：
 
-1. 自动写入默认不提升到 `global_common`。
-2. 项目记忆默认不跨项目共享。
-3. 用户偏好可跨项目共享。
-4. 通用知识只有在用户明确整理、项目上下文绑定、失败经验引用或多次影响决策时才长期保存。
+1. `global_common` 用于定理、常识、行业技能和基础知识，不按 workspace/project/repo 隔离。
+2. 自动写入默认不提升到 `global_common`；进入共享知识前必须有明确整理、稳定来源或人工确认。
+3. 项目代码、工程设计、架构决策、项目约束和设计复查 checkpoint 默认写入 `project_local` 或 `repo_local`，不得跨项目共享。
+4. 用户偏好和跨项目工作方式写入 `user_global`，可跨项目召回，但仍按用户隔离。
+5. 通用知识如果只是在某项目语境中被临时引用，不应自动写入 `global_common`；应作为当前项目 evidence 或 code ref 的上下文处理。
 
 Scope 字段一致性约束：
 
