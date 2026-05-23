@@ -115,6 +115,50 @@ func TestServiceObserveRejectsFullOutput(t *testing.T) {
 	}
 }
 
+func TestServiceObserveTracksContentBoundaryRejectionForSession(t *testing.T) {
+	repo := newFakeRepository()
+	service := NewService(config.Default(), repo)
+	start, err := service.Observe(context.Background(), ObserveRequest{
+		EventType:     EventSessionStart,
+		SourceChannel: SourceChannelAgentSession,
+		WorkspaceID:   "ws",
+		AgentType:     "cursor",
+		CaptureCapabilities: CaptureCapabilities{
+			SessionLifecycle: true,
+			MCPObserve:       true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Observe(session.start) error = %v", err)
+	}
+
+	_, err = service.Observe(context.Background(), ObserveRequest{
+		SessionID:     start.SessionID,
+		EventType:     EventToolResultSummary,
+		SourceChannel: SourceChannelAgentSession,
+		WorkspaceID:   "ws",
+		AgentType:     "cursor",
+		SourceRefs:    []SourceRef{{"full_output": "完整输出"}},
+		CaptureCapabilities: CaptureCapabilities{
+			SessionLifecycle: true,
+			MCPObserve:       true,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "CONTENT_TOO_LARGE") {
+		t.Fatalf("Observe() error = %v, want CONTENT_TOO_LARGE", err)
+	}
+	report, err := repo.GetCaptureQuality(context.Background(), start.SessionID)
+	if err != nil {
+		t.Fatalf("GetCaptureQuality() error = %v", err)
+	}
+	if !strings.Contains(report.CaptureQualityJSON, `"content_boundary_rejections":1`) {
+		t.Fatalf("quality json = %s, want one content boundary rejection", report.CaptureQualityJSON)
+	}
+	if len(repo.events) != 1 {
+		t.Fatalf("events = %d, want only session.start raw event", len(repo.events))
+	}
+}
+
 func TestServiceDiagnosticsDelegatesToRepository(t *testing.T) {
 	repo := newFakeRepository()
 	repo.sessions["sess_001"] = AgentSession{

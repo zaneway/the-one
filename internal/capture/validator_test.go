@@ -22,6 +22,20 @@ func TestNormalizeObserveRequiresSessionForAgentEvent(t *testing.T) {
 	}
 }
 
+func TestNormalizeObserveRequiresExplicitAgentTypeForAgentSession(t *testing.T) {
+	cfg := config.Default().Capture
+	req := ObserveRequest{
+		EventType:     EventSessionStart,
+		SourceChannel: SourceChannelAgentSession,
+		WorkspaceID:   "ws_local",
+	}
+
+	err := NormalizeObserve(cfg, &req)
+	if err == nil || !strings.Contains(err.Error(), "agent_type") {
+		t.Fatalf("NormalizeObserve() error = %v, want agent_type validation", err)
+	}
+}
+
 func TestNormalizeObserveAllowsSessionStartWithoutSessionID(t *testing.T) {
 	cfg := config.Default().Capture
 	req := ObserveRequest{

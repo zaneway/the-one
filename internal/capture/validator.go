@@ -42,9 +42,6 @@ func NormalizeObserve(cfg config.CaptureConfig, req *ObserveRequest) error {
 	if !validSourceChannel(req.SourceChannel) {
 		return fmt.Errorf("VALIDATION_FAILED: unsupported source_channel %q", req.SourceChannel)
 	}
-	if req.AgentType == "" {
-		req.AgentType = strings.TrimSpace(cfg.DefaultAgentType)
-	}
 	if req.Sensitivity == "" {
 		req.Sensitivity = SensitivityNormal
 	}
@@ -61,6 +58,9 @@ func NormalizeObserve(cfg config.CaptureConfig, req *ObserveRequest) error {
 		if cfg.RequireSessionForAgentEvents && req.EventType != EventSessionStart && req.SessionID == "" {
 			return fmt.Errorf("SESSION_REQUIRED: agent_session event requires session_id")
 		}
+	}
+	if req.AgentType == "" {
+		req.AgentType = strings.TrimSpace(cfg.DefaultAgentType)
 	}
 	normalizeList(req.Keywords)
 	normalizeList(req.SalientSpans)

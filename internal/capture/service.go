@@ -48,6 +48,7 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		return ObserveResponse{}, err
 	}
 	if err := CheckMinimizedObserve(s.cfg.Capture, req); err != nil {
+		_ = s.recordContentBoundaryRejection(ctx, req)
 		return ObserveResponse{}, err
 	}
 	if req.ContentHash == "" {
@@ -125,6 +126,11 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		}
 	}
 	if hasSession && req.EventType == EventSessionEnd {
+		if hasTask && task.Status == StatusActive {
+			if _, err := s.repo.EndTask(ctx, task.ID, sessionEndTaskStatus(req), taskOutcome(req), occurredAt); err != nil {
+				return ObserveResponse{}, err
+			}
+		}
 		quality, err := s.loadQuality(ctx, session.ID)
 		if err != nil {
 			return ObserveResponse{}, err
@@ -319,16 +325,42 @@ func (s *Service) updateQuality(ctx context.Context, req ObserveRequest, deduped
 	return err
 }
 
+func (s *Service) recordContentBoundaryRejection(ctx context.Context, req ObserveRequest) error {
+	if req.SessionID == "" {
+		return nil
+	}
+	report, err := s.repo.GetCaptureQuality(ctx, req.SessionID)
+	if err != nil {
+		return nil
+	}
+	quality, err := decodeQuality(report.CaptureQualityJSON)
+	if err != nil {
+		return err
+	}
+	quality = ApplyContentBoundaryRejection(quality)
+	_, err = s.repo.UpsertSession(ctx, AgentSession{
+		ID:                      req.SessionID,
+		CaptureLevel:            report.CaptureLevel,
+		CaptureCapabilitiesJSON: report.CaptureCapabilitiesJSON,
+		CaptureQualityJSON:      mustJSONText(quality),
+	})
+	return err
+}
+
 func (s *Service) loadQuality(ctx context.Context, sessionID string) (CaptureQuality, error) {
 	report, err := s.repo.GetCaptureQuality(ctx, sessionID)
 	if err != nil {
 		return CaptureQuality{}, err
 	}
+	return decodeQuality(report.CaptureQualityJSON)
+}
+
+func decodeQuality(raw string) (CaptureQuality, error) {
 	var quality CaptureQuality
-	if report.CaptureQualityJSON == "" {
+	if raw == "" {
 		return quality, nil
 	}
-	if err := json.Unmarshal([]byte(report.CaptureQualityJSON), &quality); err != nil {
+	if err := json.Unmarshal([]byte(raw), &quality); err != nil {
 		return CaptureQuality{}, fmt.Errorf("VALIDATION_FAILED: invalid capture_quality_json: %w", err)
 	}
 	return quality, nil
@@ -410,6 +442,13 @@ func terminalSessionStatus(req ObserveRequest) string {
 		return req.Session.Status
 	}
 	return StatusCompleted
+}
+
+func sessionEndTaskStatus(req ObserveRequest) string {
+	if req.Task != nil && req.Task.Status != "" && req.Task.Status != StatusActive {
+		return req.Task.Status
+	}
+	return StatusUnknown
 }
 
 func taskOutcome(req ObserveRequest) string {

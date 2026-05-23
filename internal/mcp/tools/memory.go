@@ -120,7 +120,24 @@ func toMCPError(err error) *mcp.Error {
 			retryable = true
 		}
 	}
-	return &mcp.Error{ErrorCode: code, Message: message, Retryable: retryable}
+	return &mcp.Error{ErrorCode: code, Message: message, Retryable: retryable, FallbackHint: fallbackHint(code)}
+}
+
+func fallbackHint(code string) string {
+	switch code {
+	case "SESSION_REQUIRED":
+		return "send session.start first and reuse the returned session_id"
+	case "CONTENT_TOO_LARGE":
+		return "send summarized content with salient_spans and content_hash"
+	case "SCOPE_INVALID":
+		return "check scope required fields before retrying"
+	case "FTS_UNAVAILABLE":
+		return "restart memoryd with sqlite fts5 support or use status diagnostics"
+	case "STORAGE_BUSY":
+		return "retry after the current SQLite write completes"
+	default:
+		return "check request fields and memoryd diagnostics"
+	}
 }
 
 func hashForLog(value string) string {

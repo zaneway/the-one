@@ -105,4 +105,7 @@ func TestAppRegistersCaptureTools(t *testing.T) {
 	if toolErr == nil || toolErr.RequestID == "" || toolErr.ErrorCode != "SESSION_REQUIRED" {
 		t.Fatalf("observe error = %+v, want SESSION_REQUIRED with request_id", toolErr)
 	}
+	if toolErr.FallbackHint == "" {
+		t.Fatalf("observe error = %+v, want fallback_hint", toolErr)
+	}
 }

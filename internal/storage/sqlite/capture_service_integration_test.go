@@ -82,4 +82,35 @@ func TestCaptureServiceObserveWithSQLiteRepository(t *testing.T) {
 	if len(sessions) != 1 || sessions[0].GoalSummary != "sqlite observe integration" {
 		t.Fatalf("sessions = %+v, want preserved goal summary", sessions)
 	}
+
+	end, err := service.Observe(ctx, capture.ObserveRequest{
+		SessionID:     start.SessionID,
+		EventType:     capture.EventSessionEnd,
+		SourceChannel: capture.SourceChannelAgentSession,
+		WorkspaceID:   "ws",
+		ProjectID:     "project_a",
+		RepoID:        "repo_a",
+		AgentType:     "codex",
+		Actor:         capture.ActorAdapter,
+		Session:       &capture.SessionInput{Status: capture.StatusCompleted},
+		CaptureCapabilities: capture.CaptureCapabilities{
+			SessionLifecycle:  true,
+			ToolCallCapture:   true,
+			ToolOutputCapture: true,
+			MCPObserve:        true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Observe(session.end) error = %v", err)
+	}
+	if end.RawEventID == "" {
+		t.Fatalf("session.end response = %+v, want raw event id", end)
+	}
+	tasks, err := store.ListTasks(ctx, capture.ListTasksRequest{SessionID: start.SessionID})
+	if err != nil {
+		t.Fatalf("ListTasks() after session.end error = %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Status != capture.StatusUnknown || tasks[0].EndedAt.IsZero() {
+		t.Fatalf("tasks after session.end = %+v, want default task ended as unknown", tasks)
+	}
 }
