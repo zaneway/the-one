@@ -12,32 +12,71 @@ import (
 	"github.com/zaneway/the-one/internal/ingest"
 )
 
-// Repository 定义 P1 Memory CRUD 所需的事务能力。SQLite 实现必须保证多表写入原子性。
+// Repository 记忆仓库接口
+// 定义 P1 Memory CRUD 所需的事务能力
+// 设计约束：SQLite 实现必须保证多表写入原子性
 type Repository interface {
+	// FindDuplicate 查找重复记忆
+	// 按scope、content、memory_type检测是否存在重复记忆
 	FindDuplicate(ctx context.Context, item MemoryItem) (MemoryItem, bool, error)
+
+	// Remember 写入记忆
+	// 同事务写入memory_item、evidence、memory_evidence_link和FTS
 	Remember(ctx context.Context, item MemoryItem, evidence Evidence, checkpoint *ReviewCheckpoint) error
+
+	// Search 检索记忆
+	// 执行FTS + metadata检索，返回排序后的结果和诊断信息
 	Search(ctx context.Context, req SearchRequest) ([]SearchResult, SearchDiagnostics, error)
+
+	// Get 获取单个记忆
+	// 按memoryID获取记忆详情
 	Get(ctx context.Context, memoryID string) (MemoryItem, error)
+
+	// GetReviewCheckpoint 获取复查检查点
+	// 按memoryID获取关联的review_checkpoint
 	GetReviewCheckpoint(ctx context.Context, memoryID string) (ReviewCheckpoint, bool, error)
+
+	// ListReview 列出待审核记忆
+	// 查询pending_review状态的记忆列表
 	ListReview(ctx context.Context, req ReviewRequest) ([]MemoryItem, error)
+
+	// Approve 批准记忆
+	// 将记忆状态从pending_review转为stable，记录用户确认
 	Approve(ctx context.Context, memoryID, reviewer, feedback string) (MemoryItem, error)
+
+	// RejectOrArchive 拒绝或归档记忆
+	// 将记忆状态转为archived或deleted
 	RejectOrArchive(ctx context.Context, memoryID, action, reviewer, feedback string) (MemoryItem, error)
+
+	// Edit 编辑记忆
+	// 更新记忆内容、版本号和search_text
 	Edit(ctx context.Context, memoryID, editContent, reviewer, feedback, searchText string) (MemoryItem, error)
+
+	// Delete 删除记忆
+	// 将记忆状态转为deleted，写入tombstone，删除FTS条目
 	Delete(ctx context.Context, memoryID, reviewer, feedback string) (MemoryItem, error)
 }
 
-// Service 编排 P1 手动记忆写入、检索、上下文构建和 review 流转。
+// Service 记忆服务结构体
+// 编排 P1 手动记忆写入、检索、上下文构建和 review 流转
 type Service struct {
-	cfg  config.Config
-	repo Repository
+	cfg  config.Config // 配置信息
+	repo Repository    // 仓库接口，负责持久化
 }
 
-// NewService 创建 P1 Memory 服务。
+// NewService 创建 P1 Memory 服务
 func NewService(cfg config.Config, repo Repository) *Service {
 	return &Service{cfg: cfg, repo: repo}
 }
 
-// Remember 实现 P1 显式写入闭环：校验、最小化、证据、FTS 文档和 checkpoint 同事务写入。
+// Remember 实现 P1 显式写入闭环
+// 处理流程：
+// 1. 校验并归一化请求参数
+// 2. 检查内容边界（最小化检查）
+// 3. 确定默认状态和层级
+// 4. 检测重复记忆
+// 5. 生成ID、构建search_text
+// 6. 同事务写入memory_item、evidence、memory_evidence_link和FTS
 func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberResponse, error) {
 	if err := NormalizeRemember(s.cfg.Memory, &req); err != nil {
 		return RememberResponse{}, err
@@ -181,7 +220,12 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 	return RememberResponse{MemoryID: memoryID, State: state, Tier: tier, Deduped: false}, nil
 }
 
-// Search 执行 P1 FTS + metadata 检索。
+// Search 执行 P1 FTS + metadata 检索
+// 处理流程：
+// 1. 校验查询文本和scope
+// 2. 生成检索追踪ID
+// 3. 执行FTS5全文检索 + metadata过滤
+// 4. 返回排序后的结果和诊断信息
 func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse, error) {
 	if strings.TrimSpace(req.Query) == "" {
 		return SearchResponse{}, fmt.Errorf("VALIDATION_FAILED: query is required")
@@ -206,7 +250,15 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse
 	return SearchResponse{Results: results, Diagnostics: diag}, nil
 }
 
-// Context 构造 P1 压缩上下文包。P1 使用字符预算近似 token budget，后续可替换为 tokenizer。
+// Context 构造 P1 压缩上下文包
+// 处理流程：
+// 1. 校验任务描述和token预算
+// 2. 确定检索范围和记忆类型
+// 3. 执行检索（设计复查任务优先检索review_checkpoint）
+// 4. 补充用户偏好记忆（如果未包含）
+// 5. 按token budget压缩和裁剪记忆
+// 6. 构造上下文包返回
+// 设计说明：P1 使用字符预算近似 token budget，后续可替换为 tokenizer
 func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextResponse, error) {
 	startedAt := time.Now()
 	if strings.TrimSpace(req.Task) == "" {
@@ -314,6 +366,9 @@ func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextRespo
 	}, nil
 }
 
+// checkpointContext 构造复查检查点的上下文内容
+// 将review_checkpoint的结构化信息压缩为可注入Agent prompt的文本
+// 包含：检查点类型、目标文档、结论、已确认基线、忽略项、延期项、待处理项、下次复查策略
 func (s *Service) checkpointContext(ctx context.Context, result SearchResult) string {
 	checkpoint, ok, err := s.repo.GetReviewCheckpoint(ctx, result.MemoryID)
 	if err != nil || !ok {
@@ -347,6 +402,9 @@ func (s *Service) checkpointContext(ctx context.Context, result SearchResult) st
 	return strings.Join(parts, "\n")
 }
 
+// contextSearchScopes 计算上下文检索的作用域列表
+// 根据请求中的workspace、project、repo、session信息确定检索范围
+// 优先级：project_local > user_global > repo_local > session
 func contextSearchScopes(req ContextRequest) []string {
 	scopes := []string{ScopeUserGlobal}
 	if req.WorkspaceID != "" && req.ProjectID != "" {
@@ -361,6 +419,8 @@ func contextSearchScopes(req ContextRequest) []string {
 	return scopes
 }
 
+// checkpointSearchScopes 计算复查检查点检索的作用域列表
+// 只在project_local和repo_local范围内检索review_checkpoint
 func checkpointSearchScopes(req ContextRequest) []string {
 	scopes := make([]string, 0, 2)
 	if req.WorkspaceID != "" && req.ProjectID != "" {
@@ -372,6 +432,7 @@ func checkpointSearchScopes(req ContextRequest) []string {
 	return scopes
 }
 
+// containsMemoryType 检查搜索结果中是否包含指定记忆类型
 func containsMemoryType(results []SearchResult, memoryType string) bool {
 	for _, result := range results {
 		if result.MemoryType == memoryType {
@@ -381,7 +442,14 @@ func containsMemoryType(results []SearchResult, memoryType string) bool {
 	return false
 }
 
-// Review 执行 P1 pending memory 查询和 approve/reject/edit/archive/delete 状态流转。
+// Review 执行 P1 pending memory 查询和状态流转
+// 支持六种操作：
+// - list: 查询pending_review状态的记忆列表
+// - approve: 批准记忆，状态转为stable，记录用户确认
+// - reject: 拒绝记忆，状态转为archived
+// - archive: 归档记忆，状态转为archived
+// - edit: 编辑记忆内容，更新版本号和search_text
+// - delete: 删除记忆，写入tombstone，删除FTS条目
 func (s *Service) Review(ctx context.Context, req ReviewRequest) (ReviewResponse, error) {
 	switch req.Action {
 	case "list":
@@ -425,6 +493,9 @@ func (s *Service) Review(ctx context.Context, req ReviewRequest) (ReviewResponse
 	}
 }
 
+// buildCheckpoint 构造复查检查点
+// 将ReviewCheckpointInput转换为持久化的ReviewCheckpoint结构
+// 必填字段：checkpoint_type、conclusion、target_docs
 func buildCheckpoint(memoryID string, item MemoryItem, input ReviewCheckpointInput, now time.Time) (*ReviewCheckpoint, error) {
 	if input.CheckpointType == "" || input.Conclusion == "" || len(input.TargetDocs) == 0 {
 		return nil, fmt.Errorf("VALIDATION_FAILED: checkpoint_type, conclusion and target_docs are required")
@@ -493,6 +564,12 @@ func buildCheckpoint(memoryID string, item MemoryItem, input ReviewCheckpointInp
 	}, nil
 }
 
+// sourceQuality 根据来源类型返回来源质量评分
+// 用于保留分数计算，值越大表示来源越可靠
+// 评分规则：
+// - user_declared/user_confirmed: 1.0（用户声明或确认，最可靠）
+// - manual_review: 0.8（手动审核，较可靠）
+// - 其他: 0.7（默认值）
 func sourceQuality(sourceType string) float64 {
 	switch sourceType {
 	case "user_declared", "user_confirmed":
@@ -504,6 +581,13 @@ func sourceQuality(sourceType string) float64 {
 	}
 }
 
+// defaultDecayRate 根据记忆类型返回默认衰减率
+// 衰减率控制记忆的遗忘速度，值越大衰减越快
+// 评分规则：
+// - decision/constraint/preference: 0.3（重要决策和偏好，衰减慢）
+// - failure/procedure: 0.45（失败经验和流程，衰减中等）
+// - temporary_state: 1.2（临时状态，衰减快）
+// - 其他: 0.8（默认值）
 func defaultDecayRate(memoryType string) float64 {
 	switch memoryType {
 	case TypeDecision, TypeConstraint, TypePreference:
@@ -517,6 +601,7 @@ func defaultDecayRate(memoryType string) float64 {
 	}
 }
 
+// firstNonEmpty 返回第一个非空字符串
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if value != "" {
@@ -526,6 +611,9 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// isDesignReviewTask 判断是否为设计复查任务
+// 通过关键词匹配识别设计复查、架构评审、文档完整性检查等任务
+// 匹配关键词：设计复查、架构评审、文档完整性、review
 func isDesignReviewTask(task string) bool {
 	task = strings.ToLower(task)
 	return strings.Contains(task, "设计复查") ||
@@ -534,6 +622,9 @@ func isDesignReviewTask(task string) bool {
 		strings.Contains(task, "review")
 }
 
+// compress 按token预算压缩内容
+// 如果内容超过预算，截断并添加省略号
+// 设计说明：P1使用字符数近似token数，后续可替换为tokenizer
 func compress(content string, budget int) string {
 	content = strings.TrimSpace(content)
 	if budget <= 0 || content == "" {
@@ -549,6 +640,7 @@ func compress(content string, budget int) string {
 	return string(runes[:budget-3]) + "..."
 }
 
+// decodeStringSlice 解码JSON字符串切片
 func decodeStringSlice(raw string) []string {
 	var out []string
 	_ = json.Unmarshal([]byte(raw), &out)

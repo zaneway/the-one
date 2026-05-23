@@ -7,7 +7,13 @@ import (
 	"github.com/zaneway/the-one/internal/config"
 )
 
-// NormalizeRemember 填充 P1 默认字段，并执行 memory_type/scope 的基础合法性检查。
+// NormalizeRemember 归一化并校验 remember 请求
+// 处理流程：
+// 1. 去除空白字符
+// 2. 填充默认值（user_id、workspace_id、source_type、confidence、importance）
+// 3. 校验必填字段（content）
+// 4. 校验memory_type合法性
+// 5. 执行scope validator，避免user/project/repo记忆互相污染
 func NormalizeRemember(cfg config.MemoryConfig, req *RememberRequest) error {
 	req.Content = strings.TrimSpace(req.Content)
 	req.Title = strings.TrimSpace(req.Title)
@@ -37,7 +43,13 @@ func NormalizeRemember(cfg config.MemoryConfig, req *RememberRequest) error {
 	return ValidateScope(req.Scope, req.WorkspaceID, req.UserID, req.ProjectID, req.RepoID, req.SessionID)
 }
 
-// ValidateScope 执行 P1 scope validator，避免 user/project/repo 记忆互相污染。
+// ValidateScope 执行 P1 scope validator
+// 校验规则：
+// - user_global: 必须有user_id，不能有project_id或repo_id
+// - project_local: 必须有workspace_id和project_id
+// - repo_local: 必须有workspace_id和repo_id
+// - session: 必须有workspace_id和session_id
+// 设计目的：避免user/project/repo记忆互相污染
 func ValidateScope(scope, workspaceID, userID, projectID, repoID, sessionID string) error {
 	switch scope {
 	case ScopeUserGlobal:
@@ -65,7 +77,13 @@ func ValidateScope(scope, workspaceID, userID, projectID, repoID, sessionID stri
 	return nil
 }
 
-// ValidateSearchScopes 校验检索请求中的 scope 与定位字段，避免跨项目、跨仓库或跨会话误召回。
+// ValidateSearchScopes 校验检索请求中的 scope 与定位字段
+// 校验规则：
+// - user_global: 无需额外校验
+// - project_local: 必须有workspace_id和project_id
+// - repo_local: 必须有workspace_id和repo_id
+// - session: 必须有workspace_id和session_id
+// 设计目的：避免跨项目、跨仓库或跨会话误召回
 func ValidateSearchScopes(scopes []string, workspaceID, projectID, repoID, sessionID string) error {
 	for _, scope := range scopes {
 		switch scope {
@@ -89,6 +107,8 @@ func ValidateSearchScopes(scopes []string, workspaceID, projectID, repoID, sessi
 	return nil
 }
 
+// validMemoryType 校验记忆类型是否合法
+// 合法值：preference、decision、constraint、failure、project_fact、procedure、temporary_state、review_checkpoint
 func validMemoryType(memoryType string) bool {
 	switch memoryType {
 	case TypePreference, TypeDecision, TypeConstraint, TypeFailure, TypeProjectFact, TypeProcedure, TypeTemporaryState, TypeReviewCheckpoint:
@@ -98,6 +118,14 @@ func validMemoryType(memoryType string) bool {
 	}
 }
 
+// defaultStateAndTier 根据记忆类型和来源类型确定默认状态和层级
+// 规则：
+// - session作用域: stable + temporary
+// - review_checkpoint: stable + long_term
+// - decision/constraint: pending_review + long_term
+// - failure且importance>=0.8: pending_review + long_term
+// - user_declared: stable + durable
+// - 其他: stable + long_term
 func defaultStateAndTier(req RememberRequest) (string, string) {
 	switch {
 	case req.Scope == ScopeSession:

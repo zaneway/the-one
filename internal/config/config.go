@@ -10,90 +10,221 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config 是 memoryd 的最小配置模型。P0 保持默认可启动，embedding 和 retention 默认关闭。
+// Config memoryd 主配置结构体
+// memoryd 的最小配置模型，P0 保持默认可启动
+// 设计原则：embedding 和 retention 默认关闭，保证无外部依赖也能启动
 type Config struct {
-	Storage   StorageConfig   `yaml:"storage" json:"storage"`
-	Server    ServerConfig    `yaml:"server" json:"server"`
-	Logging   LoggingConfig   `yaml:"logging" json:"logging"`
-	Memory    MemoryConfig    `yaml:"memory" json:"memory"`
-	Capture   CaptureConfig   `yaml:"capture" json:"capture"`
+	// Storage 存储配置
+	// SQLite后端配置，包括数据库路径、WAL模式等
+	Storage StorageConfig `yaml:"storage" json:"storage"`
+
+	// Server 服务配置
+	// MCP服务入口配置，当前只支持stdio
+	Server ServerConfig `yaml:"server" json:"server"`
+
+	// Logging 日志配置
+	// 日志级别和格式配置
+	Logging LoggingConfig `yaml:"logging" json:"logging"`
+
+	// Memory 记忆配置
+	// P0/P1 默认身份和工作区，内容边界限制
+	Memory MemoryConfig `yaml:"memory" json:"memory"`
+
+	// Capture 捕获配置
+	// P2 observe 事件捕获的内容边界和默认值
+	Capture CaptureConfig `yaml:"capture" json:"capture"`
+
+	// Retrieval 检索配置
+	// 在线检索默认值，P1检索实现会使用这些限制
 	Retrieval RetrievalConfig `yaml:"retrieval" json:"retrieval"`
+
+	// Embedding 嵌入配置
+	// embedding provider配置，默认none，保证无外部依赖也能启动
 	Embedding EmbeddingConfig `yaml:"embedding" json:"embedding"`
+
+	// Retention 保留配置
+	// retention job 默认策略，P0不启动后台retention job
 	Retention RetentionConfig `yaml:"retention" json:"retention"`
 }
 
-// StorageConfig 描述 P0 SQLite 后端配置。BusyTimeoutMS 是写锁等待上限，避免请求无限阻塞。
+// StorageConfig 存储配置结构体
+// 描述 P0 SQLite 后端配置
 type StorageConfig struct {
-	Backend          string `yaml:"backend" json:"backend"`
-	Path             string `yaml:"path" json:"path"`
+	// Backend 存储后端
+	// 当前只支持sqlite
+	Backend string `yaml:"backend" json:"backend"`
+
+	// Path 数据库路径
+	// SQLite数据库文件路径，默认$HOME/.memoryd/memory.db
+	Path string `yaml:"path" json:"path"`
+
+	// SQLiteVecEnabled sqlite-vec启用状态
+	// auto: 自动检测，true: 强制启用，false: 强制禁用
+	// sqlite-vec是可选的向量索引增强能力
 	SQLiteVecEnabled string `yaml:"sqlite_vec_enabled" json:"sqlite_vec_enabled"`
-	BusyTimeoutMS    int    `yaml:"busy_timeout_ms" json:"busy_timeout_ms"`
+
+	// BusyTimeoutMS 忙碌超时（毫秒）
+	// 写锁等待上限，避免请求无限阻塞，默认1000ms
+	BusyTimeoutMS int `yaml:"busy_timeout_ms" json:"busy_timeout_ms"`
 }
 
-// ServerConfig 描述 P0 服务入口配置。当前只支持 stdio。
+// ServerConfig 服务配置结构体
+// 描述 P0 服务入口配置
 type ServerConfig struct {
+	// MCPAddr MCP服务地址
+	// 当前只支持stdio，通过标准输入输出与Agent通信
 	MCPAddr string `yaml:"mcp_addr" json:"mcp_addr"`
 }
 
-// LoggingConfig 描述本地日志级别和格式。日志输出到 stderr，避免污染 stdio 响应。
+// LoggingConfig 日志配置结构体
+// 描述本地日志级别和格式
 type LoggingConfig struct {
-	Level  string `yaml:"level" json:"level"`
+	// Level 日志级别
+	// 可选值：debug、info、warn、error
+	Level string `yaml:"level" json:"level"`
+
+	// Format 日志格式
+	// 可选值：text、json
+	// 日志输出到stderr，避免污染stdio响应
 	Format string `yaml:"format" json:"format"`
 }
 
-// MemoryConfig 保存 P0/P1 默认身份和工作区，后续 scope validator 会复用这些默认值。
+// MemoryConfig 记忆配置结构体
+// 保存 P0/P1 默认身份和工作区，后续 scope validator 会复用这些默认值
 type MemoryConfig struct {
-	DefaultUserID       string `yaml:"default_user_id" json:"default_user_id"`
-	DefaultWorkspace    string `yaml:"default_workspace" json:"default_workspace"`
-	MaxContentChars     int    `yaml:"max_content_chars" json:"max_content_chars"`
-	MaxEvidenceChars    int    `yaml:"max_evidence_chars" json:"max_evidence_chars"`
-	MaxKeywordCount     int    `yaml:"max_keyword_count" json:"max_keyword_count"`
-	MaxSalientSpanCount int    `yaml:"max_salient_span_count" json:"max_salient_span_count"`
+	// DefaultUserID 默认用户ID
+	// 用于user_global作用域的默认值，一期是本地个人工具
+	DefaultUserID string `yaml:"default_user_id" json:"default_user_id"`
+
+	// DefaultWorkspace 默认工作空间
+	// 用于scope过滤的默认值
+	DefaultWorkspace string `yaml:"default_workspace" json:"default_workspace"`
+
+	// MaxContentChars 最大内容字符数
+	// content字段的长度限制，默认4000
+	MaxContentChars int `yaml:"max_content_chars" json:"max_content_chars"`
+
+	// MaxEvidenceChars 最大证据字符数
+	// evidence.interpreted_statement的长度限制，默认1200
+	MaxEvidenceChars int `yaml:"max_evidence_chars" json:"max_evidence_chars"`
+
+	// MaxKeywordCount 最大关键词数量
+	// keywords数组的长度限制，默认30
+	MaxKeywordCount int `yaml:"max_keyword_count" json:"max_keyword_count"`
+
+	// MaxSalientSpanCount 最大显著片段数量
+	// salient_spans数组的长度限制，默认10
+	MaxSalientSpanCount int `yaml:"max_salient_span_count" json:"max_salient_span_count"`
 }
 
-// CaptureConfig 保存 P2 observe 事件捕获的内容边界和默认值。
+// CaptureConfig 捕获配置结构体
+// 保存 P2 observe 事件捕获的内容边界和默认值
 type CaptureConfig struct {
-	RequireSessionForAgentEvents bool   `yaml:"require_session_for_agent_events" json:"require_session_for_agent_events"`
-	MaxInputSummaryChars         int    `yaml:"max_input_summary_chars" json:"max_input_summary_chars"`
-	MaxOutputSummaryChars        int    `yaml:"max_output_summary_chars" json:"max_output_summary_chars"`
-	MaxContentSummaryChars       int    `yaml:"max_content_summary_chars" json:"max_content_summary_chars"`
-	MaxSourceRefsChars           int    `yaml:"max_source_refs_chars" json:"max_source_refs_chars"`
-	MaxSalientSpanChars          int    `yaml:"max_salient_span_chars" json:"max_salient_span_chars"`
-	MaxSalientSpanCount          int    `yaml:"max_salient_span_count" json:"max_salient_span_count"`
-	MaxKeywordCount              int    `yaml:"max_keyword_count" json:"max_keyword_count"`
-	DefaultAgentType             string `yaml:"default_agent_type" json:"default_agent_type"`
+	// RequireSessionForAgentEvents Agent事件是否要求session
+	// 默认true，Agent自动捕获事件必须绑定session
+	RequireSessionForAgentEvents bool `yaml:"require_session_for_agent_events" json:"require_session_for_agent_events"`
+
+	// MaxInputSummaryChars 最大输入摘要字符数
+	// input_summary字段的长度限制，默认1200
+	MaxInputSummaryChars int `yaml:"max_input_summary_chars" json:"max_input_summary_chars"`
+
+	// MaxOutputSummaryChars 最大输出摘要字符数
+	// output_summary字段的长度限制，默认2000
+	MaxOutputSummaryChars int `yaml:"max_output_summary_chars" json:"max_output_summary_chars"`
+
+	// MaxContentSummaryChars 最大内容摘要字符数
+	// content_summary字段的长度限制，默认2000
+	MaxContentSummaryChars int `yaml:"max_content_summary_chars" json:"max_content_summary_chars"`
+
+	// MaxSourceRefsChars 最大来源引用字符数
+	// source_refs_json字段的长度限制，默认4000
+	MaxSourceRefsChars int `yaml:"max_source_refs_chars" json:"max_source_refs_chars"`
+
+	// MaxSalientSpanChars 最大显著片段字符数
+	// 单个salient_span的长度限制，默认500
+	MaxSalientSpanChars int `yaml:"max_salient_span_chars" json:"max_salient_span_chars"`
+
+	// MaxSalientSpanCount 最大显著片段数量
+	// salient_spans数组的长度限制，默认10
+	MaxSalientSpanCount int `yaml:"max_salient_span_count" json:"max_salient_span_count"`
+
+	// MaxKeywordCount 最大关键词数量
+	// keywords数组的长度限制，默认30
+	MaxKeywordCount int `yaml:"max_keyword_count" json:"max_keyword_count"`
+
+	// DefaultAgentType 默认Agent类型
+	// 当请求未指定agent_type时使用，默认unknown
+	DefaultAgentType string `yaml:"default_agent_type" json:"default_agent_type"`
 }
 
-// RetrievalConfig 保存在线检索默认值。P0 只暴露 status，P1 检索实现会使用这些限制。
+// RetrievalConfig 检索配置结构体
+// 保存在线检索默认值，P0 只暴露 status，P1 检索实现会使用这些限制
 type RetrievalConfig struct {
-	DefaultLimit       int `yaml:"default_limit" json:"default_limit"`
+	// DefaultLimit 默认结果数量限制
+	// memory.search的默认limit，默认10
+	DefaultLimit int `yaml:"default_limit" json:"default_limit"`
+
+	// DefaultTokenBudget 默认Token预算
+	// memory.context的默认token_budget，默认1800
 	DefaultTokenBudget int `yaml:"default_token_budget" json:"default_token_budget"`
-	OnlineTimeoutMS    int `yaml:"online_timeout_ms" json:"online_timeout_ms"`
+
+	// OnlineTimeoutMS 在线超时（毫秒）
+	// 在线检索的超时时间，默认100ms
+	// 外部模型调用不能进入该时间预算
+	OnlineTimeoutMS int `yaml:"online_timeout_ms" json:"online_timeout_ms"`
 }
 
-// EmbeddingConfig 描述 embedding provider。默认 none，保证无外部依赖也能启动。
+// EmbeddingConfig 嵌入配置结构体
+// 描述 embedding provider，默认 none，保证无外部依赖也能启动
 type EmbeddingConfig struct {
+	// Provider 嵌入提供者
+	// 可选值：none、local、openai、deepseek
+	// 默认none，系统仍可运行，检索降级为FTS + metadata + relation
 	Provider string `yaml:"provider" json:"provider"`
-	Model    string `yaml:"model" json:"model"`
+
+	// Model 嵌入模型
+	// 嵌入模型名称，Provider为none时为空
+	Model string `yaml:"model" json:"model"`
 }
 
-// RetentionConfig 描述 retention job 默认策略。P0 不启动后台 retention job。
+// RetentionConfig 保留配置结构体
+// 描述 retention job 默认策略，P0 不启动后台 retention job
 type RetentionConfig struct {
-	JobEnabled       bool `yaml:"job_enabled" json:"job_enabled"`
-	TemporaryTTLDays int  `yaml:"temporary_ttl_days" json:"temporary_ttl_days"`
-	ShortTermTTLDays int  `yaml:"short_term_ttl_days" json:"short_term_ttl_days"`
+	// JobEnabled 是否启用保留任务
+	// 默认false，P0不启动后台retention job
+	JobEnabled bool `yaml:"job_enabled" json:"job_enabled"`
+
+	// TemporaryTTLDays 临时记忆生存天数
+	// temporary层级的默认保留天数，默认5天
+	TemporaryTTLDays int `yaml:"temporary_ttl_days" json:"temporary_ttl_days"`
+
+	// ShortTermTTLDays 短期记忆生存天数
+	// short_term层级的默认保留天数，默认90天
+	ShortTermTTLDays int `yaml:"short_term_ttl_days" json:"short_term_ttl_days"`
 }
 
-// Overrides 表示命令行覆盖项。空值表示不覆盖配置文件和默认值。
+// Overrides 命令行覆盖项结构体
+// 表示命令行覆盖项，空值表示不覆盖配置文件和默认值
 type Overrides struct {
+	// ConfigPath 配置文件路径
 	ConfigPath string
-	DataDir    string
-	DBPath     string
-	MCPAddr    string
-	LogLevel   string
+
+	// DataDir 数据目录
+	DataDir string
+
+	// DBPath 数据库路径
+	DBPath string
+
+	// MCPAddr MCP服务地址
+	MCPAddr string
+
+	// LogLevel 日志级别
+	LogLevel string
 }
 
-// Default 返回 P0 可直接启动的配置。默认数据库路径位于 $HOME/.memoryd/memory.db。
+// Default 返回 P0 可直接启动的默认配置
+// 默认数据库路径位于 $HOME/.memoryd/memory.db
+// 设计原则：默认配置能直接启动，避免用户先理解完整系统才能使用
 func Default() Config {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -150,7 +281,9 @@ func Default() Config {
 	}
 }
 
-// Load 按默认值、配置文件、环境变量、命令行的顺序合成配置，并执行基础校验。
+// Load 加载配置
+// 按默认值、配置文件、环境变量、命令行的顺序合成配置，并执行基础校验
+// 优先级：命令行 > 环境变量 > 配置文件 > 默认值
 func Load(overrides Overrides) (Config, error) {
 	cfg := Default()
 	configPath := firstNonEmpty(overrides.ConfigPath, os.Getenv("MEMORYD_CONFIG"))
