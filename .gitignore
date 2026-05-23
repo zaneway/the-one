@@ -217,6 +217,7 @@ buildNumber.properties
 
 # Kernel Module Compile Results
 *.mod*
+!go.mod
 *.cmd
 .tmp_versions/
 modules.order
@@ -319,6 +320,9 @@ fabric.properties
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
+
+# Local build output
+bin/
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
