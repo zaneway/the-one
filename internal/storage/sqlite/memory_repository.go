@@ -13,6 +13,42 @@ import (
 	"github.com/zaneway/the-one/internal/memory"
 )
 
+// FindDuplicate 按 P1 幂等键查找同 scope/type/content 的现有记忆。
+func (s *Store) FindDuplicate(ctx context.Context, item memory.MemoryItem) (memory.MemoryItem, bool, error) {
+	query := baseMemorySelect() + ` where scope = ?
+		and memory_type = ?
+		and content = ?
+		and coalesce(workspace_id, '') = ?
+		and coalesce(user_id, '') = ?
+		and coalesce(project_id, '') = ?
+		and coalesce(repo_id, '') = ?
+		and coalesce(session_id, '') = ?
+		and coalesce(task_id, '') = ?
+		and state != ?
+		order by updated_at desc
+		limit 1`
+	row := s.db.QueryRowContext(ctx, query,
+		item.Scope,
+		item.MemoryType,
+		item.Content,
+		item.WorkspaceID,
+		item.UserID,
+		item.ProjectID,
+		item.RepoID,
+		item.SessionID,
+		item.TaskID,
+		memory.StateDeleted,
+	)
+	existing, err := scanMemory(row)
+	if err == sql.ErrNoRows {
+		return memory.MemoryItem{}, false, nil
+	}
+	if err != nil {
+		return memory.MemoryItem{}, false, storageErr(err)
+	}
+	return existing, true, nil
+}
+
 // Remember 在一个短事务内写入 memory、evidence、link、FTS 和可选 review_checkpoint。
 func (s *Store) Remember(ctx context.Context, item memory.MemoryItem, evidence memory.Evidence, checkpoint *memory.ReviewCheckpoint) error {
 	if !s.capabilities.FTS5 {
@@ -50,6 +86,37 @@ func (s *Store) Remember(ctx context.Context, item memory.MemoryItem, evidence m
 		}
 	}
 	return storageErr(tx.Commit())
+}
+
+// GetReviewCheckpoint 按 memory_id 读取 P1 手动复查 checkpoint 的结构化上下文。
+func (s *Store) GetReviewCheckpoint(ctx context.Context, memoryID string) (memory.ReviewCheckpoint, bool, error) {
+	row := s.db.QueryRowContext(ctx, `select id, memory_id, coalesce(workspace_id, ''), coalesce(project_id, ''),
+		coalesce(repo_id, ''), coalesce(session_id, ''), coalesce(task_id, ''), checkpoint_type,
+		review_intent_json, target_docs_json, coalesce(target_sections_json, ''), coalesce(target_hashes_json, ''),
+		conclusion, coalesce(confirmed_baseline_json, ''), coalesce(ignored_items_json, ''),
+		coalesce(deferred_items_json, ''), coalesce(open_items_json, ''), coalesce(next_review_policy_json, ''),
+		created_at, updated_at
+		from review_checkpoint
+		where memory_id = ?
+		order by updated_at desc
+		limit 1`, memoryID)
+	var checkpoint memory.ReviewCheckpoint
+	var createdAt, updatedAt string
+	err := row.Scan(&checkpoint.ID, &checkpoint.MemoryID, &checkpoint.WorkspaceID, &checkpoint.ProjectID,
+		&checkpoint.RepoID, &checkpoint.SessionID, &checkpoint.TaskID, &checkpoint.CheckpointType,
+		&checkpoint.ReviewIntentJSON, &checkpoint.TargetDocsJSON, &checkpoint.TargetSectionsJSON,
+		&checkpoint.TargetHashesJSON, &checkpoint.Conclusion, &checkpoint.ConfirmedBaselineJSON,
+		&checkpoint.IgnoredItemsJSON, &checkpoint.DeferredItemsJSON, &checkpoint.OpenItemsJSON,
+		&checkpoint.NextReviewPolicyJSON, &createdAt, &updatedAt)
+	if err == sql.ErrNoRows {
+		return memory.ReviewCheckpoint{}, false, nil
+	}
+	if err != nil {
+		return memory.ReviewCheckpoint{}, false, storageErr(err)
+	}
+	checkpoint.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	checkpoint.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	return checkpoint, true, nil
 }
 
 // Search 执行 P1 FTS + metadata 查询和简化排序。
@@ -437,6 +504,7 @@ func appendSearchFilters(query string, args []any, req memory.SearchRequest, tab
 	if tableOnly {
 		prefix = ""
 	}
+	query += " and " + prefix + "state != 'deleted'"
 	if !req.IncludeArchived {
 		query += " and " + prefix + "state in ('stable', 'pending_review', 'provisional')"
 	}
@@ -452,12 +520,12 @@ func appendSearchFilters(query string, args []any, req memory.SearchRequest, tab
 			args = append(args, memoryType)
 		}
 	}
-	query += " and (" + prefix + "scope != 'project_local' or " + prefix + "project_id = ?)"
-	args = append(args, req.ProjectID)
-	query += " and (" + prefix + "scope != 'repo_local' or " + prefix + "repo_id = ?)"
-	args = append(args, req.RepoID)
-	query += " and (" + prefix + "scope != 'session' or " + prefix + "session_id = ?)"
-	args = append(args, req.SessionID)
+	query += " and (" + prefix + "scope != 'project_local' or (" + prefix + "workspace_id = ? and " + prefix + "project_id = ?))"
+	args = append(args, req.WorkspaceID, req.ProjectID)
+	query += " and (" + prefix + "scope != 'repo_local' or (" + prefix + "workspace_id = ? and " + prefix + "repo_id = ?))"
+	args = append(args, req.WorkspaceID, req.RepoID)
+	query += " and (" + prefix + "scope != 'session' or (" + prefix + "workspace_id = ? and " + prefix + "session_id = ?))"
+	args = append(args, req.WorkspaceID, req.SessionID)
 	return query, args
 }
 

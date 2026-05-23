@@ -14,9 +14,11 @@ import (
 
 // Repository 定义 P1 Memory CRUD 所需的事务能力。SQLite 实现必须保证多表写入原子性。
 type Repository interface {
+	FindDuplicate(ctx context.Context, item MemoryItem) (MemoryItem, bool, error)
 	Remember(ctx context.Context, item MemoryItem, evidence Evidence, checkpoint *ReviewCheckpoint) error
 	Search(ctx context.Context, req SearchRequest) ([]SearchResult, SearchDiagnostics, error)
 	Get(ctx context.Context, memoryID string) (MemoryItem, error)
+	GetReviewCheckpoint(ctx context.Context, memoryID string) (ReviewCheckpoint, bool, error)
 	ListReview(ctx context.Context, req ReviewRequest) ([]MemoryItem, error)
 	Approve(ctx context.Context, memoryID, reviewer, feedback string) (MemoryItem, error)
 	RejectOrArchive(ctx context.Context, memoryID, action, reviewer, feedback string) (MemoryItem, error)
@@ -61,6 +63,22 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 		return RememberResponse{}, fmt.Errorf("VALIDATION_FAILED: review_checkpoint is required")
 	}
 	state, tier := defaultStateAndTier(req)
+	probe := MemoryItem{
+		Scope:       req.Scope,
+		WorkspaceID: req.WorkspaceID,
+		UserID:      req.UserID,
+		ProjectID:   req.ProjectID,
+		RepoID:      req.RepoID,
+		SessionID:   req.SessionID,
+		TaskID:      req.TaskID,
+		MemoryType:  req.MemoryType,
+		Content:     req.Content,
+	}
+	if existing, ok, err := s.repo.FindDuplicate(ctx, probe); err != nil {
+		return RememberResponse{}, err
+	} else if ok {
+		return RememberResponse{MemoryID: existing.ID, State: existing.State, Tier: existing.Tier, Deduped: true}, nil
+	}
 	memoryID, err := idgen.New("mem")
 	if err != nil {
 		return RememberResponse{}, err
@@ -168,14 +186,22 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse
 	if strings.TrimSpace(req.Query) == "" {
 		return SearchResponse{}, fmt.Errorf("VALIDATION_FAILED: query is required")
 	}
+	if err := ValidateSearchScopes(req.Scope, req.WorkspaceID, req.ProjectID, req.RepoID, req.SessionID); err != nil {
+		return SearchResponse{}, err
+	}
 	if req.Limit <= 0 {
 		req.Limit = s.cfg.Retrieval.DefaultLimit
+	}
+	traceID, err := idgen.New("rt")
+	if err != nil {
+		return SearchResponse{}, err
 	}
 	startedAt := time.Now()
 	results, diag, err := s.repo.Search(ctx, req)
 	if err != nil {
 		return SearchResponse{}, err
 	}
+	diag.RetrievalTraceID = traceID
 	diag.LatencyMS = time.Since(startedAt).Milliseconds()
 	return SearchResponse{Results: results, Diagnostics: diag}, nil
 }
@@ -199,7 +225,7 @@ func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextRespo
 		ProjectID:       req.ProjectID,
 		RepoID:          req.RepoID,
 		SessionID:       req.SessionID,
-		Scope:           []string{ScopeProjectLocal, ScopeRepoLocal, ScopeUserGlobal, ScopeSession},
+		Scope:           contextSearchScopes(req),
 		MemoryTypes:     searchTypes,
 		Limit:           s.cfg.Retrieval.DefaultLimit,
 		IncludeArchived: false,
@@ -232,7 +258,7 @@ func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextRespo
 			ProjectID:       req.ProjectID,
 			RepoID:          req.RepoID,
 			SessionID:       req.SessionID,
-			Scope:           []string{ScopeProjectLocal, ScopeRepoLocal},
+			Scope:           checkpointSearchScopes(req),
 			MemoryTypes:     []string{TypeReviewCheckpoint},
 			Limit:           3,
 			IncludeArchived: false,
@@ -247,7 +273,11 @@ func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextRespo
 	constraints := make([]string, 0)
 	remaining := req.TokenBudget
 	for _, result := range searchResp.Results {
-		compressed := compress(result.Content, remaining)
+		content := result.Content
+		if result.MemoryType == TypeReviewCheckpoint {
+			content = s.checkpointContext(ctx, result)
+		}
+		compressed := compress(content, remaining)
 		if compressed == "" {
 			break
 		}
@@ -278,9 +308,68 @@ func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextRespo
 			Constraints: constraints,
 			CodeRefs:    []any{},
 		},
-		UsedMemoryIDs: usedIDs,
-		LatencyMS:     time.Since(startedAt).Milliseconds(),
+		UsedMemoryIDs:    usedIDs,
+		RetrievalTraceID: searchResp.Diagnostics.RetrievalTraceID,
+		LatencyMS:        time.Since(startedAt).Milliseconds(),
 	}, nil
+}
+
+func (s *Service) checkpointContext(ctx context.Context, result SearchResult) string {
+	checkpoint, ok, err := s.repo.GetReviewCheckpoint(ctx, result.MemoryID)
+	if err != nil || !ok {
+		return result.Content
+	}
+	parts := []string{result.Content}
+	if checkpoint.CheckpointType != "" {
+		parts = append(parts, "checkpoint_type: "+checkpoint.CheckpointType)
+	}
+	if checkpoint.TargetDocsJSON != "" {
+		parts = append(parts, "target_docs: "+checkpoint.TargetDocsJSON)
+	}
+	if checkpoint.Conclusion != "" {
+		parts = append(parts, "conclusion: "+checkpoint.Conclusion)
+	}
+	if checkpoint.ConfirmedBaselineJSON != "" {
+		parts = append(parts, "confirmed_baseline: "+checkpoint.ConfirmedBaselineJSON)
+	}
+	if checkpoint.IgnoredItemsJSON != "" {
+		parts = append(parts, "ignored_items: "+checkpoint.IgnoredItemsJSON)
+	}
+	if checkpoint.DeferredItemsJSON != "" {
+		parts = append(parts, "deferred_items: "+checkpoint.DeferredItemsJSON)
+	}
+	if checkpoint.OpenItemsJSON != "" {
+		parts = append(parts, "open_items: "+checkpoint.OpenItemsJSON)
+	}
+	if checkpoint.NextReviewPolicyJSON != "" {
+		parts = append(parts, "next_review_policy: "+checkpoint.NextReviewPolicyJSON)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func contextSearchScopes(req ContextRequest) []string {
+	scopes := []string{ScopeUserGlobal}
+	if req.WorkspaceID != "" && req.ProjectID != "" {
+		scopes = append([]string{ScopeProjectLocal}, scopes...)
+	}
+	if req.WorkspaceID != "" && req.RepoID != "" {
+		scopes = append(scopes, ScopeRepoLocal)
+	}
+	if req.WorkspaceID != "" && req.SessionID != "" {
+		scopes = append(scopes, ScopeSession)
+	}
+	return scopes
+}
+
+func checkpointSearchScopes(req ContextRequest) []string {
+	scopes := make([]string, 0, 2)
+	if req.WorkspaceID != "" && req.ProjectID != "" {
+		scopes = append(scopes, ScopeProjectLocal)
+	}
+	if req.WorkspaceID != "" && req.RepoID != "" {
+		scopes = append(scopes, ScopeRepoLocal)
+	}
+	return scopes
 }
 
 func containsMemoryType(results []SearchResult, memoryType string) bool {
@@ -308,8 +397,14 @@ func (s *Service) Review(ctx context.Context, req ReviewRequest) (ReviewResponse
 		item, err := s.repo.RejectOrArchive(ctx, req.MemoryID, req.Action, req.Reviewer, req.Feedback)
 		return ReviewResponse{MemoryID: item.ID, State: item.State, UserConfirmed: item.UserConfirmed}, err
 	case "edit":
-		if strings.TrimSpace(req.EditContent) == "" {
+		req.EditContent = strings.TrimSpace(req.EditContent)
+		if req.EditContent == "" {
 			return ReviewResponse{}, fmt.Errorf("VALIDATION_FAILED: edit_content is required")
+		}
+		if err := ingest.CheckMinimizedContent(s.cfg.Memory, ingest.MinimizationInput{
+			Content: req.EditContent,
+		}); err != nil {
+			return ReviewResponse{}, err
 		}
 		item, err := s.repo.Get(ctx, req.MemoryID)
 		if err != nil {

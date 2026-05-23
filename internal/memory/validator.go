@@ -65,6 +65,30 @@ func ValidateScope(scope, workspaceID, userID, projectID, repoID, sessionID stri
 	return nil
 }
 
+// ValidateSearchScopes 校验检索请求中的 scope 与定位字段，避免跨项目、跨仓库或跨会话误召回。
+func ValidateSearchScopes(scopes []string, workspaceID, projectID, repoID, sessionID string) error {
+	for _, scope := range scopes {
+		switch scope {
+		case ScopeUserGlobal:
+		case ScopeProjectLocal:
+			if workspaceID == "" || projectID == "" {
+				return fmt.Errorf("SCOPE_INVALID: project_local search requires workspace_id and project_id")
+			}
+		case ScopeRepoLocal:
+			if workspaceID == "" || repoID == "" {
+				return fmt.Errorf("SCOPE_INVALID: repo_local search requires workspace_id and repo_id")
+			}
+		case ScopeSession:
+			if workspaceID == "" || sessionID == "" {
+				return fmt.Errorf("SCOPE_INVALID: session search requires workspace_id and session_id")
+			}
+		default:
+			return fmt.Errorf("SCOPE_INVALID: unsupported scope %q", scope)
+		}
+	}
+	return nil
+}
+
 func validMemoryType(memoryType string) bool {
 	switch memoryType {
 	case TypePreference, TypeDecision, TypeConstraint, TypeFailure, TypeProjectFact, TypeProcedure, TypeTemporaryState, TypeReviewCheckpoint:

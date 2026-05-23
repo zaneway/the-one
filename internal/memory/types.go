@@ -113,10 +113,11 @@ type SearchResult struct {
 }
 
 type SearchDiagnostics struct {
-	FTSHits       int    `json:"fts_hits"`
-	FilteredCount int    `json:"filtered_count"`
-	LatencyMS     int64  `json:"latency_ms"`
-	Fallback      string `json:"fallback"`
+	RetrievalTraceID string `json:"retrieval_trace_id,omitempty"`
+	FTSHits          int    `json:"fts_hits"`
+	FilteredCount    int    `json:"filtered_count"`
+	LatencyMS        int64  `json:"latency_ms"`
+	Fallback         string `json:"fallback"`
 }
 
 type SearchResponse struct {
@@ -152,9 +153,10 @@ type ContextMemory struct {
 }
 
 type ContextResponse struct {
-	ContextPack   ContextPack `json:"context_pack"`
-	UsedMemoryIDs []string    `json:"used_memory_ids"`
-	LatencyMS     int64       `json:"latency_ms"`
+	ContextPack      ContextPack `json:"context_pack"`
+	UsedMemoryIDs    []string    `json:"used_memory_ids"`
+	RetrievalTraceID string      `json:"retrieval_trace_id,omitempty"`
+	LatencyMS        int64       `json:"latency_ms"`
 }
 
 // ReviewRequest 是 memory.review 请求结构，支持 list/approve/reject/edit/archive/delete。
