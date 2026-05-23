@@ -19,6 +19,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Embedding.Provider != "none" {
 		t.Fatalf("embedding provider = %q, want none", cfg.Embedding.Provider)
 	}
+	if !cfg.Capture.RequireSessionForAgentEvents {
+		t.Fatal("capture require session = false, want true")
+	}
+	if cfg.Capture.MaxOutputSummaryChars != 2000 {
+		t.Fatalf("capture max output summary = %d, want 2000", cfg.Capture.MaxOutputSummaryChars)
+	}
 }
 
 func TestLoadEnvAndOverrides(t *testing.T) {

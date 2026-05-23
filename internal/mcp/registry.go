@@ -10,6 +10,7 @@ import (
 
 // Error 是所有工具统一返回的错误结构，字段与 P0/P1 详细设计保持一致。
 type Error struct {
+	RequestID    string `json:"request_id,omitempty"`
 	ErrorCode    string `json:"error_code"`
 	Message      string `json:"message"`
 	Retryable    bool   `json:"retryable"`

@@ -25,10 +25,7 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	status := store.Status()
-	wantVersion := 2
-	if status.Capabilities.FTS5 {
-		wantVersion = 3
-	}
+	wantVersion := 4
 	if status.Migrations.CurrentVersion != wantVersion {
 		t.Fatalf("current version = %d, want %d", status.Migrations.CurrentVersion, wantVersion)
 	}
@@ -37,6 +34,11 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 	}
 	if !status.Capabilities.SQLite {
 		t.Fatal("sqlite capability false, want true")
+	}
+	for _, table := range []string{"agent_session", "agent_task", "raw_event"} {
+		if !tableExists(t, store, table) {
+			t.Fatalf("table %s does not exist after migration", table)
+		}
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -50,4 +52,14 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 	if reopened.Status().Migrations.CurrentVersion != wantVersion {
 		t.Fatalf("current version after reopen = %d, want %d", reopened.Status().Migrations.CurrentVersion, wantVersion)
 	}
+}
+
+func tableExists(t *testing.T, store *Store, table string) bool {
+	t.Helper()
+	var count int
+	err := store.db.QueryRow("select count(*) from sqlite_master where type = 'table' and name = ?", table).Scan(&count)
+	if err != nil {
+		t.Fatalf("query sqlite_master for %s: %v", table, err)
+	}
+	return count == 1
 }

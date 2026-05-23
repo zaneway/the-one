@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/zaneway/the-one/internal/capture"
 	"github.com/zaneway/the-one/internal/config"
 	"github.com/zaneway/the-one/internal/diagnostics"
 	"github.com/zaneway/the-one/internal/logging"
@@ -42,6 +43,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	diagnostics.RegisterTools(registry, diagnosticService)
 	memoryService := memory.NewService(cfg, store)
 	tools.RegisterMemoryTools(registry, memoryService, logger)
+	captureService := capture.NewService(cfg, store)
+	tools.RegisterCaptureTools(registry, captureService, logger)
 	logger.Info("memoryd initialized",
 		"version", version,
 		"db_path", cfg.Storage.Path,

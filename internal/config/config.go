@@ -16,6 +16,7 @@ type Config struct {
 	Server    ServerConfig    `yaml:"server" json:"server"`
 	Logging   LoggingConfig   `yaml:"logging" json:"logging"`
 	Memory    MemoryConfig    `yaml:"memory" json:"memory"`
+	Capture   CaptureConfig   `yaml:"capture" json:"capture"`
 	Retrieval RetrievalConfig `yaml:"retrieval" json:"retrieval"`
 	Embedding EmbeddingConfig `yaml:"embedding" json:"embedding"`
 	Retention RetentionConfig `yaml:"retention" json:"retention"`
@@ -48,6 +49,19 @@ type MemoryConfig struct {
 	MaxEvidenceChars    int    `yaml:"max_evidence_chars" json:"max_evidence_chars"`
 	MaxKeywordCount     int    `yaml:"max_keyword_count" json:"max_keyword_count"`
 	MaxSalientSpanCount int    `yaml:"max_salient_span_count" json:"max_salient_span_count"`
+}
+
+// CaptureConfig 保存 P2 observe 事件捕获的内容边界和默认值。
+type CaptureConfig struct {
+	RequireSessionForAgentEvents bool   `yaml:"require_session_for_agent_events" json:"require_session_for_agent_events"`
+	MaxInputSummaryChars         int    `yaml:"max_input_summary_chars" json:"max_input_summary_chars"`
+	MaxOutputSummaryChars        int    `yaml:"max_output_summary_chars" json:"max_output_summary_chars"`
+	MaxContentSummaryChars       int    `yaml:"max_content_summary_chars" json:"max_content_summary_chars"`
+	MaxSourceRefsChars           int    `yaml:"max_source_refs_chars" json:"max_source_refs_chars"`
+	MaxSalientSpanChars          int    `yaml:"max_salient_span_chars" json:"max_salient_span_chars"`
+	MaxSalientSpanCount          int    `yaml:"max_salient_span_count" json:"max_salient_span_count"`
+	MaxKeywordCount              int    `yaml:"max_keyword_count" json:"max_keyword_count"`
+	DefaultAgentType             string `yaml:"default_agent_type" json:"default_agent_type"`
 }
 
 // RetrievalConfig 保存在线检索默认值。P0 只暴露 status，P1 检索实现会使用这些限制。
@@ -107,6 +121,17 @@ func Default() Config {
 			MaxEvidenceChars:    1200,
 			MaxKeywordCount:     30,
 			MaxSalientSpanCount: 10,
+		},
+		Capture: CaptureConfig{
+			RequireSessionForAgentEvents: true,
+			MaxInputSummaryChars:         1200,
+			MaxOutputSummaryChars:        2000,
+			MaxContentSummaryChars:       2000,
+			MaxSourceRefsChars:           4000,
+			MaxSalientSpanChars:          500,
+			MaxSalientSpanCount:          10,
+			MaxKeywordCount:              30,
+			DefaultAgentType:             "unknown",
 		},
 		Retrieval: RetrievalConfig{
 			DefaultLimit:       10,
@@ -183,6 +208,13 @@ func validate(cfg Config) error {
 	}
 	if cfg.Memory.MaxContentChars <= 0 || cfg.Memory.MaxEvidenceChars <= 0 || cfg.Memory.MaxKeywordCount <= 0 || cfg.Memory.MaxSalientSpanCount <= 0 {
 		return errors.New("CONFIG_INVALID: memory content limits must be positive")
+	}
+	if cfg.Capture.MaxInputSummaryChars <= 0 || cfg.Capture.MaxOutputSummaryChars <= 0 || cfg.Capture.MaxContentSummaryChars <= 0 ||
+		cfg.Capture.MaxSourceRefsChars <= 0 || cfg.Capture.MaxSalientSpanChars <= 0 || cfg.Capture.MaxSalientSpanCount <= 0 || cfg.Capture.MaxKeywordCount <= 0 {
+		return errors.New("CONFIG_INVALID: capture content limits must be positive")
+	}
+	if strings.TrimSpace(cfg.Capture.DefaultAgentType) == "" {
+		return errors.New("CONFIG_INVALID: capture.default_agent_type is required")
 	}
 	if cfg.Server.MCPAddr == "" {
 		return errors.New("CONFIG_INVALID: server.mcp_addr is required")

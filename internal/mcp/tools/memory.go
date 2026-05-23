@@ -112,7 +112,7 @@ func toMCPError(err error) *mcp.Error {
 	if i := strings.Index(message, ":"); i > 0 {
 		prefix := message[:i]
 		switch prefix {
-		case "VALIDATION_FAILED", "SCOPE_INVALID", "CONTENT_TOO_LARGE", "MEMORY_NOT_FOUND", "STATE_CONFLICT", "FTS_UNAVAILABLE":
+		case "VALIDATION_FAILED", "SCOPE_INVALID", "CONTENT_TOO_LARGE", "MEMORY_NOT_FOUND", "STATE_CONFLICT", "FTS_UNAVAILABLE", "SESSION_REQUIRED", "TASK_INVALID", "CAPTURE_UNSUPPORTED", "SESSION_NOT_FOUND", "TASK_NOT_FOUND":
 			code = prefix
 			retryable = false
 		case "STORAGE_BUSY":
