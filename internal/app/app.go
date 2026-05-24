@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
+	"github.com/zaneway/the-one/internal/automation"
 	"github.com/zaneway/the-one/internal/capture"
 	"github.com/zaneway/the-one/internal/config"
 	"github.com/zaneway/the-one/internal/diagnostics"
@@ -12,6 +14,7 @@ import (
 	"github.com/zaneway/the-one/internal/mcp"
 	"github.com/zaneway/the-one/internal/mcp/tools"
 	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/the-one/internal/processor"
 	"github.com/zaneway/the-one/internal/storage/sqlite"
 )
 
@@ -25,6 +28,7 @@ type App struct {
 	logger   *slog.Logger
 	store    *sqlite.Store
 	registry *mcp.Registry
+	worker   *automation.Worker
 }
 
 // New 初始化 memoryd 运行时。migration 失败时不会启动 MCP 工具，避免半初始化状态对外可见。
@@ -43,8 +47,16 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	diagnostics.RegisterTools(registry, diagnosticService)
 	memoryService := memory.NewService(cfg, store)
 	tools.RegisterMemoryTools(registry, memoryService, logger)
-	captureService := capture.NewService(cfg, store)
+	automationService := automation.NewService(cfg, store, processor.NewRuleBasedProvider())
+	tools.RegisterAutomationTools(registry, automationService, logger)
+	captureService := capture.NewServiceWithAutomation(cfg, store, automationService)
 	tools.RegisterCaptureTools(registry, captureService, logger)
+	worker := automation.NewWorker(automationService, store, automation.WorkerConfig{
+		PollIntervalMS:   cfg.Automation.PollIntervalMS,
+		BatchSize:        cfg.Automation.BatchSize,
+		RetryBaseDelayMS: cfg.Automation.RetryBaseDelayMS,
+		RunningTimeoutMS: cfg.Automation.RunningTimeoutMS,
+	})
 	logger.Info("memoryd initialized",
 		"version", version,
 		"db_path", cfg.Storage.Path,
@@ -56,6 +68,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		logger:   logger,
 		store:    store,
 		registry: registry,
+		worker:   worker,
 	}, nil
 }
 
@@ -63,6 +76,13 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 func (a *App) Serve(ctx context.Context) error {
 	if a.cfg.Server.MCPAddr != "stdio" {
 		return fmt.Errorf("unsupported mcp addr %q", a.cfg.Server.MCPAddr)
+	}
+	if a.cfg.Automation.WorkerEnabled && a.worker != nil {
+		go func() {
+			if err := a.worker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				a.logger.Error("automation worker stopped", "error", err)
+			}
+		}()
 	}
 	server := mcp.NewStdioServer(a.registry, a.logger)
 	return server.Serve(ctx)

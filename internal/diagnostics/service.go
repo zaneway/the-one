@@ -130,12 +130,22 @@ func (s *Service) StatusTool(_ context.Context, raw json.RawMessage) (any, *mcp.
 	}
 	if req.IncludeConfig {
 		response.Config = map[string]any{
-			"embedding_provider":      s.cfg.Embedding.Provider,
-			"retention_job_enabled":   s.cfg.Retention.JobEnabled,
-			"retrieval_timeout_ms":    s.cfg.Retrieval.OnlineTimeoutMS,
-			"default_token_budget":    s.cfg.Retrieval.DefaultTokenBudget,
-			"sqlite_vec_enabled":      s.cfg.Storage.SQLiteVecEnabled,
-			"storage_busy_timeout_ms": s.cfg.Storage.BusyTimeoutMS,
+			"processor_provider":                 s.cfg.Processor.Provider,
+			"processor_enable_auto_processing":   s.cfg.Processor.EnableAutoProcessing,
+			"processor_max_related_events":       s.cfg.Processor.MaxRelatedEvents,
+			"processor_max_candidates_per_event": s.cfg.Processor.MaxCandidatesPerEvent,
+			"automation_worker_enabled":          s.cfg.Automation.WorkerEnabled,
+			"automation_poll_interval_ms":        s.cfg.Automation.PollIntervalMS,
+			"automation_batch_size":              s.cfg.Automation.BatchSize,
+			"automation_max_attempts":            s.cfg.Automation.MaxAttempts,
+			"automation_retry_base_delay_ms":     s.cfg.Automation.RetryBaseDelayMS,
+			"automation_running_timeout_ms":      s.cfg.Automation.RunningTimeoutMS,
+			"embedding_provider":                 s.cfg.Embedding.Provider,
+			"retention_job_enabled":              s.cfg.Retention.JobEnabled,
+			"retrieval_timeout_ms":               s.cfg.Retrieval.OnlineTimeoutMS,
+			"default_token_budget":               s.cfg.Retrieval.DefaultTokenBudget,
+			"sqlite_vec_enabled":                 s.cfg.Storage.SQLiteVecEnabled,
+			"storage_busy_timeout_ms":            s.cfg.Storage.BusyTimeoutMS,
 		}
 	}
 	return response, nil

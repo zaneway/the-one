@@ -60,18 +60,31 @@ type Repository interface {
 	GetCaptureQuality(ctx context.Context, sessionID string) (CaptureQualityReport, error)
 }
 
+// JobEnqueuer 是 P3 自动记忆链路对 capture service 暴露的最小入队接口。
+// capture 只负责在 raw_event 成功写入后通知自动处理层，不直接执行 evidence/candidate 逻辑。
+type JobEnqueuer interface {
+	EnqueueRawEvent(ctx context.Context, event RawEvent) error
+}
+
 // Service 捕获服务结构体
 // 编排 P2 observe 写入链路
-// 设计原则：P2 只落 raw_event，不创建 async_job 或 memory_item
+// 设计原则：capture 只落 raw_event；P3 通过可选 enqueuer 触发后续 async_job。
 type Service struct {
-	cfg  config.Config // 配置信息
-	repo Repository    // 仓库接口，负责持久化
+	cfg      config.Config // 配置信息
+	repo     Repository    // 仓库接口，负责持久化
+	enqueuer JobEnqueuer   // P3 自动处理入队器；为空时保持 P2 raw_event-only 行为
 }
 
 // NewService 创建 capture service
 // 后续 MCP handler 和 diagnostics service 复用该入口
 func NewService(cfg config.Config, repo Repository) *Service {
 	return &Service{cfg: cfg, repo: repo}
+}
+
+// NewServiceWithAutomation 创建带自动处理入队能力的 capture service。
+// 该构造函数用于 P3-C3；P2 调用方继续使用 NewService 即可保持原行为。
+func NewServiceWithAutomation(cfg config.Config, repo Repository, enqueuer JobEnqueuer) *Service {
+	return &Service{cfg: cfg, repo: repo, enqueuer: enqueuer}
 }
 
 // Observe 执行 P2 memory.observe 的最小闭环
@@ -188,6 +201,12 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 			return ObserveResponse{}, err
 		}
 	}
+	diagnostics := make([]string, 0, 1)
+	if s.enqueuer != nil {
+		if err := s.enqueuer.EnqueueRawEvent(ctx, event); err != nil {
+			diagnostics = append(diagnostics, "automation_enqueue_failed")
+		}
+	}
 	return ObserveResponse{
 		RequestID:    requestID,
 		RawEventID:   event.ID,
@@ -197,6 +216,7 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		Pipeline:     pipelineRawEventOnly,
 		Deduped:      false,
 		CaptureLevel: captureLevel,
+		Diagnostics:  diagnostics,
 	}, nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/zaneway/the-one/internal/automation"
 	"github.com/zaneway/the-one/internal/capture"
 )
 
@@ -334,6 +335,82 @@ func (s *Store) GetCaptureQuality(ctx context.Context, sessionID string) (captur
 		return capture.CaptureQualityReport{}, storageErr(err)
 	}
 	return report, nil
+}
+
+// GetRawEvent 按 raw_event id 读取事件事实，供 P3 automation worker 使用。
+func (s *Store) GetRawEvent(ctx context.Context, rawEventID string) (capture.RawEvent, error) {
+	event, err := scanEvent(s.db.QueryRowContext(ctx, baseEventSelect()+" where id = ?", rawEventID))
+	if err == sql.ErrNoRows {
+		return capture.RawEvent{}, fmt.Errorf("RAW_EVENT_NOT_FOUND: %s", rawEventID)
+	}
+	return event, storageErr(err)
+}
+
+// GetSession 按 session_id 读取 Agent 会话。
+func (s *Store) GetSession(ctx context.Context, sessionID string) (capture.AgentSession, error) {
+	return s.getSession(ctx, sessionID)
+}
+
+// GetTask 按 task_id 读取 Agent 任务。
+func (s *Store) GetTask(ctx context.Context, taskID string) (capture.AgentTask, error) {
+	return s.getTask(ctx, taskID)
+}
+
+// ListOrphanRawEvents 查找没有 extract_evidence job 且没有 evidence 的 raw_event，供 reconcile 使用。
+func (s *Store) ListOrphanRawEvents(ctx context.Context, req automation.OrphanRawEventRequest) ([]capture.RawEvent, error) {
+	if req.WorkspaceID == "" {
+		return nil, fmt.Errorf("VALIDATION_FAILED: workspace_id is required")
+	}
+	query := baseEventSelect() + `
+		where workspace_id = ?
+		  and not exists (
+			select 1 from async_job j
+			where j.job_type = ?
+			  and j.target_type = ?
+			  and j.target_id = raw_event.id
+		  )
+		  and not exists (
+			select 1 from evidence e where e.raw_event_id = raw_event.id
+		  )`
+	args := []any{req.WorkspaceID, automation.JobTypeExtractEvidence, automation.TargetTypeRawEvent}
+	if req.ProjectID != "" {
+		query += " and project_id = ?"
+		args = append(args, req.ProjectID)
+	}
+	if req.RepoID != "" {
+		query += " and repo_id = ?"
+		args = append(args, req.RepoID)
+	}
+	query += " order by created_at desc limit ?"
+	args = append(args, automationLimit(req.Limit))
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, storageErr(err)
+	}
+	defer rows.Close()
+	return scanEventRows(rows)
+}
+
+// ListRelatedEvents 读取同 session/task 的近邻事件，用于 P3 Provider 抽取上下文。
+func (s *Store) ListRelatedEvents(ctx context.Context, req automation.RelatedEventsRequest) ([]capture.RawEvent, error) {
+	query := baseEventSelect() + " where 1 = 1"
+	args := make([]any, 0)
+	if req.SessionID != "" {
+		query += " and session_id = ?"
+		args = append(args, req.SessionID)
+	}
+	if req.TaskID != "" {
+		query += " and task_id = ?"
+		args = append(args, req.TaskID)
+	}
+	query += " order by occurred_at desc limit ?"
+	args = append(args, automationLimit(req.Limit))
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, storageErr(err)
+	}
+	defer rows.Close()
+	return scanEventRows(rows)
 }
 
 func (s *Store) getSession(ctx context.Context, sessionID string) (capture.AgentSession, error) {

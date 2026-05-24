@@ -363,6 +363,10 @@ type ObserveResponse struct {
 	// CaptureLevel 捕获等级
 	// 根据Adapter声明能力计算的捕获等级，范围1-4
 	CaptureLevel int `json:"capture_level"`
+
+	// Diagnostics 诊断标记
+	// 用于表达非阻断问题，例如自动处理入队失败但 raw_event 已保留
+	Diagnostics []string `json:"diagnostics,omitempty"`
 }
 
 // AgentSession Agent会话结构体

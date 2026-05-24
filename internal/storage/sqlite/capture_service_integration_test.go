@@ -4,8 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/zaneway/the-one/internal/automation"
 	"github.com/zaneway/the-one/internal/capture"
 	"github.com/zaneway/the-one/internal/config"
+	"github.com/zaneway/the-one/internal/processor"
 )
 
 func TestCaptureServiceObserveWithSQLiteRepository(t *testing.T) {
@@ -112,5 +114,41 @@ func TestCaptureServiceObserveWithSQLiteRepository(t *testing.T) {
 	}
 	if len(tasks) != 1 || tasks[0].Status != capture.StatusUnknown || tasks[0].EndedAt.IsZero() {
 		t.Fatalf("tasks after session.end = %+v, want default task ended as unknown", tasks)
+	}
+}
+
+func TestCaptureServiceObserveEnqueuesAutomationJobWithSQLiteRepository(t *testing.T) {
+	ctx := context.Background()
+	store := newCaptureTestStore(t)
+	defer store.Close()
+	cfg := config.Default()
+	automationService := automation.NewService(cfg, store, processor.NewRuleBasedProvider())
+	service := capture.NewServiceWithAutomation(cfg, store, automationService)
+
+	resp, err := service.Observe(ctx, capture.ObserveRequest{
+		EventType:      capture.EventUserDeclaration,
+		SourceChannel:  capture.SourceChannelMCPTool,
+		WorkspaceID:    "ws",
+		ProjectID:      "project_a",
+		AgentType:      "cursor",
+		Actor:          capture.ActorUser,
+		ContentSummary: "以后推进 P3 时先按详细设计拆分任务。",
+		ContentHash:    "sha256:p3-c3-sqlite",
+		CaptureCapabilities: capture.CaptureCapabilities{
+			MCPObserve: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+	jobs, err := store.ListJobs(ctx, automation.ListJobsRequest{
+		JobType:  automation.JobTypeExtractEvidence,
+		TargetID: resp.RawEventID,
+	})
+	if err != nil {
+		t.Fatalf("ListJobs() error = %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].Status != automation.JobStatusPending || jobs[0].TargetType != automation.TargetTypeRawEvent {
+		t.Fatalf("jobs = %+v, want one pending extract_evidence raw_event job", jobs)
 	}
 }

@@ -108,10 +108,10 @@ func ValidateSearchScopes(scopes []string, workspaceID, projectID, repoID, sessi
 }
 
 // validMemoryType 校验记忆类型是否合法
-// 合法值：preference、decision、constraint、failure、project_fact、procedure、temporary_state、review_checkpoint
+// 合法值：preference、requirement、decision、constraint、assumption、open_issue、failure、project_fact、procedure、temporary_state、session_summary、review_checkpoint
 func validMemoryType(memoryType string) bool {
 	switch memoryType {
-	case TypePreference, TypeDecision, TypeConstraint, TypeFailure, TypeProjectFact, TypeProcedure, TypeTemporaryState, TypeReviewCheckpoint:
+	case TypePreference, TypeRequirement, TypeDecision, TypeConstraint, TypeAssumption, TypeOpenIssue, TypeFailure, TypeProjectFact, TypeProcedure, TypeTemporaryState, TypeSessionSummary, TypeReviewCheckpoint:
 		return true
 	default:
 		return false
@@ -122,6 +122,7 @@ func validMemoryType(memoryType string) bool {
 // 规则：
 // - session作用域: stable + temporary
 // - review_checkpoint: stable + long_term
+// - assumption/open_issue: pending_review + long_term
 // - decision/constraint: pending_review + long_term
 // - failure且importance>=0.8: pending_review + long_term
 // - user_declared: stable + durable
@@ -132,6 +133,8 @@ func defaultStateAndTier(req RememberRequest) (string, string) {
 		return StateStable, TierTemporary
 	case req.MemoryType == TypeReviewCheckpoint:
 		return StateStable, TierLongTerm
+	case req.MemoryType == TypeAssumption || req.MemoryType == TypeOpenIssue:
+		return StatePendingReview, TierLongTerm
 	case req.MemoryType == TypeDecision || req.MemoryType == TypeConstraint:
 		return StatePendingReview, TierLongTerm
 	case req.MemoryType == TypeFailure && req.Importance >= 0.8:

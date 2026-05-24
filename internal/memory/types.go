@@ -41,6 +41,10 @@ const (
 	// 例如：用户偏好技术方案先分析架构边界、风险和工程落地
 	TypePreference = "preference"
 
+	// TypeRequirement 需求类型
+	// 记录用户明确提出的系统需求、阶段目标和验收条件
+	TypeRequirement = "requirement"
+
 	// TypeDecision 架构决策类型
 	// 记录架构决策和决策原因，默认进入pending_review状态，长期保存
 	// 例如：项目决定暂不引入Kafka，原因是当前异步需求不足
@@ -50,6 +54,14 @@ const (
 	// 记录项目约束、安全约束、技术边界等，默认进入pending_review状态，长期保存
 	// 例如：认证模块要求请求内同步完成校验
 	TypeConstraint = "constraint"
+
+	// TypeAssumption 设计假设类型
+	// 记录架构、分期或实现方案成立的前提假设
+	TypeAssumption = "assumption"
+
+	// TypeOpenIssue 开放问题类型
+	// 记录待确认问题、未决风险和需要后续处理的设计点
+	TypeOpenIssue = "open_issue"
 
 	// TypeFailure 失败经验类型
 	// 记录失败经验、事故结论、踩坑记录等，高价值长期保存
@@ -70,6 +82,10 @@ const (
 	// 记录临时任务状态，默认5天后自动清理
 	// 例如：当前正在修复的bug状态
 	TypeTemporaryState = "temporary_state"
+
+	// TypeSessionSummary 会话摘要类型
+	// 记录 session/task 结果摘要，只服务短中期连续性
+	TypeSessionSummary = "session_summary"
 
 	// TypeReviewCheckpoint 设计复查检查点类型
 	// 记录设计复查、架构评审、文档校验后的结构化检查点
@@ -112,6 +128,10 @@ const (
 	// 保留5天，适用于临时任务状态和短期上下文
 	TierTemporary = "temporary"
 
+	// TierShortTerm 短期层级
+	// 适用于重复失败、会话摘要和未确认但短期有用的候选
+	TierShortTerm = "short_term"
+
 	// TierLongTerm 长期层级
 	// 保留365天，适用于重要决策、失败经验等
 	TierLongTerm = "long_term"
@@ -119,6 +139,10 @@ const (
 	// TierDurable 持久层级
 	// 默认不自动删除，适用于用户显式声明、pinned记忆等
 	TierDurable = "durable"
+
+	// TierArchived 归档层级
+	// 配合 state=archived 排除默认检索
+	TierArchived = "archived"
 )
 
 // ============================================================================
@@ -221,8 +245,8 @@ type RememberRequest struct {
 
 	// MemoryType 记忆类型
 	// 必填，决定记忆的分类和默认处理策略
-	// 可选值：preference、decision、constraint、failure、project_fact、
-	//         procedure、temporary_state、review_checkpoint
+	// 可选值：preference、requirement、decision、constraint、assumption、open_issue、
+	//         failure、project_fact、procedure、temporary_state、session_summary、review_checkpoint
 	MemoryType string `json:"memory_type"`
 
 	// Scope 作用域
@@ -622,6 +646,10 @@ type MemoryItem struct {
 	// 记录记忆的来源，影响默认状态和强化策略
 	SourceType string `json:"source_type,omitempty"`
 
+	// CreatedBy 创建者
+	// 标记手动写入或自动写入来源，如 memoryd、automation:rule_based
+	CreatedBy string `json:"created_by,omitempty"`
+
 	// SourceQuality 来源质量
 	// 范围0-1，默认0.7，影响保留分数计算
 	SourceQuality float64 `json:"source_quality"`
@@ -684,7 +712,7 @@ type MemoryItem struct {
 	RetentionScore float64 `json:"retention_score"`
 
 	// Tier 记忆层级
-	// temporary、long_term、durable
+	// temporary、short_term、long_term、durable、archived
 	Tier string `json:"tier"`
 
 	// CreatedAt 创建时间
@@ -721,6 +749,10 @@ type Evidence struct {
 	// 全局唯一标识
 	ID string
 
+	// RawEventID 原始事件ID
+	// P3 自动证据必须绑定 raw_event，P1 手动证据可为空
+	RawEventID string
+
 	// SourceType 来源类型
 	// 证据的来源，如tool_output、user_correction、agent_decision等
 	SourceType string
@@ -747,6 +779,16 @@ type Evidence struct {
 
 	// CreatedAt 创建时间
 	CreatedAt time.Time
+}
+
+type MemoryRelation struct {
+	ID           string
+	SourceID     string
+	TargetID     string
+	RelationType string
+	Weight       float64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // ReviewCheckpoint 设计复查检查点结构体

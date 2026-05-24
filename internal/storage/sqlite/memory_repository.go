@@ -353,7 +353,7 @@ func insertMemoryItem(ctx context.Context, tx *sql.Tx, item memory.MemoryItem) e
 	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID, item.Scope, nullString(item.WorkspaceID), nullString(item.UserID), nullString(item.ProjectID),
 		nullString(item.RepoID), nullString(item.SessionID), nullString(item.TaskID), item.MemoryType,
-		nullString(item.SourceType), nullString("memoryd"), item.SourceQuality, nullString(item.Title), item.Content,
+		nullString(item.SourceType), nullString(firstNonEmpty(item.CreatedBy, "memoryd")), item.SourceQuality, nullString(item.Title), item.Content,
 		nullString(item.NormalizedContent), nullString(item.SearchText), nullString(item.KeywordsJSON),
 		nullString(item.EntitiesJSON), nullString(item.RetrievalCuesJSON), nullString(item.TagsJSON), item.State,
 		item.Confidence, item.Importance, item.EncodingDepth, item.DecayRate, item.RetentionScore, item.Tier,
@@ -365,9 +365,9 @@ func insertMemoryItem(ctx context.Context, tx *sql.Tx, item memory.MemoryItem) e
 
 func insertEvidence(ctx context.Context, tx *sql.Tx, evidence memory.Evidence) error {
 	_, err := tx.ExecContext(ctx, `insert into evidence(
-		id, source_type, interpreted_statement, keywords_json, salient_spans_json, source_ref_json, confidence, created_at
-	) values (?, ?, ?, ?, ?, ?, ?, ?)`,
-		evidence.ID, evidence.SourceType, evidence.InterpretedStatement, nullString(evidence.KeywordsJSON),
+		id, raw_event_id, source_type, interpreted_statement, keywords_json, salient_spans_json, source_ref_json, confidence, created_at
+	) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		evidence.ID, nullString(evidence.RawEventID), evidence.SourceType, evidence.InterpretedStatement, nullString(evidence.KeywordsJSON),
 		nullString(evidence.SalientSpansJSON), nullString(evidence.SourceRefJSON), evidence.Confidence,
 		evidence.CreatedAt.Format(time.RFC3339Nano),
 	)
@@ -541,7 +541,7 @@ func getMemoryForUpdate(ctx context.Context, tx *sql.Tx, memoryID string) (memor
 func baseMemorySelect() string {
 	return `select id, scope, coalesce(workspace_id, ''), coalesce(user_id, ''), coalesce(project_id, ''),
 		coalesce(repo_id, ''), coalesce(session_id, ''), coalesce(task_id, ''), memory_type,
-		coalesce(source_type, ''), source_quality, coalesce(title, ''), content,
+		coalesce(source_type, ''), coalesce(created_by, ''), source_quality, coalesce(title, ''), content,
 		coalesce(normalized_content, ''), coalesce(search_text, ''), coalesce(keywords_json, ''),
 		coalesce(entities_json, ''), coalesce(retrieval_cues_json, ''), coalesce(tags_json, ''),
 		state, confidence, importance, encoding_depth, decay_rate, retention_score, tier,
@@ -558,7 +558,7 @@ func scanMemory(row rowScanner) (memory.MemoryItem, error) {
 	var createdAt, updatedAt string
 	err := row.Scan(&item.ID, &item.Scope, &item.WorkspaceID, &item.UserID, &item.ProjectID,
 		&item.RepoID, &item.SessionID, &item.TaskID, &item.MemoryType, &item.SourceType,
-		&item.SourceQuality, &item.Title, &item.Content, &item.NormalizedContent, &item.SearchText,
+		&item.CreatedBy, &item.SourceQuality, &item.Title, &item.Content, &item.NormalizedContent, &item.SearchText,
 		&item.KeywordsJSON, &item.EntitiesJSON, &item.RetrievalCuesJSON, &item.TagsJSON,
 		&item.State, &item.Confidence, &item.Importance, &item.EncodingDepth, &item.DecayRate,
 		&item.RetentionScore, &item.Tier, &createdAt, &updatedAt, &item.Pinned,

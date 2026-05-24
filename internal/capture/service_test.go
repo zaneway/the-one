@@ -2,6 +2,7 @@ package capture
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -95,6 +96,88 @@ func TestServiceObserveDedupesRawEvent(t *testing.T) {
 	}
 	if first.RawEventID == "" || second.RawEventID != first.RawEventID || !second.Deduped {
 		t.Fatalf("first=%+v second=%+v, want deduped existing event", first, second)
+	}
+}
+
+func TestServiceObserveEnqueuesAutomationForNewRawEventOnly(t *testing.T) {
+	repo := newFakeRepository()
+	enqueuer := &fakeJobEnqueuer{}
+	service := NewServiceWithAutomation(config.Default(), repo, enqueuer)
+	start, err := service.Observe(context.Background(), ObserveRequest{
+		EventType:     EventSessionStart,
+		SourceChannel: SourceChannelAgentSession,
+		WorkspaceID:   "ws",
+		AgentType:     "cursor",
+		CaptureCapabilities: CaptureCapabilities{
+			SessionLifecycle: true,
+			MCPObserve:       true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Observe(session.start) error = %v", err)
+	}
+	if len(enqueuer.rawEventIDs) != 1 || enqueuer.rawEventIDs[0] != start.RawEventID {
+		t.Fatalf("enqueued raw events after start = %+v, want %s", enqueuer.rawEventIDs, start.RawEventID)
+	}
+
+	req := ObserveRequest{
+		SessionID:      start.SessionID,
+		EventType:      EventUserDeclaration,
+		SourceChannel:  SourceChannelAgentSession,
+		WorkspaceID:    "ws",
+		AgentType:      "cursor",
+		Actor:          ActorUser,
+		ContentSummary: "以后推进 P3 时先写测试。",
+		ContentHash:    "sha256:p3-c3",
+		CaptureCapabilities: CaptureCapabilities{
+			SessionLifecycle: true,
+			MCPObserve:       true,
+		},
+	}
+	first, err := service.Observe(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Observe(first declaration) error = %v", err)
+	}
+	second, err := service.Observe(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Observe(second declaration) error = %v", err)
+	}
+	if !second.Deduped {
+		t.Fatalf("second response = %+v, want deduped", second)
+	}
+	if len(enqueuer.rawEventIDs) != 2 || enqueuer.rawEventIDs[1] != first.RawEventID {
+		t.Fatalf("enqueued raw events = %+v, want start and first declaration only", enqueuer.rawEventIDs)
+	}
+}
+
+func TestServiceObserveKeepsRawEventWhenAutomationEnqueueFails(t *testing.T) {
+	repo := newFakeRepository()
+	enqueuer := &fakeJobEnqueuer{err: errors.New("queue unavailable")}
+	service := NewServiceWithAutomation(config.Default(), repo, enqueuer)
+
+	resp, err := service.Observe(context.Background(), ObserveRequest{
+		EventType:      EventUserDeclaration,
+		SourceChannel:  SourceChannelMCPTool,
+		WorkspaceID:    "ws",
+		AgentType:      "cursor",
+		Actor:          ActorUser,
+		ContentSummary: "以后推进 P3 时先写测试。",
+		ContentHash:    "sha256:p3-c3-enqueue-failed",
+		CaptureCapabilities: CaptureCapabilities{
+			MCPObserve: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Observe() error = %v, want accepted response with diagnostics", err)
+	}
+	if !resp.Accepted || resp.RawEventID == "" {
+		t.Fatalf("response = %+v, want accepted with raw_event_id", resp)
+	}
+	if len(resp.Diagnostics) != 1 || resp.Diagnostics[0] != "automation_enqueue_failed" {
+		t.Fatalf("diagnostics = %+v, want automation_enqueue_failed", resp.Diagnostics)
+	}
+	if len(repo.events) != 1 {
+		t.Fatalf("events = %d, want raw_event kept after enqueue failure", len(repo.events))
 	}
 }
 
@@ -221,6 +304,16 @@ type fakeRepository struct {
 	sessions map[string]AgentSession
 	tasks    map[string]AgentTask
 	events   map[string]RawEvent
+}
+
+type fakeJobEnqueuer struct {
+	rawEventIDs []string
+	err         error
+}
+
+func (e *fakeJobEnqueuer) EnqueueRawEvent(_ context.Context, event RawEvent) error {
+	e.rawEventIDs = append(e.rawEventIDs, event.ID)
+	return e.err
 }
 
 func newFakeRepository() *fakeRepository {

@@ -45,6 +45,14 @@ type Config struct {
 	// Retention 保留配置
 	// retention job 默认策略，P0不启动后台retention job
 	Retention RetentionConfig `yaml:"retention" json:"retention"`
+
+	// Processor 处理器配置
+	// P3 自动 evidence/candidate 抽取 Provider 和内容上限
+	Processor ProcessorConfig `yaml:"processor" json:"processor"`
+
+	// Automation 自动处理配置
+	// P3 本地异步 worker 的轮询、批量和重试策略
+	Automation AutomationConfig `yaml:"automation" json:"automation"`
 }
 
 // StorageConfig 存储配置结构体
@@ -203,6 +211,52 @@ type RetentionConfig struct {
 	ShortTermTTLDays int `yaml:"short_term_ttl_days" json:"short_term_ttl_days"`
 }
 
+// ProcessorConfig 自动记忆处理器配置结构体
+// 控制 P3 使用哪个 Provider，以及 observe 后是否自动入队处理
+type ProcessorConfig struct {
+	// Provider 处理器提供者
+	// P3 默认 rule_based；none 表示只保存 raw_event，不生成 evidence/candidate
+	Provider string `yaml:"provider" json:"provider"`
+
+	// EnableAutoProcessing 是否启用自动处理
+	// false 时 memory.observe 只写 raw_event，不 enqueue extract_evidence
+	EnableAutoProcessing bool `yaml:"enable_auto_processing" json:"enable_auto_processing"`
+
+	// MaxRelatedEvents Provider 抽取时读取的近邻事件上限
+	MaxRelatedEvents int `yaml:"max_related_events" json:"max_related_events"`
+
+	// MaxCandidatesPerEvent 单个事件最多生成候选数量
+	MaxCandidatesPerEvent int `yaml:"max_candidates_per_event" json:"max_candidates_per_event"`
+}
+
+// AutomationConfig 自动处理配置结构体
+// 控制 P3 本地 worker 是否启动，以及每轮领取任务和失败重试策略
+type AutomationConfig struct {
+	// WorkerEnabled 是否启用本地异步 worker
+	// 默认true，serve模式下由后续 app 集成决定是否启动
+	WorkerEnabled bool `yaml:"worker_enabled" json:"worker_enabled"`
+
+	// PollIntervalMS 空轮询间隔（毫秒）
+	// pending job 为空时 worker 的等待时间，默认1000ms
+	PollIntervalMS int `yaml:"poll_interval_ms" json:"poll_interval_ms"`
+
+	// BatchSize 每轮最多领取任务数
+	// 控制单进程 worker 的批处理上限，默认10
+	BatchSize int `yaml:"batch_size" json:"batch_size"`
+
+	// MaxAttempts 最大尝试次数
+	// 用于后续 worker/app 集成时设置 job 默认重试上限，默认3
+	MaxAttempts int `yaml:"max_attempts" json:"max_attempts"`
+
+	// RetryBaseDelayMS 重试基础延迟（毫秒）
+	// worker 按指数退避计算下一次运行时间，默认1000ms
+	RetryBaseDelayMS int `yaml:"retry_base_delay_ms" json:"retry_base_delay_ms"`
+
+	// RunningTimeoutMS running任务恢复超时（毫秒）
+	// 进程崩溃遗留的running job超过该时间后可恢复为pending或failed
+	RunningTimeoutMS int `yaml:"running_timeout_ms" json:"running_timeout_ms"`
+}
+
 // Overrides 命令行覆盖项结构体
 // 表示命令行覆盖项，空值表示不覆盖配置文件和默认值
 type Overrides struct {
@@ -278,6 +332,20 @@ func Default() Config {
 			TemporaryTTLDays: 5,
 			ShortTermTTLDays: 90,
 		},
+		Processor: ProcessorConfig{
+			Provider:              "rule_based",
+			EnableAutoProcessing:  true,
+			MaxRelatedEvents:      20,
+			MaxCandidatesPerEvent: 3,
+		},
+		Automation: AutomationConfig{
+			WorkerEnabled:    true,
+			PollIntervalMS:   1000,
+			BatchSize:        10,
+			MaxAttempts:      3,
+			RetryBaseDelayMS: 1000,
+			RunningTimeoutMS: 300000,
+		},
 	}
 }
 
@@ -348,6 +416,13 @@ func validate(cfg Config) error {
 	}
 	if strings.TrimSpace(cfg.Capture.DefaultAgentType) == "" {
 		return errors.New("CONFIG_INVALID: capture.default_agent_type is required")
+	}
+	if strings.TrimSpace(cfg.Processor.Provider) == "" || cfg.Processor.MaxRelatedEvents <= 0 || cfg.Processor.MaxCandidatesPerEvent <= 0 {
+		return errors.New("CONFIG_INVALID: processor config values must be positive and provider is required")
+	}
+	if cfg.Automation.PollIntervalMS <= 0 || cfg.Automation.BatchSize <= 0 || cfg.Automation.MaxAttempts <= 0 ||
+		cfg.Automation.RetryBaseDelayMS <= 0 || cfg.Automation.RunningTimeoutMS <= 0 {
+		return errors.New("CONFIG_INVALID: automation worker limits must be positive")
 	}
 	if cfg.Server.MCPAddr == "" {
 		return errors.New("CONFIG_INVALID: server.mcp_addr is required")
