@@ -8,6 +8,7 @@ import (
 
 	"github.com/zaneway/the-one/internal/automation"
 	"github.com/zaneway/the-one/internal/capture"
+	"github.com/zaneway/the-one/internal/codeindex"
 	"github.com/zaneway/the-one/internal/config"
 	"github.com/zaneway/the-one/internal/diagnostics"
 	"github.com/zaneway/the-one/internal/logging"
@@ -15,6 +16,7 @@ import (
 	"github.com/zaneway/the-one/internal/mcp/tools"
 	"github.com/zaneway/the-one/internal/memory"
 	"github.com/zaneway/the-one/internal/processor"
+	"github.com/zaneway/the-one/internal/retrieval"
 	"github.com/zaneway/the-one/internal/storage/sqlite"
 )
 
@@ -51,8 +53,17 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// Step 4: 注册 P0 诊断工具（memory.health / memory.status）
 	diagnosticService := diagnostics.NewService(version, cfg, store)
 	diagnostics.RegisterTools(registry, diagnosticService)
-	// Step 5: 注册 P1 记忆工具（memory.remember / memory.search / memory.context / memory.review）
-	memoryService := memory.NewService(cfg, store)
+	// Step 5: 注册 P1/P4 记忆工具（remember/review 保持 P1，search/context 通过 P4-C1 Orchestrator 写 trace/access log）
+	retrievalOrchestrator := retrieval.NewMemoryOrchestrator(cfg, store,
+		retrieval.WithTraceRepository(store),
+		retrieval.WithAccessLogRepository(store),
+		retrieval.WithRelationRepository(store),
+		retrieval.WithCodeRefRepository(store),
+		retrieval.WithCodeIndexAdapter(codeindex.NewLocalBasicAdapter(cfg.CodeIndex, "")),
+		retrieval.WithDocSnapshotRepository(store),
+		retrieval.WithLogger(logger),
+	)
+	memoryService := memory.NewService(cfg, store, memory.WithRetrievalOrchestrator(retrievalOrchestrator))
 	tools.RegisterMemoryTools(registry, memoryService, logger)
 	// Step 6: 注册 P3 自动化工具（memory.jobs.* / memory.candidates.* / memory.automation.status）
 	// automationService 依赖 store 和 rule-based provider（从事件中提取证据的规则引擎）

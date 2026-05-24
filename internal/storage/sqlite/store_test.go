@@ -26,7 +26,7 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	status := store.Status()
-	wantVersion := 5
+	wantVersion := 6
 	if status.Migrations.CurrentVersion != wantVersion {
 		t.Fatalf("current version = %d, want %d", status.Migrations.CurrentVersion, wantVersion)
 	}
@@ -43,6 +43,12 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		"async_job",
 		"memory_candidate",
 		"memory_relation",
+		"retrieval_trace",
+		"memory_access_log",
+		"code_ref",
+		"memory_embedding",
+		"doc_snapshot",
+		"doc_section_snapshot",
 	} {
 		if !tableExists(t, store, table) {
 			t.Fatalf("table %s does not exist after migration", table)
@@ -52,6 +58,15 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		"async_job":        {"job_type", "target_type", "dedup_key", "payload_json"},
 		"memory_candidate": {"source_evidence_ids_json", "review_checkpoint_json", "admission_decision", "dedup_key"},
 		"memory_relation":  {"source_id", "target_id", "relation_type", "weight"},
+		"retrieval_trace":  {"retrieval_intent", "retrieval_mode", "used_fts", "used_vector", "used_relation", "used_code_index", "used_doc_index", "candidate_count", "injected_count", "latency_ms", "status"},
+		"memory_access_log": {
+			"memory_id", "retrieval_trace_id", "event_type", "event_weight",
+			"score_breakdown_json", "inclusion_reason_json", "used_in_context",
+		},
+		"code_ref":             {"memory_id", "repo_id", "file_path", "symbol", "content_hash", "resolve_status"},
+		"memory_embedding":     {"memory_id", "embedding_model", "embedding_dim", "embedding"},
+		"doc_snapshot":         {"workspace_id", "project_id", "repo_id", "doc_path", "content_hash", "section_count"},
+		"doc_section_snapshot": {"snapshot_id", "section_id", "heading_path_json", "content_hash", "summary"},
 	} {
 		for _, column := range columns {
 			if !columnExists(t, store, table, column) {

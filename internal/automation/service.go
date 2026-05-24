@@ -46,6 +46,9 @@ type Repository interface {
 	UpdateCandidateAdmission(ctx context.Context, candidateID string, admission AdmissionResult, status string, memoryID string) error
 	FindRelatedMemory(ctx context.Context, req RelatedMemoryRequest) ([]memory.MemoryItem, error)
 	WriteAutomatedMemory(ctx context.Context, input AutomatedMemoryWrite) (memory.MemoryItem, error)
+	OverwriteMemoryWithCorrection(ctx context.Context, input AutomatedMemoryCorrection) (memory.MemoryItem, error)
+	ResolveCorrectionTargetMemory(ctx context.Context, req CorrectionTargetRequest) (memory.MemoryItem, bool, error)
+	WriteMemoryRelation(ctx context.Context, relation memory.MemoryRelation) error
 	ListOrphanRawEvents(ctx context.Context, req OrphanRawEventRequest) ([]capture.RawEvent, error)
 
 	ListExpiredTemporaryMemories(ctx context.Context, req retention.ListRequest) ([]retention.MemoryRecord, error)
@@ -57,10 +60,11 @@ type Repository interface {
 // Service 编排 P3 自动记忆 job 链路。
 // Provider 只负责生成 draft/candidate，最终写入和 Admission 均在该服务中统一执行。
 type Service struct {
-	cfg       config.Config
-	repo      Repository
-	provider  processor.Provider
-	admission AdmissionController
+	cfg        config.Config
+	repo       Repository
+	provider   processor.Provider
+	admission  AdmissionController
+	dispatcher JobDispatcher
 }
 
 // NewService 创建自动记忆服务。provider 为空时使用 rule_based，保证 P3 默认本地可运行。
@@ -69,12 +73,17 @@ func NewService(cfg config.Config, repo Repository, provider processor.Provider)
 		defaultProvider := processor.NewRuleBasedProvider()
 		provider = defaultProvider
 	}
-	return &Service{
+	service := &Service{
 		cfg:       cfg,
 		repo:      repo,
 		provider:  provider,
 		admission: NewAdmissionController(),
 	}
+	service.dispatcher = NewJobDispatcher(
+		p3JobHandler{service: service},
+		newP4JobHandler(cfg, repo),
+	)
+	return service
 }
 
 // EnqueueRawEvent 为 raw_event 创建 evidence 抽取任务。
@@ -104,18 +113,7 @@ func (s *Service) EnqueueRawEvent(ctx context.Context, rawEvent capture.RawEvent
 // RunJob 执行单个已领取 job，并负责把结果状态回写为 succeeded 或 failed。
 func (s *Service) RunJob(ctx context.Context, job AsyncJob) error {
 	now := time.Now().UTC()
-	var err error
-	var payload map[string]any
-	switch job.JobType {
-	case JobTypeExtractEvidence:
-		payload, err = s.runExtractEvidence(ctx, job)
-	case JobTypeGenerateMemoryCandidate:
-		payload, err = s.runGenerateMemoryCandidate(ctx, job)
-	case JobTypeComputeAdmission:
-		payload, err = s.runComputeAdmission(ctx, job)
-	default:
-		err = fmt.Errorf("VALIDATION_FAILED: unsupported job_type %q", job.JobType)
-	}
+	payload, err := s.dispatcher.RunJob(ctx, job)
 	if err != nil {
 		_ = s.repo.MarkJobFailed(ctx, job.ID, err.Error(), now)
 		return err
@@ -182,6 +180,16 @@ func (s *Service) runGenerateMemoryCandidate(ctx context.Context, job AsyncJob) 
 	if err != nil {
 		return nil, err
 	}
+	related, err := s.repo.FindRelatedMemory(ctx, RelatedMemoryRequest{
+		WorkspaceID: rawEvent.WorkspaceID,
+		ProjectID:   rawEvent.ProjectID,
+		RepoID:      rawEvent.RepoID,
+		Query:       evidence.InterpretedStatement,
+		Limit:       10,
+	})
+	if err != nil {
+		return nil, err
+	}
 	session, err := s.loadSession(ctx, rawEvent.SessionID)
 	if err != nil {
 		return nil, err
@@ -191,11 +199,12 @@ func (s *Service) runGenerateMemoryCandidate(ctx context.Context, job AsyncJob) 
 		return nil, err
 	}
 	candidates, err := s.provider.GenerateCandidates(ctx, processor.CandidateInput{
-		Evidence: evidence,
-		RawEvent: rawEvent,
-		Session:  session,
-		Task:     task,
-		Now:      time.Now().UTC(),
+		Evidence:      evidence,
+		RawEvent:      rawEvent,
+		Session:       session,
+		Task:          task,
+		RelatedMemory: related,
+		Now:           time.Now().UTC(),
 	})
 	if err != nil {
 		return nil, err
@@ -251,10 +260,7 @@ func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[st
 		if err != nil {
 			return nil, err
 		}
-		written, err := s.repo.WriteAutomatedMemory(ctx, AutomatedMemoryWrite{
-			Item:        item,
-			EvidenceIDs: candidate.SourceEvidenceIDs,
-		})
+		written, err := s.writeAdmittedMemory(ctx, record, candidate, admission, evidence, item)
 		if err != nil {
 			return nil, err
 		}
@@ -268,6 +274,127 @@ func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[st
 		}
 		return map[string]any{"admission_decision": admission.Decision}, nil
 	}
+}
+
+func (s *Service) writeAdmittedMemory(ctx context.Context, record MemoryCandidateRecord, candidate processor.MemoryCandidate, admission AdmissionResult, evidence memory.Evidence, item memory.MemoryItem) (memory.MemoryItem, error) {
+	if isUserCorrection(candidate, evidence) {
+		target, found, err := s.resolveCorrectionTarget(ctx, evidence)
+		if err != nil {
+			return memory.MemoryItem{}, err
+		}
+		if found {
+			item.ID = target.ID
+			item.Scope = target.Scope
+			item.WorkspaceID = target.WorkspaceID
+			item.UserID = target.UserID
+			item.ProjectID = target.ProjectID
+			item.RepoID = target.RepoID
+			item.SessionID = target.SessionID
+			item.TaskID = target.TaskID
+			return s.repo.OverwriteMemoryWithCorrection(ctx, AutomatedMemoryCorrection{
+				TargetMemoryID:   target.ID,
+				Item:             item,
+				EvidenceIDs:      candidate.SourceEvidenceIDs,
+				EvidenceRelation: "corrected_by",
+				ReviewFeedback:   "automated user correction",
+			})
+		}
+	}
+	checkpoint, err := reviewCheckpointFromRecord(record, item)
+	if err != nil {
+		return memory.MemoryItem{}, err
+	}
+	return s.repo.WriteAutomatedMemory(ctx, AutomatedMemoryWrite{
+		Item:             item,
+		EvidenceIDs:      candidate.SourceEvidenceIDs,
+		ReviewCheckpoint: checkpoint,
+	})
+}
+
+func (s *Service) resolveCorrectionTarget(ctx context.Context, evidence memory.Evidence) (memory.MemoryItem, bool, error) {
+	ref := decodeObject(evidence.SourceRefJSON)
+	req := CorrectionTargetRequest{
+		TargetMemoryID: stringValue(ref, "target_memory_id"),
+		TargetEventID:  stringValue(ref, "target_event_id"),
+	}
+	if req.TargetMemoryID == "" && req.TargetEventID == "" {
+		return memory.MemoryItem{}, false, nil
+	}
+	return s.repo.ResolveCorrectionTargetMemory(ctx, req)
+}
+
+func isUserCorrection(candidate processor.MemoryCandidate, evidence memory.Evidence) bool {
+	return evidence.SourceType == "user_confirmed" || candidate.SourceType == "user_confirmed" || hasString(candidate.CandidateReason, "user_correction")
+}
+
+func reviewCheckpointFromRecord(record MemoryCandidateRecord, item memory.MemoryItem) (*memory.ReviewCheckpoint, error) {
+	if strings.TrimSpace(record.ReviewCheckpointJSON) == "" {
+		return nil, nil
+	}
+	var draft processor.ReviewCheckpointDraft
+	if err := json.Unmarshal([]byte(record.ReviewCheckpointJSON), &draft); err != nil {
+		return nil, fmt.Errorf("VALIDATION_FAILED: invalid review_checkpoint_json: %w", err)
+	}
+	checkpointID, err := idgen.New("rcp")
+	if err != nil {
+		return nil, err
+	}
+	reviewIntent, err := jsonText(draft.ReviewIntent)
+	if err != nil {
+		return nil, err
+	}
+	targetDocs, err := jsonText(draft.TargetDocs)
+	if err != nil {
+		return nil, err
+	}
+	targetSections, err := jsonText(draft.TargetSections)
+	if err != nil {
+		return nil, err
+	}
+	targetHashes, err := jsonText(draft.TargetHashes)
+	if err != nil {
+		return nil, err
+	}
+	confirmedBaseline, err := jsonText(draft.ConfirmedBaseline)
+	if err != nil {
+		return nil, err
+	}
+	ignoredItems, err := jsonText(draft.IgnoredItems)
+	if err != nil {
+		return nil, err
+	}
+	deferredItems, err := jsonText(draft.DeferredItems)
+	if err != nil {
+		return nil, err
+	}
+	openItems, err := jsonText(draft.OpenItems)
+	if err != nil {
+		return nil, err
+	}
+	nextPolicy, err := jsonText(draft.NextReviewPolicy)
+	if err != nil {
+		return nil, err
+	}
+	return &memory.ReviewCheckpoint{
+		ID:                    checkpointID,
+		MemoryID:              item.ID,
+		WorkspaceID:           item.WorkspaceID,
+		ProjectID:             item.ProjectID,
+		RepoID:                item.RepoID,
+		SessionID:             item.SessionID,
+		TaskID:                item.TaskID,
+		CheckpointType:        draft.CheckpointType,
+		ReviewIntentJSON:      reviewIntent,
+		TargetDocsJSON:        targetDocs,
+		TargetSectionsJSON:    targetSections,
+		TargetHashesJSON:      targetHashes,
+		Conclusion:            draft.Conclusion,
+		ConfirmedBaselineJSON: confirmedBaseline,
+		IgnoredItemsJSON:      ignoredItems,
+		DeferredItemsJSON:     deferredItems,
+		OpenItemsJSON:         openItems,
+		NextReviewPolicyJSON:  nextPolicy,
+	}, nil
 }
 
 func (s *Service) materializeEvidence(ctx context.Context, rawEventID string, draft processor.EvidenceDraft) (memory.Evidence, error) {
@@ -526,4 +653,44 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func decodeObject(raw string) map[string]any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var object map[string]any
+	if err := json.Unmarshal([]byte(raw), &object); err == nil {
+		return object
+	}
+	var objects []map[string]any
+	if err := json.Unmarshal([]byte(raw), &objects); err == nil && len(objects) > 0 {
+		return objects[0]
+	}
+	return nil
+}
+
+func stringValue(object map[string]any, key string) string {
+	if object == nil {
+		return ""
+	}
+	value, ok := object[key]
+	if !ok || value == nil {
+		return ""
+	}
+	str, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(str)
+}
+
+func hasString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

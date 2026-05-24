@@ -1,0 +1,282 @@
+package automation
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/zaneway/the-one/internal/codeindex"
+	"github.com/zaneway/the-one/internal/config"
+	"github.com/zaneway/the-one/internal/docindex"
+	"github.com/zaneway/the-one/internal/memory"
+)
+
+type codeRefRepository interface {
+	WriteCodeRef(ctx context.Context, ref memory.CodeRef) (memory.CodeRef, error)
+}
+
+type docSnapshotRepository interface {
+	WriteDocSnapshot(ctx context.Context, snapshot docindex.DocumentSnapshot) (docindex.DocumentSnapshot, error)
+}
+
+type embeddingRepository interface {
+	UpsertMemoryEmbedding(ctx context.Context, memoryID, model string, vector []float32) error
+}
+
+type accessLogCleanupRepository interface {
+	CleanupMemoryAccessLogs(ctx context.Context, eventType string, before time.Time) (int, error)
+}
+
+type p4JobHandler struct {
+	cfg  config.Config
+	repo any
+}
+
+func newP4JobHandler(cfg config.Config, repo any) JobHandler {
+	return p4JobHandler{cfg: cfg, repo: repo}
+}
+
+func (h p4JobHandler) CanHandle(jobType string) bool {
+	switch jobType {
+	case JobTypeResolveCodeRef, JobTypeBuildDocSnapshot, JobTypeComputeEmbedding, JobTypeCleanupAccessLog:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h p4JobHandler) RunJob(ctx context.Context, job AsyncJob) (map[string]any, error) {
+	switch job.JobType {
+	case JobTypeResolveCodeRef:
+		return h.runResolveCodeRef(ctx, job)
+	case JobTypeBuildDocSnapshot:
+		return h.runBuildDocSnapshot(ctx, job)
+	case JobTypeComputeEmbedding:
+		return h.runComputeEmbedding(ctx, job)
+	case JobTypeCleanupAccessLog:
+		return h.runCleanupAccessLog(ctx, job)
+	default:
+		return nil, fmt.Errorf("PROVIDER_NOT_FOUND: unsupported P4 job_type %q", job.JobType)
+	}
+}
+
+func (h p4JobHandler) runResolveCodeRef(ctx context.Context, job AsyncJob) (map[string]any, error) {
+	repo, ok := any(h.repo).(codeRefRepository)
+	if !ok {
+		return nil, fmt.Errorf("PROVIDER_NOT_FOUND: code_ref repository unavailable")
+	}
+	var payload resolveCodeRefPayload
+	if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+		return nil, err
+	}
+	refs := payload.CodeRefs
+	if payload.CodeRef != nil {
+		refs = append(refs, *payload.CodeRef)
+	}
+	if len(refs) == 0 && (payload.RepoID != "" || payload.FilePath != "" || payload.Symbol != "") {
+		refs = append(refs, memory.CodeRef{
+			MemoryID:      firstNonEmptyString(payload.MemoryID, targetMemoryID(job)),
+			RepoID:        payload.RepoID,
+			CommitHash:    payload.CommitHash,
+			FilePath:      payload.FilePath,
+			Symbol:        payload.Symbol,
+			LineStart:     payload.LineStart,
+			LineEnd:       payload.LineEnd,
+			ContentHash:   payload.ContentHash,
+			RefSummary:    payload.RefSummary,
+			ResolveStatus: payload.ResolveStatus,
+		})
+	}
+	if len(refs) == 0 {
+		return map[string]any{"status": "skipped", "reason": "no_code_ref_payload"}, nil
+	}
+	written := 0
+	adapter := codeindex.NewLocalBasicAdapter(h.cfg.CodeIndex, "")
+	for _, ref := range refs {
+		if ref.MemoryID == "" {
+			ref.MemoryID = firstNonEmptyString(payload.MemoryID, targetMemoryID(job))
+		}
+		if ref.ResolveStatus == "" {
+			ref.ResolveStatus = memory.CodeRefStatusUnresolved
+		}
+		persisted, err := repo.WriteCodeRef(ctx, ref)
+		if err != nil {
+			return nil, err
+		}
+		resolved, err := adapter.ResolveCodeRefs(ctx, []memory.CodeRef{persisted})
+		if err == nil && len(resolved) == 1 {
+			if _, err := repo.WriteCodeRef(ctx, resolved[0]); err != nil {
+				return nil, err
+			}
+		}
+		written++
+	}
+	return map[string]any{"status": "completed", "code_ref_count": written}, nil
+}
+
+func (h p4JobHandler) runBuildDocSnapshot(ctx context.Context, job AsyncJob) (map[string]any, error) {
+	repo, ok := any(h.repo).(docSnapshotRepository)
+	if !ok {
+		return nil, fmt.Errorf("PROVIDER_NOT_FOUND: doc snapshot repository unavailable")
+	}
+	var snapshot docindex.DocumentSnapshot
+	if err := decodeJobPayload(job.PayloadJSON, &snapshot); err != nil {
+		return nil, err
+	}
+	if snapshot.Path == "" && job.TargetType == TargetTypeDocPath {
+		snapshot.Path = job.TargetID
+	}
+	if snapshot.ContentHash == "" {
+		if !h.cfg.DocIndex.Enabled {
+			return map[string]any{"status": "skipped", "reason": "docindex_disabled"}, nil
+		}
+		built, err := docindex.BuildMarkdownSnapshot(docindex.MarkdownBuildOptions{
+			WorkspaceID:         snapshot.WorkspaceID,
+			ProjectID:           snapshot.ProjectID,
+			RepoID:              snapshot.RepoID,
+			Path:                snapshot.Path,
+			Role:                snapshot.Role,
+			MaxDocSizeKB:        h.cfg.DocIndex.MaxDocSizeKB,
+			MaxSections:         h.cfg.DocIndex.MaxSections,
+			StoreSectionSummary: h.cfg.DocIndex.StoreSectionSummary,
+		})
+		if err != nil {
+			return nil, err
+		}
+		snapshot = built
+	}
+	written, err := repo.WriteDocSnapshot(ctx, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"status":        "completed",
+		"snapshot_id":   written.ID,
+		"doc_path":      written.Path,
+		"section_count": written.SectionCount,
+	}, nil
+}
+
+func (h p4JobHandler) runComputeEmbedding(ctx context.Context, job AsyncJob) (map[string]any, error) {
+	var payload computeEmbeddingPayload
+	if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+		return nil, err
+	}
+	if len(payload.Embedding) == 0 {
+		return map[string]any{"status": "skipped", "reason": "embedding_payload_missing"}, nil
+	}
+	repo, ok := any(h.repo).(embeddingRepository)
+	if !ok {
+		return nil, fmt.Errorf("PROVIDER_NOT_FOUND: embedding repository unavailable")
+	}
+	memoryID := firstNonEmptyString(payload.MemoryID, targetMemoryID(job))
+	model := firstNonEmptyString(payload.Model, h.cfg.Embedding.Model, h.cfg.Embedding.Provider)
+	if memoryID == "" || model == "" {
+		return nil, fmt.Errorf("VALIDATION_FAILED: memory_id and embedding model are required")
+	}
+	vector := make([]float32, len(payload.Embedding))
+	for i, value := range payload.Embedding {
+		vector[i] = float32(value)
+	}
+	if err := repo.UpsertMemoryEmbedding(ctx, memoryID, model, vector); err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": "completed", "memory_id": memoryID, "embedding_model": model, "embedding_dim": len(vector)}, nil
+}
+
+func (h p4JobHandler) runCleanupAccessLog(ctx context.Context, job AsyncJob) (map[string]any, error) {
+	repo, ok := any(h.repo).(accessLogCleanupRepository)
+	if !ok {
+		return nil, fmt.Errorf("PROVIDER_NOT_FOUND: access log cleanup repository unavailable")
+	}
+	var payload cleanupAccessLogPayload
+	if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	if payload.Now != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, payload.Now)
+		if err != nil {
+			return nil, fmt.Errorf("VALIDATION_FAILED: invalid now: %w", err)
+		}
+		now = parsed
+	}
+	retrievedBefore := now.AddDate(0, 0, -firstPositive(payload.RetentionDaysRetrieved, 30))
+	injectedBefore := now.AddDate(0, 0, -firstPositive(payload.RetentionDaysInjected, 180))
+	retrieved, err := repo.CleanupMemoryAccessLogs(ctx, "retrieved", retrievedBefore)
+	if err != nil {
+		return nil, err
+	}
+	injected, err := repo.CleanupMemoryAccessLogs(ctx, "injected", injectedBefore)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"status":            "completed",
+		"retrieved_deleted": retrieved,
+		"injected_deleted":  injected,
+	}, nil
+}
+
+type resolveCodeRefPayload struct {
+	MemoryID      string           `json:"memory_id"`
+	CodeRef       *memory.CodeRef  `json:"code_ref"`
+	CodeRefs      []memory.CodeRef `json:"code_refs"`
+	RepoID        string           `json:"repo_id"`
+	CommitHash    string           `json:"commit_hash"`
+	FilePath      string           `json:"file_path"`
+	Symbol        string           `json:"symbol"`
+	LineStart     int              `json:"line_start"`
+	LineEnd       int              `json:"line_end"`
+	ContentHash   string           `json:"content_hash"`
+	RefSummary    string           `json:"ref_summary"`
+	ResolveStatus string           `json:"resolve_status"`
+}
+
+type computeEmbeddingPayload struct {
+	MemoryID  string    `json:"memory_id"`
+	Model     string    `json:"embedding_model"`
+	Embedding []float64 `json:"embedding"`
+}
+
+type cleanupAccessLogPayload struct {
+	Now                    string `json:"now"`
+	RetentionDaysRetrieved int    `json:"retention_days_retrieved"`
+	RetentionDaysInjected  int    `json:"retention_days_injected"`
+}
+
+func decodeJobPayload(payloadJSON string, target any) error {
+	if payloadJSON == "" {
+		return nil
+	}
+	if err := json.Unmarshal([]byte(payloadJSON), target); err != nil {
+		return fmt.Errorf("VALIDATION_FAILED: invalid job payload: %w", err)
+	}
+	return nil
+}
+
+func targetMemoryID(job AsyncJob) string {
+	if job.TargetType == TargetTypeMemoryItem {
+		return job.TargetID
+	}
+	return ""
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstPositive(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}

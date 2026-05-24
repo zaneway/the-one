@@ -21,6 +21,14 @@ const (
 	JobTypeGenerateMemoryCandidate = "generate_memory_candidate"
 	// JobTypeComputeAdmission 对候选记忆执行准入控制。
 	JobTypeComputeAdmission = "compute_admission"
+	// JobTypeResolveCodeRef 从显式 payload 或 source_ref 生成/刷新 code_ref。
+	JobTypeResolveCodeRef = "resolve_code_ref"
+	// JobTypeBuildDocSnapshot 写入预计算的文档 snapshot 和 section metadata。
+	JobTypeBuildDocSnapshot = "build_doc_snapshot"
+	// JobTypeComputeEmbedding 写入预计算 memory embedding；provider=none 时安全跳过。
+	JobTypeComputeEmbedding = "compute_embedding"
+	// JobTypeCleanupAccessLog 清理低价值 memory_access_log 明细。
+	JobTypeCleanupAccessLog = "cleanup_access_log"
 )
 
 const (
@@ -30,6 +38,14 @@ const (
 	TargetTypeEvidence = "evidence"
 	// TargetTypeMemoryCandidate 表示 job target 是 memory_candidate。
 	TargetTypeMemoryCandidate = "memory_candidate"
+	// TargetTypeMemoryItem 表示 job target 是 memory_item。
+	TargetTypeMemoryItem = "memory_item"
+	// TargetTypeDocPath 表示 job target 是文档路径。
+	TargetTypeDocPath = "doc_path"
+	// TargetTypeWorkspace 表示 job target 是 workspace。
+	TargetTypeWorkspace = "workspace"
+	// TargetTypeCodeRef 表示 job target 是 code_ref。
+	TargetTypeCodeRef = "code_ref"
 )
 
 const (
@@ -255,6 +271,16 @@ type AutomatedMemoryWrite struct {
 	ReviewCheckpoint *memory.ReviewCheckpoint
 }
 
+// AutomatedMemoryCorrection 描述用户纠正命中旧 memory 后的原地覆盖写入。
+// P3 采用覆盖语义：保留旧 memory_id，更新内容和检索字段，并追加新 evidence/review 轨迹。
+type AutomatedMemoryCorrection struct {
+	TargetMemoryID   string
+	Item             memory.MemoryItem
+	EvidenceIDs      []string
+	EvidenceRelation string
+	ReviewFeedback   string
+}
+
 // RelatedMemoryRequest 用于 Admission 前查找同 scope 的相关记忆。
 type RelatedMemoryRequest struct {
 	WorkspaceID string
@@ -264,4 +290,10 @@ type RelatedMemoryRequest struct {
 	MemoryType  string
 	Query       string
 	Limit       int
+}
+
+// CorrectionTargetRequest 用于把 user.correction source_ref 定位到旧 memory。
+type CorrectionTargetRequest struct {
+	TargetMemoryID string
+	TargetEventID  string
 }

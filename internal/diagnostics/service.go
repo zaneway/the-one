@@ -6,13 +6,21 @@ import (
 	"time"
 
 	"github.com/zaneway/the-one/internal/config"
+	"github.com/zaneway/the-one/internal/docindex"
 	"github.com/zaneway/the-one/internal/mcp"
+	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/the-one/internal/retrieval"
 	"github.com/zaneway/the-one/internal/storage/sqlite"
 )
 
 type Store interface {
 	Ping(ctx context.Context) error
 	Status() sqlite.Status
+	ListRetrievalTraces(ctx context.Context, query retrieval.TraceQuery) ([]retrieval.TraceRecord, error)
+	ListMemoryAccessLogs(ctx context.Context, query retrieval.AccessLogQuery) ([]retrieval.AccessLogRecord, error)
+	ListCodeRefs(ctx context.Context, query memory.CodeRefQuery) ([]memory.CodeRef, error)
+	GetDocSnapshot(ctx context.Context, id string, includeSections bool) (docindex.DocumentSnapshot, error)
+	ListDocSnapshots(ctx context.Context, query docindex.SnapshotQuery) ([]docindex.DocumentSnapshot, error)
 }
 
 // Service 聚合 P0 health/status 所需的运行时状态。
@@ -37,6 +45,11 @@ func NewService(version string, cfg config.Config, store Store) *Service {
 func RegisterTools(registry *mcp.Registry, service *Service) {
 	registry.Register("memory.health", service.HealthTool)
 	registry.Register("memory.status", service.StatusTool)
+	registry.Register("memory.retrieval.traces", service.RetrievalTracesTool)
+	registry.Register("memory.retrieval.access_logs", service.RetrievalAccessLogsTool)
+	registry.Register("memory.code_refs", service.CodeRefsTool)
+	registry.Register("memory.docindex.snapshots", service.DocSnapshotsTool)
+	registry.Register("memory.docindex.diff", service.DocDiffTool)
 }
 
 // HealthResponse 是 memory.health 的响应结构。

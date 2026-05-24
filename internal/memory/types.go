@@ -385,6 +385,10 @@ type SearchRequest struct {
 	// IncludeEvidence 是否包含证据摘要
 	// 默认false，返回结果中不包含evidence_refs
 	IncludeEvidence bool `json:"include_evidence"`
+
+	// IncludeCodeRefs 是否包含代码引用
+	// 默认false；P4-C3 后 code_task intent 即使未显式开启也可返回相关 code_ref
+	IncludeCodeRefs bool `json:"include_code_refs"`
 }
 
 // SearchResult 搜索结果项
@@ -420,6 +424,134 @@ type SearchResult struct {
 	// EvidenceRefs 证据引用列表
 	// 可选，当IncludeEvidence=true时返回
 	EvidenceRefs []string `json:"evidence_refs,omitempty"`
+
+	// ScoreBreakdown P4 检索分数拆解
+	// 可选，P4 Retrieval Orchestrator 接入后返回，用于解释最终排序来源
+	ScoreBreakdown *ScoreBreakdown `json:"score_breakdown,omitempty"`
+
+	// WhyIncluded P4 注入原因
+	// 可选，解释该记忆为什么被召回或注入上下文
+	WhyIncluded []string `json:"why_included,omitempty"`
+
+	// CodeRefs P4 代码引用
+	// 可选，只返回文件路径、symbol、hash和解析状态，不返回源码
+	CodeRefs []CodeRef `json:"code_refs,omitempty"`
+}
+
+// ScoreBreakdown P4 检索分数拆解。
+// 设计约束：字段是可解释排序的稳定 API，后续算法可调整权重但不应改变字段语义。
+type ScoreBreakdown struct {
+	// BM25 FTS/BM25 召回分
+	BM25 float64 `json:"bm25"`
+
+	// Semantic 语义向量分；未启用 embedding/vector 时为 0
+	Semantic float64 `json:"semantic"`
+
+	// TaskFit 当前任务匹配度
+	TaskFit float64 `json:"task_fit"`
+
+	// ScopeFit scope 匹配度
+	ScopeFit float64 `json:"scope_fit"`
+
+	// Retention 记忆保留价值分
+	Retention float64 `json:"retention"`
+
+	// RelationSupport 关系支持分
+	RelationSupport float64 `json:"relation_support"`
+
+	// SourceQuality 来源质量分
+	SourceQuality float64 `json:"source_quality"`
+
+	// Recency 近期活跃分
+	Recency float64 `json:"recency"`
+
+	// ConflictPenalty 冲突惩罚
+	ConflictPenalty float64 `json:"conflict_penalty"`
+
+	// StalenessPenalty 过期或代码引用失效惩罚
+	StalenessPenalty float64 `json:"staleness_penalty"`
+
+	// ContextCostPenalty 上下文成本惩罚
+	ContextCostPenalty float64 `json:"context_cost_penalty"`
+
+	// Final 最终排序分
+	Final float64 `json:"final"`
+}
+
+// CodeRef P4 代码引用响应模型。
+// 设计约束：只保存和返回定位、hash、摘要和解析状态，不保存源码正文或调用关系事实。
+type CodeRef struct {
+	// ID code_ref 记录 ID
+	ID string `json:"id,omitempty"`
+
+	// MemoryID 关联的 memory_id
+	MemoryID string `json:"memory_id,omitempty"`
+
+	// RepoID 仓库 ID
+	RepoID string `json:"repo_id"`
+
+	// CommitHash 代码引用对应的 commit hash，可为空表示当前工作区
+	CommitHash string `json:"commit_hash,omitempty"`
+
+	// FilePath 仓库内相对路径
+	FilePath string `json:"file_path,omitempty"`
+
+	// Symbol 代码符号名
+	Symbol string `json:"symbol,omitempty"`
+
+	// LineStart 起始行号
+	LineStart int `json:"line_start,omitempty"`
+
+	// LineEnd 结束行号
+	LineEnd int `json:"line_end,omitempty"`
+
+	// ContentHash 引用内容 hash
+	ContentHash string `json:"content_hash,omitempty"`
+
+	// RefSummary 引用摘要，不包含源码全文
+	RefSummary string `json:"ref_summary,omitempty"`
+
+	// ResolveStatus 解析状态，如 resolved/unresolved/stale/missing/ambiguous
+	ResolveStatus string `json:"resolve_status"`
+}
+
+const (
+	// CodeRefStatusUnresolved 表示 code_ref 尚未被 Code Index 解析。
+	CodeRefStatusUnresolved = "unresolved"
+
+	// CodeRefStatusResolved 表示 code_ref 已成功解析到当前代码位置。
+	CodeRefStatusResolved = "resolved"
+
+	// CodeRefStatusStale 表示 code_ref 的 hash 或位置已经过期，但仍可作为历史引用。
+	CodeRefStatusStale = "stale"
+
+	// CodeRefStatusMissing 表示 code_ref 指向的文件或符号已经不存在。
+	CodeRefStatusMissing = "missing"
+
+	// CodeRefStatusAmbiguous 表示 code_ref 解析到多个候选位置，不能安全自动选择。
+	CodeRefStatusAmbiguous = "ambiguous"
+)
+
+// CodeRefQuery 是 code_ref 诊断和检索查询条件。
+// 查询必须按 memory_id 或 repo_id + file_path 收敛，避免扫描完整代码引用表。
+type CodeRefQuery struct {
+	// MemoryID 关联 memory_id，可单独作为查询条件。
+	MemoryID string `json:"memory_id,omitempty"`
+
+	// RepoID 仓库 ID；按文件查询时必填。
+	RepoID string `json:"repo_id,omitempty"`
+
+	// FilePath 仓库内相对路径；按文件查询时必填。
+	FilePath string `json:"file_path,omitempty"`
+
+	// Symbol 符号名，可选过滤条件。
+	Symbol string `json:"symbol,omitempty"`
+
+	// ResolveStatus 解析状态，可选过滤条件。
+	ResolveStatus string `json:"resolve_status,omitempty"`
+
+	// Limit 返回数量限制。
+	Limit int `json:"limit,omitempty"`
 }
 
 // SearchDiagnostics 搜索诊断信息
@@ -444,6 +576,33 @@ type SearchDiagnostics struct {
 	// Fallback 降级策略
 	// 当某些检索能力不可用时的降级方式
 	Fallback string `json:"fallback"`
+
+	// RetrievalMode P4 检索模式
+	// 可选，P4 Retrieval Orchestrator 接入后返回，如 fts_relation/code_aware
+	RetrievalMode string `json:"retrieval_mode,omitempty"`
+
+	// RetrievalIntent P4 检索意图
+	// 可选，表示本次请求被识别为通用检索、代码任务、架构复查等
+	RetrievalIntent string `json:"retrieval_intent,omitempty"`
+
+	// UsedFTS 是否使用 FTS 召回
+	UsedFTS bool `json:"used_fts"`
+
+	// UsedVector 是否使用向量召回
+	UsedVector bool `json:"used_vector"`
+
+	// UsedRelation 是否使用关系扩展
+	UsedRelation bool `json:"used_relation"`
+
+	// UsedCodeIndex 是否使用 Code Index
+	UsedCodeIndex bool `json:"used_code_index"`
+
+	// UsedDocIndex 是否使用 Doc Index
+	UsedDocIndex bool `json:"used_doc_index"`
+
+	// FallbackReasons P4 降级原因列表
+	// 可选，用于区分 vector_disabled、code_index_unavailable 等多种降级原因
+	FallbackReasons []string `json:"fallback_reason,omitempty"`
 }
 
 // SearchResponse memory.search 响应结构体
@@ -508,7 +667,11 @@ type ContextPack struct {
 
 	// CodeRefs 代码引用列表
 	// 与任务相关的代码引用
-	CodeRefs []any `json:"code_refs"`
+	CodeRefs []CodeRef `json:"code_refs"`
+
+	// ReviewStrategy 设计复查策略
+	// 可选，仅设计复查任务返回，用于说明本次复查应关注全量文档、变化章节或 checkpoint 差异
+	ReviewStrategy *ReviewStrategy `json:"review_strategy,omitempty"`
 }
 
 // ContextMemory 上下文记忆项
@@ -527,6 +690,59 @@ type ContextMemory struct {
 	// 解释为什么这条记忆被注入上下文
 	// 例如：["task_match", "failure_memory", "high_retention_score"]
 	WhyIncluded []string `json:"why_included"`
+
+	// ScoreBreakdown P4 检索分数拆解
+	// 可选，用于解释该记忆为什么被注入上下文
+	ScoreBreakdown *ScoreBreakdown `json:"score_breakdown,omitempty"`
+
+	// Unconfirmed 是否未确认
+	// pending_review/provisional 记忆注入时需要显式标记，避免 Agent 当作稳定事实
+	Unconfirmed bool `json:"unconfirmed,omitempty"`
+
+	// Historical 是否历史归档信息
+	// archived 记忆只有在历史查询场景中才允许以摘要形式注入
+	Historical bool `json:"historical,omitempty"`
+
+	// SessionOnly 是否仅当前 session 有效
+	SessionOnly bool `json:"session_only,omitempty"`
+}
+
+// ReviewStrategy P4 设计复查策略。
+// 用于告诉调用方本次复查应关注哪些文档或章节，避免重复展开已经确认的历史结论。
+type ReviewStrategy struct {
+	// Mode 复查模式，如 full_document/changed_sections/checkpoint_only
+	Mode string `json:"mode"`
+
+	// CheckpointID 命中的 review_checkpoint memory_id
+	CheckpointID string `json:"checkpoint_id,omitempty"`
+
+	// TargetDocs 目标文档路径
+	TargetDocs []string `json:"target_docs,omitempty"`
+
+	// ChangedSections 发生变化的章节
+	ChangedSections []string `json:"changed_sections,omitempty"`
+
+	// IgnoredItemsPolicy 已确认忽略项策略
+	IgnoredItemsPolicy string `json:"ignored_items_policy,omitempty"`
+}
+
+// ContextDiagnostics P4 context 构造诊断。
+// 记录预算分配、降级原因和检索模式，不包含完整 prompt 或源码。
+type ContextDiagnostics struct {
+	// RetrievalIntent P4 检索意图
+	RetrievalIntent string `json:"retrieval_intent,omitempty"`
+
+	// RetrievalMode P4 检索模式
+	RetrievalMode string `json:"retrieval_mode,omitempty"`
+
+	// UsedDocIndex 是否使用 Doc Index 辅助构造复查策略
+	UsedDocIndex bool `json:"used_doc_index,omitempty"`
+
+	// BudgetAllocation 预算分配
+	BudgetAllocation map[string]int `json:"budget_allocation,omitempty"`
+
+	// FallbackReasons 降级原因列表
+	FallbackReasons []string `json:"fallback_reason,omitempty"`
 }
 
 // ContextResponse memory.context 响应结构体
@@ -544,6 +760,10 @@ type ContextResponse struct {
 
 	// LatencyMS 构造延迟（毫秒）
 	LatencyMS int64 `json:"latency_ms"`
+
+	// Diagnostics P4 context 构造诊断
+	// 可选，P4 Retrieval Orchestrator 接入后返回
+	Diagnostics *ContextDiagnostics `json:"diagnostics,omitempty"`
 }
 
 // ReviewRequest memory.review 请求结构体

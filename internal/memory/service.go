@@ -60,13 +60,43 @@ type Repository interface {
 // Service 记忆服务结构体
 // 编排 P1 手动记忆写入、检索、上下文构建和 review 流转
 type Service struct {
-	cfg  config.Config // 配置信息
-	repo Repository    // 仓库接口，负责持久化
+	cfg          config.Config         // 配置信息
+	repo         Repository            // 仓库接口，负责持久化
+	orchestrator RetrievalOrchestrator // P4 检索编排器；为空时保持 P1 FTS 路径
 }
 
-// NewService 创建 P1 Memory 服务
-func NewService(cfg config.Config, repo Repository) *Service {
-	return &Service{cfg: cfg, repo: repo}
+// RetrievalOrchestrator 定义 memory.Service 可选接入的 P4 检索编排接口。
+// 设计约束：该接口使用 memory 包现有 DTO，避免 memory 反向依赖 internal/retrieval 造成包循环；
+// P4-C1 可以在 retrieval 包中实现 adapter，把 retrieval 内部 DTO 转换为 memory 对外响应。
+type RetrievalOrchestrator interface {
+	// Search 执行 P4 检索编排，返回向后兼容的 memory.search 响应。
+	Search(ctx context.Context, req SearchRequest) (SearchResponse, error)
+
+	// Context 执行 P4 上下文构造，返回向后兼容的 memory.context 响应。
+	Context(ctx context.Context, req ContextRequest) (ContextResponse, error)
+}
+
+// ServiceOption 配置 Memory Service 的可选能力。
+type ServiceOption func(*Service)
+
+// WithRetrievalOrchestrator 注入 P4 检索编排器。
+// 为空时不改变 P1/P2/P3 行为；非空时 Search/Context 委托给编排器，Remember/Review 仍由 memory.Service 处理。
+func WithRetrievalOrchestrator(orchestrator RetrievalOrchestrator) ServiceOption {
+	return func(s *Service) {
+		s.orchestrator = orchestrator
+	}
+}
+
+// NewService 创建 Memory 服务。
+// 默认只启用 P1 FTS + metadata 检索路径；通过 WithRetrievalOrchestrator 可接入 P4 检索编排器。
+func NewService(cfg config.Config, repo Repository, opts ...ServiceOption) *Service {
+	service := &Service{cfg: cfg, repo: repo}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(service)
+		}
+	}
+	return service
 }
 
 // Remember 实现 P1 显式写入闭环。
@@ -244,6 +274,9 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 // 处理流程：校验查询文本和 scope -> 生成检索追踪 ID -> 执行 FTS5 全文检索 + metadata 过滤 -> 返回排序结果。
 // 诊断信息：返回 FTSHits、FilteredCount、LatencyMS 和 RetrievalTraceID，用于评估检索质量。
 func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse, error) {
+	if s.orchestrator != nil {
+		return s.orchestrator.Search(ctx, req)
+	}
 	if strings.TrimSpace(req.Query) == "" {
 		return SearchResponse{}, fmt.Errorf("VALIDATION_FAILED: query is required")
 	}
@@ -264,6 +297,9 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse
 	}
 	diag.RetrievalTraceID = traceID
 	diag.LatencyMS = time.Since(startedAt).Milliseconds()
+	diag.RetrievalIntent = "general_search"
+	diag.RetrievalMode = "fts_metadata"
+	diag.UsedFTS = true
 	return SearchResponse{Results: results, Diagnostics: diag}, nil
 }
 
@@ -280,6 +316,9 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse
 //
 // 设计说明：P1 使用字符数近似 token 数，后续可替换为 tokenizer；compress 使用 rune 计算，正确处理中文。
 func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextResponse, error) {
+	if s.orchestrator != nil {
+		return s.orchestrator.Context(ctx, req)
+	}
 	startedAt := time.Now()
 	// Step 1: 参数校验——task 为必填，token_budget 使用配置默认值
 	if strings.TrimSpace(req.Task) == "" {
@@ -389,7 +428,7 @@ func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextRespo
 			Summary:     summary,
 			Memories:    memories,
 			Constraints: constraints,
-			CodeRefs:    []any{},
+			CodeRefs:    []CodeRef{},
 		},
 		UsedMemoryIDs:    usedIDs,
 		RetrievalTraceID: searchResp.Diagnostics.RetrievalTraceID,

@@ -296,6 +296,12 @@ func (s *Store) Delete(ctx context.Context, memoryID, reviewer, feedback string)
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, err
 	}
+	// P4 删除一致性：清理依赖该 memory 的关系、代码引用和 embedding。
+	// access log 默认作为最小统计保留，不包含 memory content；敏感删除的脱敏入口由 P4 诊断/清理能力单独承载。
+	if err := deleteP4MemoryArtifacts(ctx, tx, memoryID); err != nil {
+		_ = tx.Rollback()
+		return memory.MemoryItem{}, err
+	}
 	// 记录审核历史
 	if err := insertReviewRecord(ctx, tx, memoryID, "manual_review", "deleted", reviewer, feedback, item.Content, ""); err != nil {
 		_ = tx.Rollback()
@@ -680,7 +686,30 @@ func upsertFTS(ctx context.Context, tx *sql.Tx, memoryID, searchText string) err
 
 func deleteFTS(ctx context.Context, tx *sql.Tx, memoryID string) error {
 	_, err := tx.ExecContext(ctx, "delete from memory_item_fts where memory_id = ?", memoryID)
+	if err != nil && (strings.Contains(err.Error(), "no such table: memory_item_fts") || strings.Contains(err.Error(), "no such module: fts5")) {
+		return nil
+	}
 	return storageErr(err)
+}
+
+func deleteP4MemoryArtifacts(ctx context.Context, tx *sql.Tx, memoryID string) error {
+	statements := []string{
+		"delete from memory_relation where source_id = ? or target_id = ?",
+		"delete from code_ref where memory_id = ?",
+		"delete from memory_embedding where memory_id = ?",
+	}
+	for _, statement := range statements {
+		var err error
+		if strings.Contains(statement, " or target_id") {
+			_, err = tx.ExecContext(ctx, statement, memoryID, memoryID)
+		} else {
+			_, err = tx.ExecContext(ctx, statement, memoryID)
+		}
+		if err != nil {
+			return storageErr(err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) loadEvidenceRefs(ctx context.Context, memoryID string) []string {

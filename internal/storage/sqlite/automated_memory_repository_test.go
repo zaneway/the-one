@@ -189,6 +189,50 @@ func TestAutomatedMemoryRepositoryReviewCheckpoint(t *testing.T) {
 	}
 }
 
+func TestAutomatedMemoryRepositoryResolvesCorrectionTargetByEvent(t *testing.T) {
+	ctx := context.Background()
+	store := newCaptureTestStore(t)
+	defer store.Close()
+
+	evidence := memory.Evidence{
+		ID:                   "ev_target_event",
+		RawEventID:           "evt_target_event",
+		SourceType:           "agent_summary",
+		InterpretedStatement: "旧事实来自目标事件。",
+		Confidence:           0.8,
+	}
+	if err := store.WriteEvidence(ctx, evidence); err != nil {
+		t.Fatalf("WriteEvidence() error = %v", err)
+	}
+	if _, err := store.WriteAutomatedMemory(ctx, automation.AutomatedMemoryWrite{
+		Item: memory.MemoryItem{
+			ID:            "mem_target_event",
+			Scope:         memory.ScopeProjectLocal,
+			WorkspaceID:   "ws",
+			ProjectID:     "project_a",
+			MemoryType:    memory.TypeProjectFact,
+			Content:       "旧事实。",
+			State:         memory.StateArchived,
+			Confidence:    0.8,
+			Importance:    0.5,
+			EncodingDepth: 2,
+			DecayRate:     0.4,
+			Tier:          memory.TierArchived,
+			Version:       1,
+		},
+		EvidenceIDs: []string{evidence.ID},
+	}); err != nil {
+		t.Fatalf("WriteAutomatedMemory() error = %v", err)
+	}
+	target, found, err := store.ResolveCorrectionTargetMemory(ctx, automation.CorrectionTargetRequest{TargetEventID: evidence.RawEventID})
+	if err != nil {
+		t.Fatalf("ResolveCorrectionTargetMemory() error = %v", err)
+	}
+	if !found || target.ID != "mem_target_event" {
+		t.Fatalf("target = %+v found=%v, want mem_target_event", target, found)
+	}
+}
+
 func TestAutomatedMemoryRepositoryRelationAndRelatedMemory(t *testing.T) {
 	ctx := context.Background()
 	store := newCaptureTestStore(t)

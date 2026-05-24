@@ -37,6 +37,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Processor.Provider != "rule_based" || !cfg.Processor.EnableAutoProcessing || cfg.Processor.MaxRelatedEvents != 20 || cfg.Processor.MaxCandidatesPerEvent != 3 {
 		t.Fatalf("processor defaults = %+v, want rule_based enabled with limits", cfg.Processor)
 	}
+	if cfg.CodeIndex.Provider != "local_basic" || cfg.CodeIndex.MaxFileSizeKB != 512 || cfg.CodeIndex.MaxResolveRefs != 30 {
+		t.Fatalf("codeindex defaults = %+v, want local_basic with bounded local resolver", cfg.CodeIndex)
+	}
+	if !cfg.DocIndex.Enabled || cfg.DocIndex.MaxDocSizeKB != 512 || cfg.DocIndex.MaxSections != 200 || cfg.DocIndex.MaxSnapshotsPerDoc != 10 {
+		t.Fatalf("docindex defaults = %+v, want enabled bounded markdown snapshot", cfg.DocIndex)
+	}
 }
 
 func TestLoadEnvAndOverrides(t *testing.T) {
@@ -76,5 +82,21 @@ func TestValidateRejectsInvalidProcessorConfig(t *testing.T) {
 	cfg.Processor.Provider = ""
 	if err := validate(cfg); err == nil {
 		t.Fatal("validate() error = nil, want invalid processor config")
+	}
+}
+
+func TestValidateRejectsInvalidCodeIndexConfig(t *testing.T) {
+	cfg := Default()
+	cfg.CodeIndex.Provider = "remote_lsp"
+	if err := validate(cfg); err == nil {
+		t.Fatal("validate() error = nil, want invalid codeindex provider")
+	}
+}
+
+func TestValidateRejectsInvalidDocIndexConfig(t *testing.T) {
+	cfg := Default()
+	cfg.DocIndex.MaxSections = 0
+	if err := validate(cfg); err == nil {
+		t.Fatal("validate() error = nil, want invalid docindex config")
 	}
 }

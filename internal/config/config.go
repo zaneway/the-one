@@ -42,6 +42,14 @@ type Config struct {
 	// embedding provider配置，默认none，保证无外部依赖也能启动
 	Embedding EmbeddingConfig `yaml:"embedding" json:"embedding"`
 
+	// CodeIndex 代码索引配置
+	// P4 默认 local_basic，只做本地文件/符号轻量解析，不依赖外部服务
+	CodeIndex CodeIndexConfig `yaml:"codeindex" json:"codeindex"`
+
+	// DocIndex 文档索引配置
+	// P4 默认启用 Markdown snapshot，只保存路径、hash、标题和摘要，不保存完整正文
+	DocIndex DocIndexConfig `yaml:"docindex" json:"docindex"`
+
 	// Retention 保留配置
 	// retention job 默认策略，P0不启动后台retention job
 	Retention RetentionConfig `yaml:"retention" json:"retention"`
@@ -195,6 +203,42 @@ type EmbeddingConfig struct {
 	Model string `yaml:"model" json:"model"`
 }
 
+// CodeIndexConfig 代码索引配置结构体。
+// local_basic 只做 repo-relative 文件定位、轻量符号扫描和 code_ref 状态刷新，不构建全量调用图。
+type CodeIndexConfig struct {
+	// Provider 代码索引提供者，默认 local_basic。
+	Provider string `yaml:"provider" json:"provider"`
+
+	// EnableCTags 是否允许调用 ctags。
+	// 当前 local_basic 不调用外部 ctags，该字段为后续增强预留。
+	EnableCTags bool `yaml:"enable_ctags" json:"enable_ctags"`
+
+	// MaxFileSizeKB 在线解析允许读取的单文件上限，默认 512KB。
+	MaxFileSizeKB int `yaml:"max_file_size_kb" json:"max_file_size_kb"`
+
+	// MaxResolveRefs 单次在线解析 code_ref 的最大数量，默认 30。
+	MaxResolveRefs int `yaml:"max_resolve_refs" json:"max_resolve_refs"`
+}
+
+// DocIndexConfig 文档索引配置结构体。
+// 设计约束：Doc Index 只构建 Markdown 文档的结构化快照，不保存完整文档正文。
+type DocIndexConfig struct {
+	// Enabled 是否启用 Doc Index 在线快照能力。
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// MaxDocSizeKB 在线解析允许读取的单文档上限，超过后只记录文件级 hash。
+	MaxDocSizeKB int `yaml:"max_doc_size_kb" json:"max_doc_size_kb"`
+
+	// MaxSections 单个文档最多记录的章节数量。
+	MaxSections int `yaml:"max_sections" json:"max_sections"`
+
+	// MaxSnapshotsPerDoc 单文档保留快照数量上限，供后续清理策略使用。
+	MaxSnapshotsPerDoc int `yaml:"max_snapshots_per_doc" json:"max_snapshots_per_doc"`
+
+	// StoreSectionSummary 是否保存章节摘要；摘要只来自标题路径，不包含正文原文。
+	StoreSectionSummary bool `yaml:"store_section_summary" json:"store_section_summary"`
+}
+
 // RetentionConfig 保留配置结构体
 // 描述 retention job 默认策略，P0 不启动后台 retention job
 type RetentionConfig struct {
@@ -327,6 +371,19 @@ func Default() Config {
 			Provider: "none",
 			Model:    "",
 		},
+		CodeIndex: CodeIndexConfig{
+			Provider:       "local_basic",
+			EnableCTags:    false,
+			MaxFileSizeKB:  512,
+			MaxResolveRefs: 30,
+		},
+		DocIndex: DocIndexConfig{
+			Enabled:             true,
+			MaxDocSizeKB:        512,
+			MaxSections:         200,
+			MaxSnapshotsPerDoc:  10,
+			StoreSectionSummary: true,
+		},
 		Retention: RetentionConfig{
 			JobEnabled:       false,
 			TemporaryTTLDays: 5,
@@ -419,6 +476,15 @@ func validate(cfg Config) error {
 	}
 	if strings.TrimSpace(cfg.Processor.Provider) == "" || cfg.Processor.MaxRelatedEvents <= 0 || cfg.Processor.MaxCandidatesPerEvent <= 0 {
 		return errors.New("CONFIG_INVALID: processor config values must be positive and provider is required")
+	}
+	if strings.TrimSpace(cfg.CodeIndex.Provider) == "" || cfg.CodeIndex.MaxFileSizeKB <= 0 || cfg.CodeIndex.MaxResolveRefs <= 0 {
+		return errors.New("CONFIG_INVALID: codeindex config values must be positive and provider is required")
+	}
+	if cfg.CodeIndex.Provider != "local_basic" {
+		return fmt.Errorf("CONFIG_INVALID: unsupported codeindex provider %q", cfg.CodeIndex.Provider)
+	}
+	if cfg.DocIndex.MaxDocSizeKB <= 0 || cfg.DocIndex.MaxSections <= 0 || cfg.DocIndex.MaxSnapshotsPerDoc <= 0 {
+		return errors.New("CONFIG_INVALID: docindex limits must be positive")
 	}
 	if cfg.Automation.PollIntervalMS <= 0 || cfg.Automation.BatchSize <= 0 || cfg.Automation.MaxAttempts <= 0 ||
 		cfg.Automation.RetryBaseDelayMS <= 0 || cfg.Automation.RunningTimeoutMS <= 0 {
