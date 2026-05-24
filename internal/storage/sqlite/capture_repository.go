@@ -26,6 +26,8 @@ func (s *Store) UpsertSession(ctx context.Context, session capture.AgentSession)
 		session.CreatedAt = now
 	}
 	session.UpdatedAt = now
+	// INSERT OR UPDATE 语义：冲突时更新非空字段，保留已有值
+	// coalesce(nullif(excluded.x, ''), existing.x): 新值为空时保留旧值，避免覆盖
 	_, err := s.db.ExecContext(ctx, `insert into agent_session(
 		id, agent_type, workspace_id, project_id, repo_id, capture_level, capture_capabilities_json,
 		capture_quality_json, started_at, ended_at, goal_summary, status, created_at, updated_at
@@ -151,12 +153,15 @@ func (s *Store) FindDuplicateEvent(ctx context.Context, dedup capture.EventDedup
 	if dedup.ContentHash == "" || dedup.EventType == "" {
 		return capture.RawEvent{}, false, fmt.Errorf("VALIDATION_FAILED: content_hash and event_type are required")
 	}
+	// 幂等键核心：content_hash + event_type
 	query := baseEventSelect() + ` where content_hash = ? and event_type = ?`
 	args := []any{dedup.ContentHash, dedup.EventType}
+	// 隔离策略：有 session_id 时按 session 隔离（会话内去重）
 	if dedup.SessionID != "" {
 		query += " and session_id = ?"
 		args = append(args, dedup.SessionID)
 	} else {
+		// 无 session_id 时按 source_channel + workspace/project/repo 隔离（跨会话去重）
 		query += ` and coalesce(source_channel, '') = ?
 			and coalesce(workspace_id, '') = ?
 			and coalesce(project_id, '') = ?
@@ -361,6 +366,8 @@ func (s *Store) ListOrphanRawEvents(ctx context.Context, req automation.OrphanRa
 	if req.WorkspaceID == "" {
 		return nil, fmt.Errorf("VALIDATION_FAILED: workspace_id is required")
 	}
+	// 孤儿事件定义：没有 extract_evidence job 且没有 evidence 的 raw_event
+	// 双重 NOT EXISTS 确保：既没有排队的处理任务，也没有已完成的证据
 	query := baseEventSelect() + `
 		where workspace_id = ?
 		  and not exists (

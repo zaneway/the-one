@@ -13,7 +13,10 @@ type SearchTextInput struct {
 	Entities          []string
 }
 
-// BuildSearchText 按 P1 详细设计拼接 FTS 文档。这里不解析 JSON，调用方传入已归一化的数组。
+// BuildSearchText 按 P1 详细设计拼接 FTS 文档。
+// 拼接规则：title + content + normalized_content + keywords + tags + retrieval_cues + entities，用换行符分隔。
+// 设计说明：search_text 是 FTS5 索引的文档内容，不暴露给客户端，只用于全文检索。
+// 调用方传入已归一化的数组，避免重复 JSON 解析。
 func BuildSearchText(input SearchTextInput) string {
 	parts := []string{
 		input.Title,

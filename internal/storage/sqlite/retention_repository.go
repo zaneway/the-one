@@ -10,6 +10,10 @@ import (
 	"github.com/zaneway/the-one/internal/retention"
 )
 
+// ListExpiredTemporaryMemories 查询已过期的临时记忆。
+// 过期条件：tier=temporary 且（valid_until 已过期 或 创建时间超过 TTL 天数）。
+// 排除条件：archived/deleted 状态、pinned 记忆、user_confirmed 记忆不会被自动清理。
+// 设计说明：pinned 和 user_confirmed 的记忆由用户显式管理，不应被自动归档。
 func (s *Store) ListExpiredTemporaryMemories(ctx context.Context, req retention.ListRequest) ([]retention.MemoryRecord, error) {
 	now := req.Now
 	if now.IsZero() {
@@ -19,6 +23,8 @@ func (s *Store) ListExpiredTemporaryMemories(ctx context.Context, req retention.
 	if ttlDays <= 0 {
 		ttlDays = 5
 	}
+	// 过期条件：tier=temporary 且（valid_until 已过期 或 创建时间超过 TTL 天数）
+	// 排除：archived/deleted、pinned、user_confirmed 的记忆不会被自动清理
 	query := baseRetentionMemorySelect() + `
 		where tier = ?
 		  and state not in (?, ?)
@@ -50,6 +56,10 @@ func (s *Store) ListExpiredTemporaryMemories(ctx context.Context, req retention.
 	return scanRetentionMemoryRows(rows)
 }
 
+// ArchiveTemporaryMemory 将过期的临时记忆归档。
+// 操作：state -> archived, tier -> archived，并删除 FTS 索引。
+// 事务保证：状态更新和 FTS 清理在同一事务中完成。
+// 安全检查：已删除或已归档的记忆不会被重复处理。
 func (s *Store) ArchiveTemporaryMemory(ctx context.Context, memoryID string, now time.Time) error {
 	if memoryID == "" {
 		return fmt.Errorf("VALIDATION_FAILED: memory id is required")
@@ -61,6 +71,8 @@ func (s *Store) ArchiveTemporaryMemory(ctx context.Context, memoryID string, now
 	if err != nil {
 		return storageErr(err)
 	}
+	// 原子操作：state -> archived, tier -> archived
+	// WHERE state not in (deleted, archived)：防止重复处理已终态的记忆
 	result, err := tx.ExecContext(ctx, `update memory_item
 		set state = ?, tier = ?, updated_at = ?
 		where id = ? and state not in (?, ?)`,
@@ -80,6 +92,7 @@ func (s *Store) ArchiveTemporaryMemory(ctx context.Context, memoryID string, now
 		_ = tx.Rollback()
 		return fmt.Errorf("MEMORY_NOT_FOUND: %s", memoryID)
 	}
+	// 清理 FTS 索引：归档后的记忆不应出现在全文检索结果中
 	if err := deleteFTS(ctx, tx, memoryID); err != nil {
 		_ = tx.Rollback()
 		return err
@@ -87,6 +100,9 @@ func (s *Store) ArchiveTemporaryMemory(ctx context.Context, memoryID string, now
 	return storageErr(tx.Commit())
 }
 
+// ListMemoriesForScoreRecalc 查询需要重算保留分数的记忆。
+// 选择范围：provisional/pending_review/stable 状态，按 updated_at 升序（最久未更新的优先）。
+// 设计说明：分数重算是批量异步任务，每次处理一批，避免长时间占用数据库连接。
 func (s *Store) ListMemoriesForScoreRecalc(ctx context.Context, req retention.ListRequest) ([]retention.MemoryRecord, error) {
 	query := baseRetentionMemorySelect() + `
 		where state in (?, ?, ?)`

@@ -69,18 +69,20 @@ func NewService(cfg config.Config, repo Repository) *Service {
 	return &Service{cfg: cfg, repo: repo}
 }
 
-// Remember 实现 P1 显式写入闭环
-// 处理流程：
-// 1. 校验并归一化请求参数
-// 2. 检查内容边界（最小化检查）
-// 3. 确定默认状态和层级
-// 4. 检测重复记忆
-// 5. 生成ID、构建search_text
-// 6. 同事务写入memory_item、evidence、memory_evidence_link和FTS
+// Remember 实现 P1 显式写入闭环。
+// 完整流程：归一化 -> 内容边界检查 -> 确定默认状态/层级 -> 幂等检测 -> 构建 memory/evidence/checkpoint -> 事务写入。
+// 状态决策规则：
+//   - user_declared 的 preference/constraint/decision -> stable + durable（用户声明直接信任）
+//   - review_checkpoint -> stable + durable（设计复查结论直接写入）
+//   - 其他 -> pending_review + short_term（需要用户确认）
+//
+// 幂等检测：按 scope + type + content + 所有隔离 ID 匹配，命中则返回已有记忆。
 func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberResponse, error) {
+	// Step 1: 归一化请求参数，填充默认值（user_id、workspace_id、source_type、confidence、importance）
 	if err := NormalizeRemember(s.cfg.Memory, &req); err != nil {
 		return RememberResponse{}, err
 	}
+	// Step 2: 将 review_checkpoint 序列化为 JSON，用于后续内容边界检查
 	checkpointRaw := ""
 	if req.ReviewCheckpoint != nil {
 		raw, err := toJSON(req.ReviewCheckpoint)
@@ -89,6 +91,7 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 		}
 		checkpointRaw = raw
 	}
+	// Step 3: 内容最小化硬边界检查，超界直接拒绝（content <= 4000字、evidence <= 1200字、keywords <= 30个等）
 	if err := ingest.CheckMinimizedContent(s.cfg.Memory, ingest.MinimizationInput{
 		Content:               req.Content,
 		EvidenceStatement:     req.Evidence.InterpretedStatement,
@@ -98,9 +101,11 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 	}); err != nil {
 		return RememberResponse{}, err
 	}
+	// review_checkpoint 类型必须携带 checkpoint 结构化数据
 	if req.MemoryType == TypeReviewCheckpoint && req.ReviewCheckpoint == nil {
 		return RememberResponse{}, fmt.Errorf("VALIDATION_FAILED: review_checkpoint is required")
 	}
+	// Step 4: 根据记忆类型和来源类型确定默认状态和层级
 	state, tier := defaultStateAndTier(req)
 	probe := MemoryItem{
 		Scope:       req.Scope,
@@ -113,11 +118,14 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 		MemoryType:  req.MemoryType,
 		Content:     req.Content,
 	}
+	// Step 5: 幂等检测——按 scope + type + content + 所有隔离 ID 匹配已有记忆
 	if existing, ok, err := s.repo.FindDuplicate(ctx, probe); err != nil {
 		return RememberResponse{}, err
 	} else if ok {
+		// 命中重复记忆，直接返回已有记忆的 ID 和状态，不重复写入
 		return RememberResponse{MemoryID: existing.ID, State: existing.State, Tier: existing.Tier, Deduped: true}, nil
 	}
+	// Step 6: 生成 memory_id 和 evidence_id（随机 ID，避免本地并发写入时时间序列冲突）
 	memoryID, err := idgen.New("mem")
 	if err != nil {
 		return RememberResponse{}, err
@@ -127,6 +135,7 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 		return RememberResponse{}, err
 	}
 	now := time.Now().UTC()
+	// Step 7: 将数组字段序列化为 JSON 字符串，用于 SQLite 存储
 	keywordsJSON, err := toJSON(req.Keywords)
 	if err != nil {
 		return RememberResponse{}, err
@@ -155,6 +164,7 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 	if err != nil {
 		return RememberResponse{}, err
 	}
+	// Step 8: 构建 FTS 索引文档（title + content + keywords + tags + retrieval_cues + entities 拼接）
 	searchText := ingest.BuildSearchText(ingest.SearchTextInput{
 		Title:             req.Title,
 		Content:           req.Content,
@@ -164,6 +174,7 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 		RetrievalCues:     req.RetrievalCues,
 		Entities:          req.Entities,
 	})
+	// Step 9: 构建 memory_item 领域对象，设置所有默认值
 	item := MemoryItem{
 		ID:                memoryID,
 		Scope:             req.Scope,
@@ -187,16 +198,17 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 		State:             state,
 		Confidence:        req.Confidence,
 		Importance:        req.Importance,
-		EncodingDepth:     2,
-		DecayRate:         defaultDecayRate(req.MemoryType),
+		EncodingDepth:     2,                                // 语义摘要级别（0=原始指针, 1=表层摘要, 2=语义摘要, 3=实体关系, 4=策略抽象）
+		DecayRate:         defaultDecayRate(req.MemoryType), // 按记忆类型设置衰减率（decision=0.3慢衰减, temporary_state=1.2快衰减）
 		RetentionScore:    0,
 		Tier:              tier,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 		Pinned:            req.Pinned,
-		UserConfirmed:     req.SourceType == "user_declared" && state == StateStable,
+		UserConfirmed:     req.SourceType == "user_declared" && state == StateStable, // 用户声明且直接 stable 的记忆标记为已确认
 		Version:           1,
 	}
+	// Step 10: 构建 evidence 对象，interpreted_statement 为空时降级为 content
 	evidence := Evidence{
 		ID:                   evidenceID,
 		SourceType:           req.SourceType,
@@ -207,6 +219,7 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 		Confidence:           req.Confidence,
 		CreatedAt:            now,
 	}
+	// Step 11: 构建可选的 review_checkpoint（设计复查检查点）
 	var checkpoint *ReviewCheckpoint
 	if req.ReviewCheckpoint != nil {
 		checkpoint, err = buildCheckpoint(memoryID, item, *req.ReviewCheckpoint, now)
@@ -214,6 +227,7 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 			return RememberResponse{}, err
 		}
 	}
+	// Step 12: 事务写入 memory_item + evidence + memory_evidence_link + FTS 索引
 	if err := s.repo.Remember(ctx, item, evidence, checkpoint); err != nil {
 		return RememberResponse{}, err
 	}
@@ -226,6 +240,9 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 // 2. 生成检索追踪ID
 // 3. 执行FTS5全文检索 + metadata过滤
 // 4. 返回排序后的结果和诊断信息
+// Search 执行 P1 FTS + metadata 检索。
+// 处理流程：校验查询文本和 scope -> 生成检索追踪 ID -> 执行 FTS5 全文检索 + metadata 过滤 -> 返回排序结果。
+// 诊断信息：返回 FTSHits、FilteredCount、LatencyMS 和 RetrievalTraceID，用于评估检索质量。
 func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse, error) {
 	if strings.TrimSpace(req.Query) == "" {
 		return SearchResponse{}, fmt.Errorf("VALIDATION_FAILED: query is required")
@@ -250,27 +267,33 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse
 	return SearchResponse{Results: results, Diagnostics: diag}, nil
 }
 
-// Context 构造 P1 压缩上下文包
-// 处理流程：
-// 1. 校验任务描述和token预算
-// 2. 确定检索范围和记忆类型
-// 3. 执行检索（设计复查任务优先检索review_checkpoint）
-// 4. 补充用户偏好记忆（如果未包含）
-// 5. 按token budget压缩和裁剪记忆
-// 6. 构造上下文包返回
-// 设计说明：P1 使用字符预算近似 token budget，后续可替换为 tokenizer
+// Context 构造 P1 压缩上下文包，为 Agent 提供可注入 prompt 的记忆集合。
+// 完整流程：
+//  1. 校验任务描述和 token 预算（默认 1800 字符）
+//  2. 确定检索范围：project_local > user_global > repo_local > session
+//  3. 确定记忆类型：设计复查任务优先检索 review_checkpoint
+//  4. 执行主检索（FTS + metadata）
+//  5. 补充用户偏好记忆（如主结果中未包含 preference 类型）
+//  6. 补充 review_checkpoint（如主结果中未包含，且为设计复查任务）
+//  7. 按 token budget 逐条压缩和裁剪记忆
+//  8. 收集 constraints 列表用于 Agent prompt 约束注入
+//
+// 设计说明：P1 使用字符数近似 token 数，后续可替换为 tokenizer；compress 使用 rune 计算，正确处理中文。
 func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextResponse, error) {
 	startedAt := time.Now()
+	// Step 1: 参数校验——task 为必填，token_budget 使用配置默认值
 	if strings.TrimSpace(req.Task) == "" {
 		return ContextResponse{}, fmt.Errorf("VALIDATION_FAILED: task is required")
 	}
 	if req.TokenBudget <= 0 {
 		req.TokenBudget = s.cfg.Retrieval.DefaultTokenBudget
 	}
+	// Step 2: 确定检索记忆类型——常规任务检索 7 种核心类型，设计复查任务额外优先检索 review_checkpoint
 	searchTypes := []string{TypeConstraint, TypeDecision, TypeFailure, TypePreference, TypeProjectFact, TypeProcedure, TypeTemporaryState}
 	if isDesignReviewTask(req.Task) {
 		searchTypes = append([]string{TypeReviewCheckpoint}, searchTypes...)
 	}
+	// Step 3: 执行主检索——FTS5 全文检索 + scope/type 元数据过滤
 	searchResp, err := s.Search(ctx, SearchRequest{
 		Query:           req.Task,
 		WorkspaceID:     req.WorkspaceID,
@@ -286,6 +309,7 @@ func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextRespo
 	if err != nil {
 		return ContextResponse{}, err
 	}
+	// Step 4: 补充用户偏好——主结果中未包含 preference 时，单独检索 user_global 范围的偏好记忆（限 3 条）
 	if !containsMemoryType(searchResp.Results, TypePreference) {
 		preferenceResp, prefErr := s.Search(ctx, SearchRequest{
 			Query:           "用户偏好 架构 风险 工程落地 preference",
@@ -303,6 +327,7 @@ func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextRespo
 			searchResp.Results = append(searchResp.Results, preferenceResp.Results...)
 		}
 	}
+	// Step 5: 补充复查检查点——设计复查任务且主结果中未包含 review_checkpoint 时，单独检索 project_local/repo_local 范围
 	if isDesignReviewTask(req.Task) && !containsMemoryType(searchResp.Results, TypeReviewCheckpoint) {
 		checkpointResp, checkpointErr := s.Search(ctx, SearchRequest{
 			Query:           "设计复查 架构评审 文档完整性 review_checkpoint",
@@ -320,20 +345,24 @@ func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextRespo
 			searchResp.Results = append(checkpointResp.Results, searchResp.Results...)
 		}
 	}
+	// Step 6: 按 token budget 逐条压缩记忆——从搜索结果中依次裁剪，直到预算耗尽
 	memories := make([]ContextMemory, 0, len(searchResp.Results))
 	usedIDs := make([]string, 0, len(searchResp.Results))
 	constraints := make([]string, 0)
 	remaining := req.TokenBudget
 	for _, result := range searchResp.Results {
+		// review_checkpoint 需要展开结构化字段（结论、基线、待处理项等）再压缩
 		content := result.Content
 		if result.MemoryType == TypeReviewCheckpoint {
 			content = s.checkpointContext(ctx, result)
 		}
+		// compress 使用 rune 计算，正确处理中文截断；返回空表示预算已耗尽
 		compressed := compress(content, remaining)
 		if compressed == "" {
 			break
 		}
 		remaining -= len([]rune(compressed))
+		// whyIncluded 记录这条记忆被选中的原因：scope + 任务相关性 + 状态
 		why := []string{result.Scope, "task_fit", result.State}
 		if result.MemoryType == TypeReviewCheckpoint {
 			why = append(why, "review_checkpoint")
@@ -345,10 +374,12 @@ func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextRespo
 			WhyIncluded: why,
 		})
 		usedIDs = append(usedIDs, result.MemoryID)
+		// 收集 constraints 列表——约束类记忆单独提取，用于 Agent prompt 的硬约束注入
 		if result.MemoryType == TypeConstraint {
 			constraints = append(constraints, compressed)
 		}
 	}
+	// Step 7: 构造 summary——取第一条记忆的压缩内容作为上下文概要
 	summary := ""
 	if len(memories) > 0 {
 		summary = memories[0].Compressed
@@ -370,32 +401,42 @@ func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextRespo
 // 将review_checkpoint的结构化信息压缩为可注入Agent prompt的文本
 // 包含：检查点类型、目标文档、结论、已确认基线、忽略项、延期项、待处理项、下次复查策略
 func (s *Service) checkpointContext(ctx context.Context, result SearchResult) string {
+	// 从 repository 获取 review_checkpoint 结构化数据；获取失败或不存在时降级为纯文本 content
 	checkpoint, ok, err := s.repo.GetReviewCheckpoint(ctx, result.MemoryID)
 	if err != nil || !ok {
 		return result.Content
 	}
+	// 拼接结构化字段为可注入 Agent prompt 的文本，每行一个 key: value 格式
 	parts := []string{result.Content}
+	// checkpoint_type: 检查点类型（如 design_review, architecture_review）
 	if checkpoint.CheckpointType != "" {
 		parts = append(parts, "checkpoint_type: "+checkpoint.CheckpointType)
 	}
+	// target_docs: 被复查的文档列表
 	if checkpoint.TargetDocsJSON != "" {
 		parts = append(parts, "target_docs: "+checkpoint.TargetDocsJSON)
 	}
+	// conclusion: 复查结论
 	if checkpoint.Conclusion != "" {
 		parts = append(parts, "conclusion: "+checkpoint.Conclusion)
 	}
+	// confirmed_baseline: 已确认的基线内容（不会再次复查）
 	if checkpoint.ConfirmedBaselineJSON != "" {
 		parts = append(parts, "confirmed_baseline: "+checkpoint.ConfirmedBaselineJSON)
 	}
+	// ignored_items: 被忽略的检查项（已确认无需修改）
 	if checkpoint.IgnoredItemsJSON != "" {
 		parts = append(parts, "ignored_items: "+checkpoint.IgnoredItemsJSON)
 	}
+	// deferred_items: 延期处理的检查项（留到下次复查）
 	if checkpoint.DeferredItemsJSON != "" {
 		parts = append(parts, "deferred_items: "+checkpoint.DeferredItemsJSON)
 	}
+	// open_items: 待处理的检查项（需要本次复查解决）
 	if checkpoint.OpenItemsJSON != "" {
 		parts = append(parts, "open_items: "+checkpoint.OpenItemsJSON)
 	}
+	// next_review_policy: 下次复查策略（触发条件、时间间隔等）
 	if checkpoint.NextReviewPolicyJSON != "" {
 		parts = append(parts, "next_review_policy: "+checkpoint.NextReviewPolicyJSON)
 	}
@@ -406,10 +447,13 @@ func (s *Service) checkpointContext(ctx context.Context, result SearchResult) st
 // 根据请求中的workspace、project、repo、session信息确定检索范围
 // 优先级：project_local > user_global > repo_local > session
 func contextSearchScopes(req ContextRequest) []string {
+	// 基础 scope: user_global（用户级偏好和决策，始终包含）
 	scopes := []string{ScopeUserGlobal}
+	// project_local 插入到最前面（优先级最高），需要 workspace + project 标识
 	if req.WorkspaceID != "" && req.ProjectID != "" {
 		scopes = append([]string{ScopeProjectLocal}, scopes...)
 	}
+	// repo_local 和 session scope 按需追加，优先级递减
 	if req.WorkspaceID != "" && req.RepoID != "" {
 		scopes = append(scopes, ScopeRepoLocal)
 	}
@@ -450,34 +494,49 @@ func containsMemoryType(results []SearchResult, memoryType string) bool {
 // - archive: 归档记忆，状态转为archived
 // - edit: 编辑记忆内容，更新版本号和search_text
 // - delete: 删除记忆，写入tombstone，删除FTS条目
+// Review 执行 P1 pending memory 查询和状态流转。
+// 六种操作：
+//   - list：查询 pending_review 状态的记忆列表，支持 scope 过滤
+//   - approve：pending_review -> stable，记录 user_confirmed=true
+//   - reject：-> archived，记录审核意见
+//   - archive：-> archived，记录审核意见
+//   - edit：原地更新内容，version+1，同步 FTS，记录编辑历史
+//   - delete：-> deleted，写入 tombstone，删除 FTS，记录审核历史
 func (s *Service) Review(ctx context.Context, req ReviewRequest) (ReviewResponse, error) {
 	switch req.Action {
+	// list: 查询 pending_review 状态的记忆，支持 scope 过滤和分页
 	case "list":
 		if req.Limit <= 0 {
 			req.Limit = s.cfg.Retrieval.DefaultLimit
 		}
 		items, err := s.repo.ListReview(ctx, req)
 		return ReviewResponse{Results: items}, err
+	// approve: pending_review -> stable，记录 user_confirmed=true（用户确认的稳定记忆）
 	case "approve":
 		item, err := s.repo.Approve(ctx, req.MemoryID, req.Reviewer, req.Feedback)
 		return ReviewResponse{MemoryID: item.ID, State: item.State, UserConfirmed: item.UserConfirmed}, err
+	// reject/archive: -> archived，记录审核意见
 	case "reject", "archive":
 		item, err := s.repo.RejectOrArchive(ctx, req.MemoryID, req.Action, req.Reviewer, req.Feedback)
 		return ReviewResponse{MemoryID: item.ID, State: item.State, UserConfirmed: item.UserConfirmed}, err
+	// edit: 原地更新内容，version+1，同步 FTS 索引，记录编辑历史
 	case "edit":
 		req.EditContent = strings.TrimSpace(req.EditContent)
 		if req.EditContent == "" {
 			return ReviewResponse{}, fmt.Errorf("VALIDATION_FAILED: edit_content is required")
 		}
+		// 编辑后的内容同样需要通过内容最小化检查（长度、关键词数、salient span 数）
 		if err := ingest.CheckMinimizedContent(s.cfg.Memory, ingest.MinimizationInput{
 			Content: req.EditContent,
 		}); err != nil {
 			return ReviewResponse{}, err
 		}
+		// 获取原记忆对象，用于继承 title 和构建新的 search_text
 		item, err := s.repo.Get(ctx, req.MemoryID)
 		if err != nil {
 			return ReviewResponse{}, err
 		}
+		// 用新内容重建 FTS 文档（保留原 title，content/normalized_content 替换为编辑后的内容）
 		searchText := ingest.BuildSearchText(ingest.SearchTextInput{
 			Title:             item.Title,
 			Content:           req.EditContent,
@@ -485,6 +544,7 @@ func (s *Service) Review(ctx context.Context, req ReviewRequest) (ReviewResponse
 		})
 		updated, err := s.repo.Edit(ctx, req.MemoryID, req.EditContent, req.Reviewer, req.Feedback, searchText)
 		return ReviewResponse{MemoryID: updated.ID, State: updated.State, UserConfirmed: updated.UserConfirmed}, err
+	// delete: -> deleted，写入 tombstone，删除 FTS 条目，记录审核历史
 	case "delete":
 		item, err := s.repo.Delete(ctx, req.MemoryID, req.Reviewer, req.Feedback)
 		return ReviewResponse{MemoryID: item.ID, State: item.State, UserConfirmed: item.UserConfirmed}, err
@@ -497,6 +557,7 @@ func (s *Service) Review(ctx context.Context, req ReviewRequest) (ReviewResponse
 // 将ReviewCheckpointInput转换为持久化的ReviewCheckpoint结构
 // 必填字段：checkpoint_type、conclusion、target_docs
 func buildCheckpoint(memoryID string, item MemoryItem, input ReviewCheckpointInput, now time.Time) (*ReviewCheckpoint, error) {
+	// 三个必填字段：checkpoint_type（类型）、conclusion（结论）、target_docs（被复查文档列表）
 	if input.CheckpointType == "" || input.Conclusion == "" || len(input.TargetDocs) == 0 {
 		return nil, fmt.Errorf("VALIDATION_FAILED: checkpoint_type, conclusion and target_docs are required")
 	}
@@ -504,6 +565,7 @@ func buildCheckpoint(memoryID string, item MemoryItem, input ReviewCheckpointInp
 	if err != nil {
 		return nil, err
 	}
+	// 将所有结构化输入序列化为 JSON 字符串，用于持久化存储
 	reviewIntent, err := toJSON(input.ReviewIntent)
 	if err != nil {
 		return nil, err
@@ -540,6 +602,7 @@ func buildCheckpoint(memoryID string, item MemoryItem, input ReviewCheckpointInp
 	if err != nil {
 		return nil, err
 	}
+	// 继承 memory_item 的隔离标识（workspace/project/repo/session/task），确保检查点与记忆的作用域一致
 	return &ReviewCheckpoint{
 		ID:                    id,
 		MemoryID:              memoryID,
@@ -630,13 +693,16 @@ func compress(content string, budget int) string {
 	if budget <= 0 || content == "" {
 		return ""
 	}
+	// 使用 rune 切片而非 byte 切片，确保中文等多字节字符不会被截断成乱码
 	runes := []rune(content)
 	if len(runes) <= budget {
 		return content
 	}
+	// budget <= 3 时无法容纳 "..." 后缀，直接截断
 	if budget <= 3 {
 		return string(runes[:budget])
 	}
+	// 预留 3 个 rune 给 "..." 省略号，表示内容被截断
 	return string(runes[:budget-3]) + "..."
 }
 

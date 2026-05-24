@@ -39,7 +39,10 @@ func NewStdioServer(registry *Registry, logger *slog.Logger) *StdioServer {
 	}
 }
 
-// Serve 按行读取 JSON 请求并返回 JSON 响应。日志写入 stderr，不污染 stdout 协议流。
+// Serve 按行读取 JSON 请求并返回 JSON 响应。
+// 协议格式：每行一个 JSON 对象，包含 request_id、tool、params 字段。
+// 响应格式：每行一个 JSON 对象，包含 request_id、result、error 字段。
+// 设计说明：日志写入 stderr，不污染 stdout 协议流；支持 context 取消实现优雅关闭。
 func (s *StdioServer) Serve(ctx context.Context) error {
 	scanner := bufio.NewScanner(s.in)
 	encoder := json.NewEncoder(s.out)

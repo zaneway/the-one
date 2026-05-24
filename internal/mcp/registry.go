@@ -44,9 +44,13 @@ func (r *Registry) Register(name string, handler Handler) {
 	r.handlers[name] = handler
 }
 
-// Call 调用工具并记录基础耗时日志。日志不包含完整 params，避免泄露用户输入或工具输出。
+// Call 调用工具并记录基础耗时日志。
+// 处理流程：查找 handler -> 序列化 params -> 调用 handler -> 记录耗时日志。
+// 安全设计：日志只记录 tool 名称和耗时，不包含完整 params，避免泄露用户输入。
+// 错误处理：未知工具返回 VALIDATION_FAILED 错误码。
 func (r *Registry) Call(ctx context.Context, name string, params any) (any, *Error) {
 	startedAt := time.Now()
+	// 查找注册的 handler，未知工具返回 VALIDATION_FAILED
 	handler, ok := r.handlers[name]
 	if !ok {
 		return nil, &Error{
@@ -56,6 +60,7 @@ func (r *Registry) Call(ctx context.Context, name string, params any) (any, *Err
 			FallbackHint: "check memoryd status and tool name",
 		}
 	}
+	// 将 params 统一序列化为 json.RawMessage，handler 内部再按需反序列化
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return nil, &Error{
@@ -65,6 +70,7 @@ func (r *Registry) Call(ctx context.Context, name string, params any) (any, *Err
 		}
 	}
 	result, toolErr := handler(ctx, raw)
+	// 日志只记录 tool 名称和耗时，不包含完整 params，避免泄露用户输入
 	r.logger.Info("mcp tool called",
 		"tool", name,
 		"duration_ms", time.Since(startedAt).Milliseconds(),

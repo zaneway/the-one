@@ -87,32 +87,40 @@ func NewServiceWithAutomation(cfg config.Config, repo Repository, enqueuer JobEn
 	return &Service{cfg: cfg, repo: repo, enqueuer: enqueuer}
 }
 
-// Observe 执行 P2 memory.observe 的最小闭环
-// 处理流程：
-// 1. 生成请求ID
-// 2. 校验并归一化请求参数
-// 3. 检查内容边界（最小化检查）
-// 4. 计算content_hash（如果未提供）
-// 5. 解析occurred_at时间
-// 6. 计算capture_level
-// 7. 解析或创建session
-// 8. 解析或创建task
-// 9. 检测重复事件
-// 10. 构建并写入raw_event
-// 11. 更新session质量统计
-// 12. 处理task.result和session.end生命周期事件
+// Observe 执行 P2 memory.observe 的最小闭环。
+// 完整处理链路：
+//  1. 生成请求 ID（用于日志关联）
+//  2. 归一化：去空白、校验 event_type/source_channel/actor 合法性、设置默认值
+//  3. 内容边界检查：摘要长度、关键词数量、source_refs 完整性（禁止 full_text/full_output/full_diff）
+//  4. 计算 content_hash（未提供时自动计算，基于最小化字段的 SHA256）
+//  5. 归一化 occurred_at（RFC3339 格式，空值使用当前 UTC 时间）
+//  6. 计算 capture_level（基于 Adapter 声明的能力，范围 1-4）
+//  7. 解析或创建 session（session.start 自动生成新 session_id）
+//  8. 解析或创建 task（按 task_summary 归一化后查找，无则创建 default_task）
+//  9. 幂等检测：按 content_hash + session_id + event_type 去重
+//  10. 构建并写入 raw_event（append-only 事实层）
+//  11. 更新 session 质量统计（accepted/deduped 计数）
+//  12. 生命周期处理：task.result -> EndTask，session.End -> EndTask + EndSession
+//  13. 可选：通知 P3 自动处理入队（enqueuer 不为空时）
+//
+// 设计约束：P2 只落 raw_event，不自动生成长期记忆（pipeline=raw_event_only）。
 func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveResponse, error) {
+	// Step 1: 生成请求 ID，用于日志关联和问题追踪
 	requestID, err := idgen.New("req")
 	if err != nil {
 		return ObserveResponse{}, err
 	}
+	// Step 2: 归一化——去空白、校验 event_type/source_channel/actor 合法性、设置默认值
 	if err := NormalizeObserve(s.cfg.Capture, &req); err != nil {
 		return ObserveResponse{}, err
 	}
+	// Step 3: 内容边界检查——摘要长度、关键词数量、salient_span 数量；禁止 full_text/full_output/full_diff
 	if err := CheckMinimizedObserve(s.cfg.Capture, req); err != nil {
+		// 内容超界时记录拒绝计数到 session 质量统计，然后返回错误
 		_ = s.recordContentBoundaryRejection(ctx, req)
 		return ObserveResponse{}, err
 	}
+	// Step 4: 计算 content_hash——未提供时自动计算，基于最小化字段的 SHA256
 	if req.ContentHash == "" {
 		contentHash, err := ComputeContentHash(req)
 		if err != nil {
@@ -120,13 +128,16 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		}
 		req.ContentHash = contentHash
 	}
+	// Step 5: 归一化 occurred_at——RFC3339 格式，空值使用当前 UTC 时间
 	occurredAt, err := normalizeOccurredAt(req.OccurredAt)
 	if err != nil {
 		return ObserveResponse{}, err
 	}
 	req.OccurredAt = occurredAt.Format(time.RFC3339Nano)
+	// Step 6: 计算 capture_level——基于 Adapter 声明的能力（Level1-4），用于评估捕获质量
 	captureLevel := CaptureLevel(req.CaptureCapabilities)
 
+	// Step 7: 解析或创建 session——session.start 自动生成新 session_id，其他事件验证 session 存在
 	session, hasSession, err := s.resolveSession(ctx, req, captureLevel)
 	if err != nil {
 		return ObserveResponse{}, err
@@ -134,6 +145,7 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 	if hasSession && req.SessionID == "" {
 		req.SessionID = session.ID
 	}
+	// Step 8: 解析或创建 task——按 task_summary 归一化后查找，无则创建 default_task
 	task, hasTask, err := s.resolveTask(ctx, req, session, hasSession)
 	if err != nil {
 		return ObserveResponse{}, err
@@ -142,6 +154,7 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		req.TaskID = task.ID
 	}
 
+	// Step 9: 幂等检测——按 content_hash + session_id + event_type + source_channel + workspace/project/repo 去重
 	dedup := EventDedupKey{
 		ContentHash:   req.ContentHash,
 		SessionID:     req.SessionID,
@@ -154,6 +167,7 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 	if existing, ok, err := s.repo.FindDuplicateEvent(ctx, dedup); err != nil {
 		return ObserveResponse{}, err
 	} else if ok {
+		// 重复事件：更新 session 质量统计（deduped 计数+1），返回已存在的事件 ID
 		if hasSession {
 			_ = s.updateQuality(ctx, req, true)
 		}
@@ -169,6 +183,7 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		}, nil
 	}
 
+	// Step 10: 构建并写入 raw_event——append-only 事实层，将关键词/salient_spans/source_refs 序列化为 JSON
 	event, err := buildRawEvent(req, occurredAt)
 	if err != nil {
 		return ObserveResponse{}, err
@@ -176,11 +191,13 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 	if err := s.repo.InsertRawEvent(ctx, event); err != nil {
 		return ObserveResponse{}, err
 	}
+	// Step 11: 更新 session 质量统计（accepted 计数+1，更新 capture_level 和 capabilities）
 	if hasSession {
 		if err := s.updateQuality(ctx, req, false); err != nil {
 			return ObserveResponse{}, err
 		}
 	}
+	// Step 12: 生命周期处理——task.result 事件结束任务，session.end 事件结束活跃任务和会话
 	if hasTask && req.EventType == EventTaskResult {
 		status := terminalTaskStatus(req)
 		if _, err := s.repo.EndTask(ctx, task.ID, status, taskOutcome(req), occurredAt); err != nil {
@@ -188,6 +205,7 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		}
 	}
 	if hasSession && req.EventType == EventSessionEnd {
+		// session.end 时，先结束所有活跃任务，再加载最终质量统计并关闭会话
 		if hasTask && task.Status == StatusActive {
 			if _, err := s.repo.EndTask(ctx, task.ID, sessionEndTaskStatus(req), taskOutcome(req), occurredAt); err != nil {
 				return ObserveResponse{}, err
@@ -201,9 +219,11 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 			return ObserveResponse{}, err
 		}
 	}
+	// Step 13: 可选通知 P3 自动处理入队——enqueuer 不为空时将 raw_event 推入异步处理管道
 	diagnostics := make([]string, 0, 1)
 	if s.enqueuer != nil {
 		if err := s.enqueuer.EnqueueRawEvent(ctx, event); err != nil {
+			// 入队失败不阻塞主流程，记录诊断信息返回给调用方
 			diagnostics = append(diagnostics, "automation_enqueue_failed")
 		}
 	}
@@ -272,13 +292,16 @@ func (s *Service) Quality(ctx context.Context, req QualityRequest) (QualityRespo
 	return QualityResponse{Report: report}, nil
 }
 
-// resolveSession 解析或创建会话
-// 处理流程：
-// 1. session.start事件且session_id为空时，生成新的session_id
-// 2. session_id为空时返回false
-// 3. 非session.start事件时，查询已有session
-// 4. session.start事件时，创建或更新session
+// resolveSession 解析或创建 Agent 会话。
+// 决策逻辑：
+//   - session.start 且 session_id 为空 -> 生成新 session_id（首次创建）
+//   - session_id 为空 -> 返回 false（非会话级事件，如手动 CLI 写入）
+//   - 非 session.start -> 查询已有 session 的 capture quality（验证 session 存在）
+//   - session.start -> 构建 session 对象并 upsert（INSERT OR UPDATE）
+//
+// session.start 时会初始化 capture_capabilities 和 capture_quality_json。
 func (s *Service) resolveSession(ctx context.Context, req ObserveRequest, captureLevel int) (AgentSession, bool, error) {
+	// 场景 1: session.start 且无 session_id -> 生成新 session_id（首次创建会话）
 	if req.EventType == EventSessionStart && req.SessionID == "" {
 		sessionID, err := idgen.New("sess")
 		if err != nil {
@@ -286,9 +309,11 @@ func (s *Service) resolveSession(ctx context.Context, req ObserveRequest, captur
 		}
 		req.SessionID = sessionID
 	}
+	// 场景 2: 无 session_id -> 返回 false（非会话级事件，如手动 CLI 写入）
 	if req.SessionID == "" {
 		return AgentSession{}, false, nil
 	}
+	// 场景 3: 非 session.start -> 查询已有 session 的 capture quality（验证 session 存在）
 	if req.EventType != EventSessionStart {
 		report, err := s.repo.GetCaptureQuality(ctx, req.SessionID)
 		if err != nil {
@@ -296,6 +321,8 @@ func (s *Service) resolveSession(ctx context.Context, req ObserveRequest, captur
 		}
 		return AgentSession{ID: report.SessionID, CaptureLevel: report.CaptureLevel}, true, nil
 	}
+	// 场景 4: session.start -> 构建 session 对象并 upsert（INSERT OR UPDATE）
+	// 初始化 capture_capabilities 和 capture_quality_json（含 missing_capabilities）
 	capabilitiesJSON, err := jsonText(req.CaptureCapabilities)
 	if err != nil {
 		return AgentSession{}, false, err
@@ -323,16 +350,21 @@ func (s *Service) resolveSession(ctx context.Context, req ObserveRequest, captur
 	return stored, err == nil, err
 }
 
-// resolveTask 解析或创建任务
-// 处理流程：
-// 1. 无session时返回false
-// 2. 有task_id时，更新或返回已有任务
-// 3. 有task.task_summary时，按session_id + normalized_task查找或创建任务
-// 4. 无task信息时，查找或创建default_task
+// resolveTask 解析或创建 Agent 任务。
+// 决策逻辑（按优先级）：
+//   - 无 session -> 返回 false（任务必须绑定 session）
+//   - 有 task_id 且有 task 信息 -> upsert 任务（显式指定任务 ID）
+//   - 有 task_id 无 task 信息 -> 返回已有任务（只做关联）
+//   - 有 task.task_summary -> 按 session_id + normalized_task_summary 查找，不存在则创建
+//   - 无任何 task 信息 -> 查找或创建 default_task（每个 session 最多一个 default_task）
+//
+// 任务归一化：task_summary 去空白、合并连续空格，用于任务查找匹配。
 func (s *Service) resolveTask(ctx context.Context, req ObserveRequest, session AgentSession, hasSession bool) (AgentTask, bool, error) {
+	// 无 session -> 任务必须绑定 session，直接返回
 	if !hasSession {
 		return AgentTask{}, false, nil
 	}
+	// 优先级 1: 显式指定 task_id -> 有 task 信息则 upsert，否则只做关联
 	if req.TaskID != "" {
 		if req.Task != nil {
 			task, err := s.repo.UpsertTask(ctx, taskFromRequest(req, session, req.TaskID, req.Task.TaskSummary))
@@ -340,6 +372,7 @@ func (s *Service) resolveTask(ctx context.Context, req ObserveRequest, session A
 		}
 		return AgentTask{ID: req.TaskID, SessionID: session.ID}, true, nil
 	}
+	// 优先级 2: 有 task.task_summary -> 按归一化后的 summary 查找，不存在则创建
 	if req.Task != nil && req.Task.TaskSummary != "" {
 		tasks, err := s.repo.ListTasks(ctx, ListTasksRequest{SessionID: session.ID})
 		if err != nil {
@@ -358,6 +391,7 @@ func (s *Service) resolveTask(ctx context.Context, req ObserveRequest, session A
 		task, err := s.repo.UpsertTask(ctx, taskFromRequest(req, session, taskID, normalized))
 		return task, err == nil, err
 	}
+	// 优先级 3: 无任何 task 信息 -> 查找或创建 default_task（每个 session 最多一个）
 	task, ok, err := s.repo.GetDefaultTask(ctx, session.ID)
 	if err != nil || ok {
 		return task, ok, err
@@ -394,11 +428,14 @@ func taskFromRequest(req ObserveRequest, session AgentSession, taskID string, su
 // updateQuality 更新会话捕获质量
 // 每次事件处理后更新session的capture_quality_json
 func (s *Service) updateQuality(ctx context.Context, req ObserveRequest, deduped bool) error {
+	// 加载当前 session 的 quality 统计（accepted/deduped/event_type 计数等）
 	quality, err := s.loadQuality(ctx, req.SessionID)
 	if err != nil {
 		return err
 	}
+	// 根据事件类型更新对应的计数器；deduped=true 时只更新 deduped 计数
 	quality = ApplyAcceptedEvent(quality, req, deduped)
+	// 通过 upsert 更新 session 的 quality 和 capabilities（INSERT OR UPDATE 语义）
 	session := AgentSession{
 		ID:                      req.SessionID,
 		AgentType:               req.AgentType,
@@ -468,6 +505,7 @@ func buildRawEvent(req ObserveRequest, occurredAt time.Time) (RawEvent, error) {
 	if err != nil {
 		return RawEvent{}, err
 	}
+	// 将数组字段序列化为 JSON 字符串用于 SQLite 存储
 	keywordsJSON, err := jsonText(req.Keywords)
 	if err != nil {
 		return RawEvent{}, err
@@ -480,6 +518,7 @@ func buildRawEvent(req ObserveRequest, occurredAt time.Time) (RawEvent, error) {
 	if err != nil {
 		return RawEvent{}, err
 	}
+	// 构建 raw_event 对象——append-only 事实层，所有字段均来自归一化后的请求
 	return RawEvent{
 		ID:               eventID,
 		SessionID:        req.SessionID,

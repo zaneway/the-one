@@ -31,26 +31,38 @@ type App struct {
 	worker   *automation.Worker
 }
 
-// New 初始化 memoryd 运行时。migration 失败时不会启动 MCP 工具，避免半初始化状态对外可见。
+// New 初始化 memoryd 运行时。
+// 初始化顺序：日志 -> SQLite（WAL + migration + 能力探测）-> MCP Registry -> 诊断工具 -> 记忆服务 -> 捕获服务 -> 自动化服务 -> Worker。
+// 设计约束：migration 失败时不会启动 MCP 工具，避免半初始化状态对外可见。
 func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
+	// Step 1: 初始化日志（slog + 可选文件输出）
 	logger, err := logging.New(cfg.Logging)
 	if err != nil {
 		return nil, err
 	}
+	// Step 2: 打开 SQLite（WAL + PRAGMA + migration + FTS5 能力探测）
 	store, err := sqlite.Open(ctx, cfg.Storage, logger)
 	if err != nil {
 		logger.Error("sqlite open failed", "db_path", cfg.Storage.Path, "error", err)
 		return nil, err
 	}
+	// Step 3: 创建 MCP 工具注册中心，所有工具通过 registry.Register 注册
 	registry := mcp.NewRegistry(logger)
+	// Step 4: 注册 P0 诊断工具（memory.health / memory.status）
 	diagnosticService := diagnostics.NewService(version, cfg, store)
 	diagnostics.RegisterTools(registry, diagnosticService)
+	// Step 5: 注册 P1 记忆工具（memory.remember / memory.search / memory.context / memory.review）
 	memoryService := memory.NewService(cfg, store)
 	tools.RegisterMemoryTools(registry, memoryService, logger)
+	// Step 6: 注册 P3 自动化工具（memory.jobs.* / memory.candidates.* / memory.automation.status）
+	// automationService 依赖 store 和 rule-based provider（从事件中提取证据的规则引擎）
 	automationService := automation.NewService(cfg, store, processor.NewRuleBasedProvider())
 	tools.RegisterAutomationTools(registry, automationService, logger)
+	// Step 7: 注册 P2 捕获工具（memory.observe）
+	// captureService 持有 automationService 引用，raw_event 写入后可触发 P3 入队
 	captureService := capture.NewServiceWithAutomation(cfg, store, automationService)
 	tools.RegisterCaptureTools(registry, captureService, logger)
+	// Step 8: 创建异步 Worker（后台 goroutine，轮询 pending jobs 并执行）
 	worker := automation.NewWorker(automationService, store, automation.WorkerConfig{
 		PollIntervalMS:   cfg.Automation.PollIntervalMS,
 		BatchSize:        cfg.Automation.BatchSize,
@@ -72,11 +84,15 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}, nil
 }
 
-// Serve 启动 P0 MCP stdio 骨架。当前只支持 stdio，其他传输在协议适配明确后再扩展。
+// Serve 启动 MCP stdio 服务。
+// 处理流程：校验传输类型 -> 可选启动自动化 Worker（后台 goroutine）-> 启动 stdio 服务器。
+// 设计说明：Worker 在独立 goroutine 中运行，通过 context 取消实现优雅关闭。
 func (a *App) Serve(ctx context.Context) error {
+	// 当前只支持 stdio 传输，其他地址直接拒绝
 	if a.cfg.Server.MCPAddr != "stdio" {
 		return fmt.Errorf("unsupported mcp addr %q", a.cfg.Server.MCPAddr)
 	}
+	// 可选启动自动化 Worker：独立 goroutine 运行，通过 context 取消实现优雅关闭
 	if a.cfg.Automation.WorkerEnabled && a.worker != nil {
 		go func() {
 			if err := a.worker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -84,6 +100,7 @@ func (a *App) Serve(ctx context.Context) error {
 			}
 		}()
 	}
+	// 启动 MCP stdio 服务器：按行读取 JSON 请求，返回 JSON 响应
 	server := mcp.NewStdioServer(a.registry, a.logger)
 	return server.Serve(ctx)
 }

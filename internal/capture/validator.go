@@ -58,6 +58,8 @@ func NormalizeObserve(cfg config.CaptureConfig, req *ObserveRequest) error {
 	if req.Actor != "" && !validActor(req.Actor) {
 		return fmt.Errorf("VALIDATION_FAILED: unsupported actor %q", req.Actor)
 	}
+	// agent_session 来源的事件有更严格的校验：必须有 workspace_id 和 agent_type
+	// session.start 事件除外（此时 session_id 尚未生成）
 	if req.SourceChannel == SourceChannelAgentSession {
 		if req.WorkspaceID == "" {
 			return fmt.Errorf("VALIDATION_FAILED: agent_session event requires workspace_id")
@@ -65,6 +67,7 @@ func NormalizeObserve(cfg config.CaptureConfig, req *ObserveRequest) error {
 		if req.AgentType == "" {
 			return fmt.Errorf("VALIDATION_FAILED: agent_session event requires agent_type")
 		}
+		// RequireSessionForAgentEvents 配置开启时，非 session.start 事件必须携带 session_id
 		if cfg.RequireSessionForAgentEvents && req.EventType != EventSessionStart && req.SessionID == "" {
 			return fmt.Errorf("SESSION_REQUIRED: agent_session event requires session_id")
 		}

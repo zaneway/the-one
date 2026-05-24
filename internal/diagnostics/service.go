@@ -55,7 +55,9 @@ type HealthStorage struct {
 	Backend string `json:"backend"`
 }
 
-// HealthTool 执行轻量 SQLite ping。失败时返回结构化错误，但不 panic。
+// HealthTool 执行轻量 SQLite ping 验证存储层可用性。
+// 处理流程：调用 store.Ping() -> 返回 ok/version/uptime/storage 状态。
+// 设计说明：ping 失败不 panic，返回结构化错误供 Agent 重试或降级。
 func (s *Service) HealthTool(ctx context.Context, _ json.RawMessage) (any, *mcp.Error) {
 	if err := s.store.Ping(ctx); err != nil {
 		return HealthResponse{
@@ -104,6 +106,8 @@ type StatusStorage struct {
 }
 
 // StatusTool 返回存储能力、migration 状态和可选配置摘要。
+// 处理流程：读取 store.Status() -> 组装 capability 信息 -> 可选附加非敏感配置。
+// 设计说明：include_config 为 true 时暴露 processor/automation/embedding/retention 配置，不暴露路径和密钥。
 func (s *Service) StatusTool(_ context.Context, raw json.RawMessage) (any, *mcp.Error) {
 	var req StatusRequest
 	if len(raw) > 0 {
@@ -128,6 +132,8 @@ func (s *Service) StatusTool(_ context.Context, raw json.RawMessage) (any, *mcp.
 		},
 		Migrations: storeStatus.Migrations,
 	}
+	// include_config=true 时暴露非敏感配置摘要（processor/automation/embedding/retention）
+	// 不暴露路径、密钥等敏感信息
 	if req.IncludeConfig {
 		response.Config = map[string]any{
 			"processor_provider":                 s.cfg.Processor.Provider,

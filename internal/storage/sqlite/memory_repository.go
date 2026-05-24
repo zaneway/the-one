@@ -51,21 +51,26 @@ func (s *Store) FindDuplicate(ctx context.Context, item memory.MemoryItem) (memo
 
 // Remember 在一个短事务内写入 memory、evidence、link、FTS 和可选 review_checkpoint。
 func (s *Store) Remember(ctx context.Context, item memory.MemoryItem, evidence memory.Evidence, checkpoint *memory.ReviewCheckpoint) error {
+	// FTS5 是 P1 记忆写入的硬依赖，不可用时直接拒绝
 	if !s.capabilities.FTS5 {
 		return fmt.Errorf("FTS_UNAVAILABLE: sqlite fts5 is required for P1 remember")
 	}
+	// 事务保证：memory_item + evidence + link + FTS + checkpoint 原子写入
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return storageErr(err)
 	}
+	// 写入 memory_item 主表
 	if err := insertMemoryItem(ctx, tx, item); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
+	// 写入 evidence 证据表
 	if err := insertEvidence(ctx, tx, evidence); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
+	// 写入 memory_evidence_link 关联表（relation_type=derived_from, weight=1.0）
 	if _, err := tx.ExecContext(ctx,
 		"insert into memory_evidence_link(memory_id, evidence_id, relation_type, weight) values (?, ?, ?, ?)",
 		item.ID, evidence.ID, "derived_from", 1.0,
@@ -73,12 +78,14 @@ func (s *Store) Remember(ctx context.Context, item memory.MemoryItem, evidence m
 		_ = tx.Rollback()
 		return storageErr(err)
 	}
+	// 条件写入 FTS 索引：只有 stable/pending_review/provisional 状态才纳入全文检索
 	if shouldIndex(item.State) {
 		if err := upsertFTS(ctx, tx, item.ID, item.SearchText); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
 	}
+	// 可选写入 review_checkpoint（设计复查检查点）
 	if checkpoint != nil {
 		if err := insertReviewCheckpoint(ctx, tx, *checkpoint); err != nil {
 			_ = tx.Rollback()
@@ -120,6 +127,9 @@ func (s *Store) GetReviewCheckpoint(ctx context.Context, memoryID string) (memor
 }
 
 // Search 执行 P1 FTS + metadata 查询和简化排序。
+// 检索策略：先尝试 FTS5 全文检索，无结果时降级为 LIKE 模糊匹配。
+// 排序公式：0.55*bm25 + 0.20*scope + 0.15*confidence + 0.10*importance
+// 过滤规则：排除 deleted 状态，默认排除 archived；按 scope 隔离（project_local/repo_local/session 必须匹配对应 ID）。
 func (s *Store) Search(ctx context.Context, req memory.SearchRequest) ([]memory.SearchResult, memory.SearchDiagnostics, error) {
 	if !s.capabilities.FTS5 {
 		return nil, memory.SearchDiagnostics{Fallback: "metadata"}, fmt.Errorf("FTS_UNAVAILABLE: sqlite fts5 is required for P1 search")
@@ -208,15 +218,18 @@ func (s *Store) Edit(ctx context.Context, memoryID, editContent, reviewer, feedb
 	if err != nil {
 		return memory.MemoryItem{}, storageErr(err)
 	}
+	// SELECT FOR UPDATE：获取原记忆内容（用于 review 记录的 original_content）
 	item, err := getMemoryForUpdate(ctx, tx, memoryID)
 	if err != nil {
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, err
 	}
+	// 终态保护：deleted 记忆不可编辑
 	if item.State == memory.StateDeleted {
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, fmt.Errorf("STATE_CONFLICT: deleted memory is terminal")
 	}
+	// 更新 content/normalized_content/search_text，version 自增
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx,
 		`update memory_item
@@ -227,10 +240,12 @@ func (s *Store) Edit(ctx context.Context, memoryID, editContent, reviewer, feedb
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, storageErr(err)
 	}
+	// 记录编辑历史：original_content = 旧内容，edited_content = 新内容
 	if err := insertReviewRecord(ctx, tx, memoryID, "manual_review", "edited", reviewer, feedback, item.Content, editContent); err != nil {
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, err
 	}
+	// 同步 FTS 索引：可检索状态的记忆需要重建 FTS 条目
 	if shouldIndex(item.State) {
 		if err := upsertFTS(ctx, tx, memoryID, searchText); err != nil {
 			_ = tx.Rollback()
@@ -254,10 +269,12 @@ func (s *Store) Delete(ctx context.Context, memoryID, reviewer, feedback string)
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, err
 	}
+	// 终态保护：已删除的记忆不可再次删除
 	if item.State == memory.StateDeleted {
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, fmt.Errorf("STATE_CONFLICT: deleted memory is terminal")
 	}
+	// 标记为 deleted 状态
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx,
 		"update memory_item set state = ?, updated_at = ? where id = ?",
@@ -266,6 +283,7 @@ func (s *Store) Delete(ctx context.Context, memoryID, reviewer, feedback string)
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, storageErr(err)
 	}
+	// 写入 tombstone：记录删除原因、删除人，用于审计和可能的恢复
 	if _, err := tx.ExecContext(ctx,
 		"insert or replace into memory_tombstone(memory_id, deleted_reason, deleted_by, content_hash, deleted_at) values (?, ?, ?, ?, ?)",
 		memoryID, feedback, reviewer, "", now,
@@ -273,10 +291,12 @@ func (s *Store) Delete(ctx context.Context, memoryID, reviewer, feedback string)
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, storageErr(err)
 	}
+	// 清理 FTS 索引：删除的记忆不应出现在全文检索结果中
 	if err := deleteFTS(ctx, tx, memoryID); err != nil {
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, err
 	}
+	// 记录审核历史
 	if err := insertReviewRecord(ctx, tx, memoryID, "manual_review", "deleted", reviewer, feedback, item.Content, ""); err != nil {
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, err
@@ -289,24 +309,33 @@ func (s *Store) Delete(ctx context.Context, memoryID, reviewer, feedback string)
 	return item, nil
 }
 
+// transition 是记忆状态流转的核心事务方法。
+// 支持的操作：approve（pending_review/archived -> stable）、reject/archive（-> archived）。
+// 事务内完成：状态更新 -> review 记录写入 -> FTS 索引同步（新状态可检索则 upsert，否则 delete）。
+// 状态约束：deleted 是终态，不可再流转；approve 只允许从 pending_review 或 archived 转出。
 func (s *Store) transition(ctx context.Context, memoryID, action, newState, reviewer, feedback string, confirmed bool) (memory.MemoryItem, error) {
+	// 开启事务：状态更新 + review 记录 + FTS 同步必须原子完成
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return memory.MemoryItem{}, storageErr(err)
 	}
+	// SELECT FOR UPDATE：获取当前状态，防止并发状态流转冲突
 	item, err := getMemoryForUpdate(ctx, tx, memoryID)
 	if err != nil {
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, err
 	}
+	// 终态保护：deleted 状态不可再流转
 	if item.State == memory.StateDeleted {
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, fmt.Errorf("STATE_CONFLICT: deleted memory is terminal")
 	}
+	// approve 前置条件：只允许从 pending_review 或 archived 转出
 	if action == "approve" && item.State != memory.StatePendingReview && item.State != memory.StateArchived {
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, fmt.Errorf("STATE_CONFLICT: approve requires pending_review or archived")
 	}
+	// 更新 memory_item 状态和 user_confirmed 标记
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx,
 		"update memory_item set state = ?, user_confirmed = ?, updated_at = ? where id = ?",
@@ -315,6 +344,7 @@ func (s *Store) transition(ctx context.Context, memoryID, action, newState, revi
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, storageErr(err)
 	}
+	// 根据操作类型确定 review 记录的 status 字段
 	status := "approved"
 	if newState == memory.StateArchived {
 		status = "archived"
@@ -326,6 +356,7 @@ func (s *Store) transition(ctx context.Context, memoryID, action, newState, revi
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, err
 	}
+	// FTS 索引同步：新状态可检索则 upsert，否则 delete（避免 archived/deleted 出现在搜索结果中）
 	if shouldIndex(newState) {
 		if err := upsertFTS(ctx, tx, memoryID, item.SearchText); err != nil {
 			_ = tx.Rollback()
@@ -393,14 +424,21 @@ func insertReviewCheckpoint(ctx context.Context, tx *sql.Tx, checkpoint memory.R
 	return storageErr(err)
 }
 
+// searchByFTS 使用 FTS5 虚表执行全文检索。
+// 查询流程：FTS5 match -> scope/state/type 过滤 -> BM25 排序 -> 取 top N*3 候选 -> 内存中二次排序裁剪。
+// 多取 3 倍候选是为了在二次排序后仍有足够的结果。
 func (s *Store) searchByFTS(ctx context.Context, req memory.SearchRequest, matchQuery string, limit int) ([]memory.SearchResult, memory.SearchDiagnostics, error) {
+	// FTS5 虚表查询：通过 memory_item_fts match 匹配，JOIN memory_item 获取完整字段
+	// bm25() 返回负值（越小越相关），用于后续排序
 	query := `select m.id, m.memory_type, m.scope, coalesce(m.title, ''), m.content,
 		m.confidence, m.importance, m.state, m.tier, bm25(memory_item_fts) as rank
 		from memory_item_fts
 		join memory_item m on m.id = memory_item_fts.memory_id
 		where memory_item_fts match ?`
 	args := []any{matchQuery}
+	// 追加 scope/state/type 过滤和 scope 隔离条件
 	query, args = appendSearchFilters(query, args, req, false)
+	// BM25 排序后多取 3 倍候选，确保二次排序后仍有足够结果
 	query += " order by rank limit ?"
 	args = append(args, limit*3)
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -419,6 +457,7 @@ func (s *Store) searchByFTS(ctx context.Context, req memory.SearchRequest, match
 	if err := rows.Err(); err != nil {
 		return nil, memory.SearchDiagnostics{Fallback: "fts_metadata"}, storageErr(err)
 	}
+	// 二次排序：BM25 归一化 + scope 权重 + confidence + importance 综合评分
 	results := s.rankSearchResults(ctx, raw, req, limit)
 	return results, memory.SearchDiagnostics{
 		FTSHits:       len(raw),
@@ -427,13 +466,20 @@ func (s *Store) searchByFTS(ctx context.Context, req memory.SearchRequest, match
 	}, nil
 }
 
+// searchByLike 是 FTS5 不可用或无命中时的降级检索路径。
+// 使用 LIKE 模糊匹配 search_text 字段，按 updated_at 降序排列。
+// 降级路径不提供 BM25 相关性排序，只能依赖 metadata 权重。
 func (s *Store) searchByLike(ctx context.Context, req memory.SearchRequest, limit int) ([]memory.SearchResult, memory.SearchDiagnostics, error) {
+	// LIKE 降级路径：FTS5 无命中或不可用时，用 LIKE 模糊匹配 search_text
+	// rank 固定为 0.0（无 BM25 分数），排序依赖 metadata 权重
 	query := `select id, memory_type, scope, coalesce(title, ''), content,
 		confidence, importance, state, tier, 0.0 as rank
 		from memory_item
 		where lower(search_text) like ?`
 	args := []any{"%" + strings.ToLower(req.Query) + "%"}
+	// tableOnly=true：直接查 memory_item 表，列名不加 "m." 前缀
 	query, args = appendSearchFilters(query, args, req, true)
+	// 无 BM25 时按 updated_at 降序，优先返回最近更新的记忆
 	query += " order by updated_at desc limit ?"
 	args = append(args, limit*3)
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -468,11 +514,20 @@ type rankedMemory struct {
 	Rank       float64
 }
 
+// rankSearchResults 对检索结果执行二次排序和裁剪。
+// 排序公式（P1）：0.55*bm25 + 0.20*scope + 0.15*confidence + 0.10*importance
+// BM25 归一化：将 FTS5 返回的负 BM25 分数转换为 0-1 范围（1/(1+|rank|)）。
+// 惩罚：archived 状态的记忆额外扣 0.4 分。
+// 可选：加载 evidence_refs 用于检索结果的可解释性。
 func (s *Store) rankSearchResults(ctx context.Context, raw []rankedMemory, req memory.SearchRequest, limit int) []memory.SearchResult {
 	results := make([]memory.SearchResult, 0, len(raw))
 	for _, item := range raw {
+		// BM25 归一化：FTS5 返回负值（越小越相关），转换为 0-1 范围
+		// 公式：1/(1+|rank|)，rank 越大（绝对值）-> bm25Norm 越小 -> 相关性越低
 		bm25Norm := 1.0 / (1.0 + math.Abs(item.Rank))
+		// 综合评分公式（P1）：0.55*BM25 + 0.20*scope权重 + 0.15*置信度 + 0.10*重要度
 		score := 0.55*bm25Norm + 0.20*scopeWeight(item.Scope) + 0.15*item.Confidence + 0.10*item.Importance
+		// archived 状态惩罚：已归档记忆扣 0.4 分，降低其在检索结果中的排名
 		if item.State == memory.StateArchived {
 			score -= 0.4
 		}
@@ -499,31 +554,48 @@ func (s *Store) rankSearchResults(ctx context.Context, raw []rankedMemory, req m
 	return results
 }
 
+// appendSearchFilters 为 SQL 查询追加通用过滤条件。
+// 过滤逻辑：
+//   - 排除 deleted 状态
+//   - 默认只返回 stable/pending_review/provisional（IncludeArchived=true 时放宽）
+//   - 按 scope 过滤（如指定）
+//   - 按 memory_type 过滤（如指定）
+//   - scope 隔离：project_local 必须匹配 workspace_id+project_id
+//   - scope 隔离：repo_local 必须匹配 workspace_id+repo_id
+//   - scope 隔离：session 必须匹配 workspace_id+session_id
 func appendSearchFilters(query string, args []any, req memory.SearchRequest, tableOnly bool) (string, []any) {
+	// tableOnly=true 时列名不加表别名前缀（用于 searchByLike 直接查 memory_item 表）
 	prefix := "m."
 	if tableOnly {
 		prefix = ""
 	}
+	// 永远排除 deleted 状态的记忆
 	query += " and " + prefix + "state != 'deleted'"
+	// 默认只返回 stable/pending_review/provisional，IncludeArchived=true 时放宽到所有非 deleted
 	if !req.IncludeArchived {
 		query += " and " + prefix + "state in ('stable', 'pending_review', 'provisional')"
 	}
+	// scope 过滤：按请求指定的 scope 列表筛选
 	if len(req.Scope) > 0 {
 		query += " and " + prefix + "scope in (" + placeholders(len(req.Scope)) + ")"
 		for _, scope := range req.Scope {
 			args = append(args, scope)
 		}
 	}
+	// memory_type 过滤：按请求指定的记忆类型列表筛选
 	if len(req.MemoryTypes) > 0 {
 		query += " and " + prefix + "memory_type in (" + placeholders(len(req.MemoryTypes)) + ")"
 		for _, memoryType := range req.MemoryTypes {
 			args = append(args, memoryType)
 		}
 	}
+	// scope 隔离：project_local 记忆必须匹配 workspace_id + project_id，否则不返回
 	query += " and (" + prefix + "scope != 'project_local' or (" + prefix + "workspace_id = ? and " + prefix + "project_id = ?))"
 	args = append(args, req.WorkspaceID, req.ProjectID)
+	// scope 隔离：repo_local 记忆必须匹配 workspace_id + repo_id
 	query += " and (" + prefix + "scope != 'repo_local' or (" + prefix + "workspace_id = ? and " + prefix + "repo_id = ?))"
 	args = append(args, req.WorkspaceID, req.RepoID)
+	// scope 隔离：session 记忆必须匹配 workspace_id + session_id
 	query += " and (" + prefix + "scope != 'session' or (" + prefix + "workspace_id = ? and " + prefix + "session_id = ?))"
 	args = append(args, req.WorkspaceID, req.SessionID)
 	return query, args
@@ -627,9 +699,13 @@ func (s *Store) loadEvidenceRefs(ctx context.Context, memoryID string) []string 
 	return refs
 }
 
+// buildFTSQuery 将用户查询文本转换为 FTS5 查询表达式。
+// 分词策略：按非字母数字字符切分，每个词用双引号包裹（精确匹配），词间用 OR 连接。
+// 设计说明：使用 OR 而非 AND 是为了提高召回率，避免一个词不匹配就丢失整条记忆。
 func buildFTSQuery(query string) string {
 	terms := make([]string, 0)
 	var current []rune
+	// 将累积的字符作为完整词输出：双引号包裹实现精确匹配，内部双引号转义
 	flush := func() {
 		if len(current) == 0 {
 			return
@@ -640,6 +716,7 @@ func buildFTSQuery(query string) string {
 		}
 		current = nil
 	}
+	// 按非字母数字字符分词：字母/数字/非 ASCII（中文等）作为词的一部分
 	for _, r := range query {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) || r > unicode.MaxASCII {
 			current = append(current, r)
@@ -648,12 +725,16 @@ func buildFTSQuery(query string) string {
 		flush()
 	}
 	flush()
+	// 无有效词时将整个查询作为单个精确匹配词
 	if len(terms) == 0 {
 		return `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
 	}
+	// 词间用 OR 连接：提高召回率，避免一个词不匹配就丢失整条记忆
 	return strings.Join(terms, " OR ")
 }
 
+// shouldIndex 判断指定状态的记忆是否应纳入 FTS 索引。
+// stable/pending_review/provisional 状态可被检索；archived/deleted 不纳入索引。
 func shouldIndex(state string) bool {
 	return state == memory.StateStable || state == memory.StatePendingReview || state == memory.StateProvisional
 }
@@ -689,6 +770,10 @@ func storageErr(err error) error {
 	return err
 }
 
+// scopeWeight 返回不同 scope 在检索排序中的权重。
+// project_local（0.90）> user_global（0.85）> repo_local（0.80）> session（0.35）。
+// 设计说明：project_local 权重最高，因为项目级记忆与当前任务最相关；
+// session 权重最低，因为会话级记忆通常是临时的、未巩固的。
 func scopeWeight(scope string) float64 {
 	switch scope {
 	case memory.ScopeProjectLocal:

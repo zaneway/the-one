@@ -27,6 +27,9 @@ type AutomationHandler struct {
 	logger  *slog.Logger
 }
 
+// ListJobs 处理 memory.jobs.list 工具调用。
+// 功能：查询异步任务列表，支持按状态、类型、目标和 scope 过滤。
+// 用于 P3 诊断：查看 extract_evidence、generate_candidate、admit_memory 等任务的执行情况。
 func (h *AutomationHandler) ListJobs(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 	var req automation.ListJobsRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -79,6 +82,9 @@ func (h *AutomationHandler) GetCandidate(ctx context.Context, raw json.RawMessag
 	return resp, nil
 }
 
+// Status 处理 memory.automation.status 工具调用。
+// 功能：返回 P3 自动处理管道的整体状态，包括 pending/running/failed/succeeded 任务数量。
+// 用于监控：了解自动记忆处理管道的健康状况。
 func (h *AutomationHandler) Status(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 	var req map[string]any
 	if len(raw) > 0 {
@@ -98,6 +104,9 @@ func (h *AutomationHandler) Status(ctx context.Context, raw json.RawMessage) (an
 	return resp, nil
 }
 
+// Reconcile 处理 memory.jobs.reconcile 工具调用。
+// 功能：扫描没有 extract_evidence job 且没有 evidence 的 raw_event，为遗漏的事件补充入队。
+// 设计说明：用于修复因 worker 崩溃或入队失败导致的事件处理遗漏。
 func (h *AutomationHandler) Reconcile(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 	var req automation.ReconcileRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -116,6 +125,9 @@ func (h *AutomationHandler) Reconcile(ctx context.Context, raw json.RawMessage) 
 	return resp, nil
 }
 
+// RunRetention 处理 memory.retention.run 工具调用。
+// 功能：手动触发保留任务，包括临时记忆清理和保留分数重算。
+// 支持 dry_run 模式：只返回将要处理的记忆列表，不实际执行。
 func (h *AutomationHandler) RunRetention(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 	var req retention.RunRequest
 	if err := json.Unmarshal(raw, &req); err != nil {

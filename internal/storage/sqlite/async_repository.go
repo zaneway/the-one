@@ -14,9 +14,11 @@ const defaultAutomationLimit = 50
 
 // EnqueueJob 写入一条异步任务，并通过 dedup_key 保证同一目标任务不会重复入队。
 func (s *Store) EnqueueJob(ctx context.Context, job automation.AsyncJob) (automation.AsyncJob, bool, error) {
+	// 必填字段校验
 	if job.ID == "" || job.JobType == "" || job.TargetType == "" || job.TargetID == "" {
 		return automation.AsyncJob{}, false, fmt.Errorf("VALIDATION_FAILED: job id, job_type, target_type and target_id are required")
 	}
+	// 幂等检测：通过 dedup_key 查找已存在的同类型任务，避免重复入队
 	if job.DedupKey != "" {
 		existing, found, err := s.getJobByDedupKey(ctx, job.DedupKey)
 		if err != nil {
@@ -26,6 +28,7 @@ func (s *Store) EnqueueJob(ctx context.Context, job automation.AsyncJob) (automa
 			return existing, true, nil
 		}
 	}
+	// 填充默认值：status=pending, priority=5, max_retries=3
 	now := time.Now().UTC()
 	if job.Status == "" {
 		job.Status = automation.JobStatusPending
@@ -36,6 +39,7 @@ func (s *Store) EnqueueJob(ctx context.Context, job automation.AsyncJob) (automa
 	if job.MaxRetries == 0 {
 		job.MaxRetries = 3
 	}
+	// next_run_at 默认为当前时间（立即可执行）
 	if job.NextRunAt.IsZero() {
 		job.NextRunAt = now
 	}
@@ -59,6 +63,9 @@ func (s *Store) EnqueueJob(ctx context.Context, job automation.AsyncJob) (automa
 }
 
 // ClaimJobs 按优先级和创建时间领取可运行任务，并在同一短事务内标记为 running。
+// 领取逻辑：查询 status=pending 且 next_run_at <= now 的任务 -> 按 priority ASC, created_at ASC 排序。
+// 乐观锁：使用 UPDATE ... WHERE status = 'pending' 防止并发领取同一任务。
+// 事务保证：查询和状态更新在同一事务中，确保不会领取到已被其他 worker 领取的任务。
 func (s *Store) ClaimJobs(ctx context.Context, now time.Time, limit int) ([]automation.AsyncJob, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -66,10 +73,12 @@ func (s *Store) ClaimJobs(ctx context.Context, now time.Time, limit int) ([]auto
 	if limit <= 0 {
 		limit = 10
 	}
+	// 事务保证：查询和状态更新在同一事务中，防止并发 worker 领取同一任务
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, storageErr(err)
 	}
+	// 查询可运行任务：status=pending 且 next_run_at <= now，按优先级升序、创建时间升序
 	rows, err := tx.QueryContext(ctx, baseJobSelect()+` where status = ? and julianday(next_run_at) <= julianday(?)
 		order by priority asc, created_at asc
 		limit ?`, automation.JobStatusPending, now.Format(time.RFC3339Nano), limit)
@@ -82,6 +91,7 @@ func (s *Store) ClaimJobs(ctx context.Context, now time.Time, limit int) ([]auto
 		_ = tx.Rollback()
 		return nil, err
 	}
+	// 乐观锁领取：逐个 UPDATE WHERE status='pending'，RowsAffected=0 表示已被其他 worker 领取
 	claimed := make([]automation.AsyncJob, 0, len(jobs))
 	for _, job := range jobs {
 		result, err := tx.ExecContext(ctx, `update async_job
@@ -98,6 +108,7 @@ func (s *Store) ClaimJobs(ctx context.Context, now time.Time, limit int) ([]auto
 			_ = tx.Rollback()
 			return nil, storageErr(err)
 		}
+		// affected=0：该任务已被其他 worker 领取，跳过
 		if affected == 0 {
 			continue
 		}
@@ -112,7 +123,11 @@ func (s *Store) ClaimJobs(ctx context.Context, now time.Time, limit int) ([]auto
 }
 
 // RecoverStaleRunningJobs 恢复进程崩溃遗留的 running job。
-// 未超过最大重试次数的任务恢复为 pending，超过次数的任务标记 failed，避免永久卡在 running。
+// 恢复策略：
+//   - updated_at 超过 timeout 且 retry_count < max_retries：恢复为 pending，可被重新领取
+//   - updated_at 超过 timeout 且 retry_count >= max_retries：标记为 failed，避免无限重试
+//
+// 设计说明：使用 updated_at 而非 created_at 判断超时，因为 worker 可能在执行中途崩溃。
 func (s *Store) RecoverStaleRunningJobs(ctx context.Context, now time.Time, timeout time.Duration) (int, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -120,8 +135,10 @@ func (s *Store) RecoverStaleRunningJobs(ctx context.Context, now time.Time, time
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
+	// 计算超时截止时间：updated_at 早于 cutoff 的 running job 被视为进程崩溃遗留
 	cutoff := now.Add(-timeout).Format(time.RFC3339Nano)
 	nowText := now.Format(time.RFC3339Nano)
+	// 恢复策略 1：retry_count < max_retries -> 恢复为 pending，立即可被重新领取
 	pending, err := s.db.ExecContext(ctx, `update async_job
 		set status = ?, next_run_at = ?, last_error = ?, updated_at = ?
 		where status = ?
@@ -133,6 +150,7 @@ func (s *Store) RecoverStaleRunningJobs(ctx context.Context, now time.Time, time
 	if err != nil {
 		return 0, storageErr(err)
 	}
+	// 恢复策略 2：retry_count >= max_retries -> 标记为 failed，避免无限重试
 	failed, err := s.db.ExecContext(ctx, `update async_job
 		set status = ?, last_error = ?, updated_at = ?
 		where status = ?
@@ -172,6 +190,8 @@ func (s *Store) MarkJobSucceeded(ctx context.Context, jobID string, payload stri
 }
 
 // MarkJobRetry 将任务放回 pending，并记录下一次运行时间和最近错误。
+// 重试策略：由调用方计算 next_run_at（通常使用指数退避），存储层只负责持久化。
+// retry_count 递增后写入，用于后续判断是否超过最大重试次数。
 func (s *Store) MarkJobRetry(ctx context.Context, jobID string, retryCount int, nextRunAt time.Time, lastError string, now time.Time) error {
 	if jobID == "" {
 		return fmt.Errorf("VALIDATION_FAILED: job id is required")
@@ -252,9 +272,14 @@ func (s *Store) ListJobs(ctx context.Context, req automation.ListJobsRequest) ([
 }
 
 func jobScopeWhere(req automation.ListJobsRequest) (string, []any) {
+	// 异步任务的 scope 过滤需要关联 target 表：不同 target_type 对应不同的 scope 字段来源
 	rawEventWhere, rawEventArgs := rawEventScopeWhere("re", req.WorkspaceID, req.ProjectID, req.RepoID)
 	candidateWhere, candidateArgs := candidateScopeWhere("mc", req.WorkspaceID, req.ProjectID, req.RepoID)
 	evidenceWhere, evidenceArgs := rawEventScopeWhere("re", req.WorkspaceID, req.ProjectID, req.RepoID)
+	// 三种 target_type 的 scope 过滤通过 EXISTS 子查询实现：
+	// - raw_event: 直接查 raw_event 表的 workspace/project/repo
+	// - memory_candidate: 查 memory_candidate 表的 workspace/project/repo
+	// - evidence: 通过 evidence JOIN raw_event 获取 scope
 	where := `(target_type = 'raw_event' and exists (
 			select 1 from raw_event re where re.id = async_job.target_id and ` + rawEventWhere + `
 		))
