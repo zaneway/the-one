@@ -1,0 +1,157 @@
+# memoryd 配置文件
+# 使用方式: ./bin/memoryd serve -config memoryd.yaml
+# 优先级: CLI flag > 环境变量 > 本文件 > 内置默认值
+
+# ── 存储配置 ──────────────────────────────────────────────
+storage:
+  # 后端类型，当前仅支持 sqlite
+  backend: "sqlite"
+
+  # SQLite 数据库文件路径，支持 ~ 展开
+  # 环境变量: MEMORYD_DB_PATH (优先级高于 data-dir)
+  path: "~/.memoryd/memory.db"
+
+  # sqlite-vec 向量索引能力探测
+  # auto: 自动检测 | true: 强制启用 | false: 强制禁用
+  sqlite_vec_enabled: "auto"
+
+  # 写锁等待超时(毫秒)，避免并发写入时请求无限阻塞
+  busy_timeout_ms: 1000
+
+# ── 服务配置 ──────────────────────────────────────────────
+server:
+  # MCP 传输方式，当前仅支持 stdio (通过 stdin/stdout 与 Agent 通信)
+  # 环境变量: MEMORYD_MCP_ADDR
+  mcp_addr: "stdio"
+
+# ── 日志配置 ──────────────────────────────────────────────
+logging:
+  # 日志级别: debug | info | warn | error
+  # 环境变量: MEMORYD_LOG_LEVEL
+  level: "info"
+
+  # 日志格式: text (人类可读) | json (机器解析)
+  # 日志统一输出到 stderr，避免污染 stdio 响应
+  format: "text"
+
+# ── 记忆配置 ──────────────────────────────────────────────
+# P0/P1 默认身份和工作区，内容边界限制
+memory:
+  # 默认用户 ID，用于 user_global 作用域的默认值
+  default_user_id: "local_default_user"
+
+  # 默认工作空间，用于 scope 过滤
+  default_workspace: "local_default_workspace"
+
+  # content 字段最大字符数
+  max_content_chars: 4000
+
+  # evidence.interpreted_statement 最大字符数
+  max_evidence_chars: 1200
+
+  # keywords 数组最大元素数
+  max_keyword_count: 30
+
+  # salient_spans 数组最大元素数
+  max_salient_span_count: 10
+
+# ── 捕获配置 ──────────────────────────────────────────────
+# P2 observe 事件捕获的内容边界和默认值
+capture:
+  # Agent 自动捕获事件是否要求绑定 session
+  require_session_for_agent_events: true
+
+  # input_summary 字段最大字符数
+  max_input_summary_chars: 1200
+
+  # output_summary 字段最大字符数
+  max_output_summary_chars: 2000
+
+  # content_summary 字段最大字符数
+  max_content_summary_chars: 2000
+
+  # source_refs_json 字段最大字符数
+  max_source_refs_chars: 4000
+
+  # 单个 salient_span 最大字符数
+  max_salient_span_chars: 500
+
+  # salient_spans 数组最大元素数
+  max_salient_span_count: 10
+
+  # keywords 数组最大元素数
+  max_keyword_count: 30
+
+  # 未指定 agent_type 时的默认值
+  default_agent_type: "unknown"
+
+# ── 检索配置 ──────────────────────────────────────────────
+# 在线检索默认值，P1 检索实现会使用这些限制
+retrieval:
+  # memory.search 默认返回结果数
+  default_limit: 10
+
+  # memory.context 默认 token 预算
+  default_token_budget: 1800
+
+  # 在线检索超时(毫秒)，外部模型调用不计入此预算
+  online_timeout_ms: 100
+
+# ── 嵌入配置 ──────────────────────────────────────────────
+# embedding provider，默认 none，保证无外部依赖也能启动
+# 当 provider 为 none 时，检索降级为 FTS + metadata + relation
+embedding:
+  # 嵌入提供者: none | local | openai | deepseek
+  provider: "none"
+
+  # 嵌入模型名称，provider 为 none 时为空
+  model: ""
+
+# ── 保留策略配置 ──────────────────────────────────────────
+# 记忆生命周期管理，控制不同层级记忆的自动清理
+retention:
+  # 是否启用后台 retention job
+  job_enabled: false
+
+  # temporary 层级记忆保留天数
+  temporary_ttl_days: 5
+
+  # short_term 层级记忆保留天数
+  short_term_ttl_days: 90
+
+# ── 处理器配置 ────────────────────────────────────────────
+# P3 自动 evidence/candidate 抽取 Provider 和内容上限
+processor:
+  # 处理器提供者: rule_based | none
+  # none 时只保存 raw_event，不生成 evidence/candidate
+  provider: "rule_based"
+
+  # observe 后是否自动入队 extract_evidence 任务
+  enable_auto_processing: true
+
+  # Provider 抽取时读取的近邻事件上限
+  max_related_events: 20
+
+  # 单个事件最多生成候选记忆数
+  max_candidates_per_event: 3
+
+# ── 自动化 Worker 配置 ───────────────────────────────────
+# P3 本地异步 worker 的轮询、批量和重试策略
+automation:
+  # 是否启动后台 Worker (serve 模式下生效)
+  worker_enabled: true
+
+  # 无 pending job 时的空轮询间隔(毫秒)
+  poll_interval_ms: 1000
+
+  # Worker 每轮最多领取任务数
+  batch_size: 10
+
+  # 单个 job 最大尝试次数
+  max_attempts: 3
+
+  # 重试基础延迟(毫秒)，按指数退避计算下次运行时间
+  retry_base_delay_ms: 1000
+
+  # running 状态任务的恢复超时(毫秒)，进程崩溃遗留的 job 超过此时间可恢复
+  running_timeout_ms: 300000
