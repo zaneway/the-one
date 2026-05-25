@@ -26,7 +26,7 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	status := store.Status()
-	wantVersion := 6
+	wantVersion := 7
 	if status.Migrations.CurrentVersion != wantVersion {
 		t.Fatalf("current version = %d, want %d", status.Migrations.CurrentVersion, wantVersion)
 	}
@@ -49,6 +49,10 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		"memory_embedding",
 		"doc_snapshot",
 		"doc_section_snapshot",
+		"mvp_acceptance_run",
+		"mvp_acceptance_task",
+		"mvp_metric_sample",
+		"mvp_agent_capability",
 	} {
 		if !tableExists(t, store, table) {
 			t.Fatalf("table %s does not exist after migration", table)
@@ -67,6 +71,20 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		"memory_embedding":     {"memory_id", "embedding_model", "embedding_dim", "embedding"},
 		"doc_snapshot":         {"workspace_id", "project_id", "repo_id", "doc_path", "content_hash", "section_count"},
 		"doc_section_snapshot": {"snapshot_id", "section_id", "heading_path_json", "content_hash", "summary"},
+		"mvp_acceptance_run":   {"name", "mode", "workspace_id", "baseline_type", "candidate_type", "status", "summary_json", "report_path"},
+		"mvp_acceptance_task": {
+			"run_id", "scenario_id", "round", "agent_type", "baseline", "retrieval_trace_id",
+			"task_success", "expected_json", "observed_json", "failure_reason",
+		},
+		"mvp_metric_sample": {
+			"run_id", "scenario_id", "task_result_id", "agent_type", "metric_name",
+			"metric_value", "numerator", "denominator", "threshold_operator", "passed",
+		},
+		"mvp_agent_capability": {
+			"run_id", "agent_type", "capture_level", "conversation_capture", "tool_call_capture",
+			"tool_output_capture", "file_edit_capture", "session_lifecycle", "memory_observe",
+			"capability_coverage", "completeness", "degradation_reasons_json",
+		},
 	} {
 		for _, column := range columns {
 			if !columnExists(t, store, table, column) {

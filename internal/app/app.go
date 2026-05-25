@@ -15,6 +15,7 @@ import (
 	"github.com/zaneway/the-one/internal/mcp"
 	"github.com/zaneway/the-one/internal/mcp/tools"
 	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/the-one/internal/mvp"
 	"github.com/zaneway/the-one/internal/processor"
 	"github.com/zaneway/the-one/internal/retrieval"
 	"github.com/zaneway/the-one/internal/storage/sqlite"
@@ -74,11 +75,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// automationService 依赖 store 和 rule-based provider（从事件中提取证据的规则引擎）
 	automationService := automation.NewService(cfg, store, processor.NewRuleBasedProvider())
 	tools.RegisterAutomationTools(registry, automationService, logger)
-	// Step 7: 注册 P2 捕获工具（memory.observe）
+	// Step 7: 注册 P5-A MVP 验收模型工具（run.start / task.record）
+	mvpService := mvp.NewService(store)
+	tools.RegisterMVPTools(registry, mvpService, logger)
+	// Step 8: 注册 P2 捕获工具（memory.observe）
 	// captureService 持有 automationService 引用，raw_event 写入后可触发 P3 入队
 	captureService := capture.NewServiceWithAutomation(cfg, store, automationService)
 	tools.RegisterCaptureTools(registry, captureService, logger)
-	// Step 8: 创建异步 Worker（后台 goroutine，轮询 pending jobs 并执行）
+	// Step 9: 创建异步 Worker（后台 goroutine，轮询 pending jobs 并执行）
 	worker := automation.NewWorker(automationService, store, automation.WorkerConfig{
 		PollIntervalMS:   cfg.Automation.PollIntervalMS,
 		BatchSize:        cfg.Automation.BatchSize,
