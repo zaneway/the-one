@@ -72,6 +72,51 @@ AI 工具事件
 - 删除要覆盖主表、索引、缓存、导出和备份边界。
 - 用户画像必须 evidence-based，不做心理、人格或价值观推断。
 
+## v1.0.0 本地 
+
+
+### 构建和启动
+
+```bash
+make build
+bin/memoryd serve --data-dir /tmp/the-one-memoryd
+```
+
+健康检查：
+
+```bash
+make run-health DATA_DIR=/tmp/the-one-memoryd
+make run-status DATA_DIR=/tmp/the-one-memoryd
+```
+
+### 验收
+
+```bash
+go test ./...
+go test -tags sqlite_fts5 ./...
+make test-p2-capture
+make test-p3-sqlite
+make test-p4-retrieval
+make test-p5-mvp
+```
+
+P5 synthetic 验收只验证 Engine MVP，不启动真实 Agent。真实 Agent certification 参考：
+
+```text
+examples/agents/shared-memoryd/README.md
+```
+
+
+### 当前限制
+
+- `sqlite-vec` / vector retrieval 不是默认必需能力。
+- Code Index 默认是 `local_basic`，不提供完整跨语言调用图。
+- 不实现在线 LLM rerank。
+- 不包含团队权限、企业审计、备份恢复。
+- 不保存完整源码、完整工具输出、完整 diff、完整历史对话。
+- token savings 是本地近似估算口径。
+- real_agent certification 需要用户在真实 Codex、Claude Code、Cursor 环境中手工执行。
+
 ## 展望
 
 The One 的长期愿景是成为一个个人与团队都能使用的认知状态层。
@@ -85,4 +130,3 @@ The One 的长期愿景是成为一个个人与团队都能使用的认知状态
 更远期，它可以支持学习复盘：不是泛泛地推荐课程，而是基于真实任务中的 evidence，告诉你哪些能力在增强，哪些问题反复依赖 AI，哪些主题值得复习，哪些失败模式正在重复出现。
 
 最终目标不是让 AI 自称理解你，而是让每一次理解都有证据、每一次错误都能纠正、每一条记忆都能被审查和删除。
-
