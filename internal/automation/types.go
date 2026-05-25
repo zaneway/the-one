@@ -23,6 +23,8 @@ const (
 	JobTypeComputeAdmission = "compute_admission"
 	// JobTypeResolveCodeRef 从显式 payload 或 source_ref 生成/刷新 code_ref。
 	JobTypeResolveCodeRef = "resolve_code_ref"
+	// JobTypeRefreshCodeRefStatus 批量刷新已有 code_ref 的解析状态。
+	JobTypeRefreshCodeRefStatus = "refresh_code_ref_status"
 	// JobTypeBuildDocSnapshot 写入预计算的文档 snapshot 和 section metadata。
 	JobTypeBuildDocSnapshot = "build_doc_snapshot"
 	// JobTypeComputeEmbedding 写入预计算 memory embedding；provider=none 时安全跳过。
@@ -44,6 +46,8 @@ const (
 	TargetTypeDocPath = "doc_path"
 	// TargetTypeWorkspace 表示 job target 是 workspace。
 	TargetTypeWorkspace = "workspace"
+	// TargetTypeRepo 表示 job target 是 repo。
+	TargetTypeRepo = "repo"
 	// TargetTypeCodeRef 表示 job target 是 code_ref。
 	TargetTypeCodeRef = "code_ref"
 )

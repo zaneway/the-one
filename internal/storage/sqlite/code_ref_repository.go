@@ -120,6 +120,31 @@ func (s *Store) ListCodeRefs(ctx context.Context, query memory.CodeRefQuery) ([]
 	return scanCodeRefRows(rows)
 }
 
+// ListCodeRefsForRefresh 按 repo_id 查询需要重新解析的 code_ref。
+// 该入口仅供 refresh_code_ref_status job 使用，必须带 repo_id，避免刷新任务扫描全表。
+func (s *Store) ListCodeRefsForRefresh(ctx context.Context, repoID string, limit int) ([]memory.CodeRef, error) {
+	repoID = strings.TrimSpace(repoID)
+	if repoID == "" {
+		return nil, fmt.Errorf("VALIDATION_FAILED: repo_id is required")
+	}
+	rows, err := s.db.QueryContext(ctx, baseCodeRefSelect()+`
+		where repo_id = ?
+		  and resolve_status in (?, ?, ?)
+		order by updated_at asc, id asc
+		limit ?`,
+		repoID,
+		memory.CodeRefStatusUnresolved,
+		memory.CodeRefStatusResolved,
+		memory.CodeRefStatusStale,
+		codeRefLimit(limit),
+	)
+	if err != nil {
+		return nil, storageErr(err)
+	}
+	defer rows.Close()
+	return scanCodeRefRows(rows)
+}
+
 // UpdateCodeRefResolveStatus 更新 code_ref 解析状态。
 // 状态为 resolved 时会刷新 resolved_at；其他状态保留为空，用于后续 staleness penalty 和诊断展示。
 func (s *Store) UpdateCodeRefResolveStatus(ctx context.Context, id, status, contentHash, refSummary string) (memory.CodeRef, error) {

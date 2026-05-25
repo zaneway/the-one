@@ -14,6 +14,8 @@ import (
 
 type codeRefRepository interface {
 	WriteCodeRef(ctx context.Context, ref memory.CodeRef) (memory.CodeRef, error)
+	GetCodeRef(ctx context.Context, id string) (memory.CodeRef, error)
+	ListCodeRefsForRefresh(ctx context.Context, repoID string, limit int) ([]memory.CodeRef, error)
 }
 
 type docSnapshotRepository interface {
@@ -39,7 +41,7 @@ func newP4JobHandler(cfg config.Config, repo any) JobHandler {
 
 func (h p4JobHandler) CanHandle(jobType string) bool {
 	switch jobType {
-	case JobTypeResolveCodeRef, JobTypeBuildDocSnapshot, JobTypeComputeEmbedding, JobTypeCleanupAccessLog:
+	case JobTypeResolveCodeRef, JobTypeRefreshCodeRefStatus, JobTypeBuildDocSnapshot, JobTypeComputeEmbedding, JobTypeCleanupAccessLog:
 		return true
 	default:
 		return false
@@ -50,6 +52,8 @@ func (h p4JobHandler) RunJob(ctx context.Context, job AsyncJob) (map[string]any,
 	switch job.JobType {
 	case JobTypeResolveCodeRef:
 		return h.runResolveCodeRef(ctx, job)
+	case JobTypeRefreshCodeRefStatus:
+		return h.runRefreshCodeRefStatus(ctx, job)
 	case JobTypeBuildDocSnapshot:
 		return h.runBuildDocSnapshot(ctx, job)
 	case JobTypeComputeEmbedding:
@@ -92,7 +96,8 @@ func (h p4JobHandler) runResolveCodeRef(ctx context.Context, job AsyncJob) (map[
 		return map[string]any{"status": "skipped", "reason": "no_code_ref_payload"}, nil
 	}
 	written := 0
-	adapter := codeindex.NewLocalBasicAdapter(h.cfg.CodeIndex, "")
+	resolveMode := firstNonEmptyString(payload.ResolveMode, "persist_only")
+	adapter := h.newCodeIndexAdapter(payload.RepoRoot)
 	for _, ref := range refs {
 		if ref.MemoryID == "" {
 			ref.MemoryID = firstNonEmptyString(payload.MemoryID, targetMemoryID(job))
@@ -104,15 +109,73 @@ func (h p4JobHandler) runResolveCodeRef(ctx context.Context, job AsyncJob) (map[
 		if err != nil {
 			return nil, err
 		}
-		resolved, err := adapter.ResolveCodeRefs(ctx, []memory.CodeRef{persisted})
-		if err == nil && len(resolved) == 1 {
-			if _, err := repo.WriteCodeRef(ctx, resolved[0]); err != nil {
-				return nil, err
+		if resolveMode == "adapter" {
+			if adapter == nil {
+				written++
+				continue
+			}
+			resolved, err := adapter.ResolveCodeRefs(ctx, []memory.CodeRef{persisted})
+			if err == nil && len(resolved) == 1 {
+				if _, err := repo.WriteCodeRef(ctx, resolved[0]); err != nil {
+					return nil, err
+				}
 			}
 		}
 		written++
 	}
 	return map[string]any{"status": "completed", "code_ref_count": written}, nil
+}
+
+func (h p4JobHandler) runRefreshCodeRefStatus(ctx context.Context, job AsyncJob) (map[string]any, error) {
+	repo, ok := any(h.repo).(codeRefRepository)
+	if !ok {
+		return nil, fmt.Errorf("PROVIDER_NOT_FOUND: code_ref repository unavailable")
+	}
+	var payload resolveCodeRefPayload
+	if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+		return nil, err
+	}
+	refs := payload.CodeRefs
+	if payload.CodeRef != nil {
+		refs = append(refs, *payload.CodeRef)
+	}
+	if len(refs) == 0 && job.TargetType == TargetTypeCodeRef && job.TargetID != "" {
+		ref, err := repo.GetCodeRef(ctx, job.TargetID)
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	if len(refs) == 0 {
+		repoID := firstNonEmptyString(payload.RepoID, job.TargetID)
+		if job.TargetType != TargetTypeWorkspace && job.TargetType != TargetTypeRepo && job.TargetType != TargetTypeCodeRef {
+			repoID = payload.RepoID
+		}
+		if repoID == "" {
+			return nil, fmt.Errorf("VALIDATION_FAILED: repo_id or code_ref target is required")
+		}
+		listed, err := repo.ListCodeRefsForRefresh(ctx, repoID, firstPositive(payload.Limit, h.cfg.CodeIndex.MaxResolveRefs, 30))
+		if err != nil {
+			return nil, err
+		}
+		refs = listed
+	}
+	adapter := h.newCodeIndexAdapter(payload.RepoRoot)
+	if adapter == nil {
+		return map[string]any{"status": "skipped", "reason": "code_index_disabled", "code_ref_count": len(refs)}, nil
+	}
+	resolved, err := adapter.ResolveCodeRefs(ctx, refs)
+	if err != nil {
+		return nil, err
+	}
+	updated := 0
+	for _, ref := range resolved {
+		if _, err := repo.WriteCodeRef(ctx, ref); err != nil {
+			return nil, err
+		}
+		updated++
+	}
+	return map[string]any{"status": "completed", "code_ref_count": updated}, nil
 }
 
 func (h p4JobHandler) runBuildDocSnapshot(ctx context.Context, job AsyncJob) (map[string]any, error) {
@@ -232,6 +295,9 @@ type resolveCodeRefPayload struct {
 	ContentHash   string           `json:"content_hash"`
 	RefSummary    string           `json:"ref_summary"`
 	ResolveStatus string           `json:"resolve_status"`
+	RepoRoot      string           `json:"repo_root"`
+	ResolveMode   string           `json:"resolve_mode"`
+	Limit         int              `json:"limit"`
 }
 
 type computeEmbeddingPayload struct {
@@ -279,4 +345,11 @@ func firstPositive(values ...int) int {
 		}
 	}
 	return 0
+}
+
+func (h p4JobHandler) newCodeIndexAdapter(repoRoot string) *codeindex.LocalBasicAdapter {
+	if h.cfg.CodeIndex.Provider == "none" {
+		return nil
+	}
+	return codeindex.NewLocalBasicAdapter(h.cfg.CodeIndex, repoRoot)
 }

@@ -51,8 +51,8 @@ func TestMemoryOrchestratorSearchWritesTraceAndRetrievedLogs(t *testing.T) {
 		t.Fatalf("Search() error = %v", err)
 	}
 
-	if resp.Diagnostics.RetrievalTraceID != "rt-test-1" {
-		t.Fatalf("trace id = %q, want rt-test-1", resp.Diagnostics.RetrievalTraceID)
+	if resp.RetrievalTraceID != "rt-test-1" || resp.Diagnostics.RetrievalTraceID != "rt-test-1" {
+		t.Fatalf("trace id top=%q diagnostics=%q, want rt-test-1", resp.RetrievalTraceID, resp.Diagnostics.RetrievalTraceID)
 	}
 	if resp.Diagnostics.RetrievalMode != string(ModeFTSMetadata) || resp.Diagnostics.RetrievalIntent == "" || !resp.Diagnostics.UsedFTS {
 		t.Fatalf("unexpected diagnostics: %+v", resp.Diagnostics)
@@ -343,17 +343,18 @@ func TestMemoryOrchestratorContextBuildsDocReviewStrategy(t *testing.T) {
 	}}
 	traceRepo := &fakeTraceRepo{}
 	accessRepo := &fakeAccessLogRepo{}
-	docRepo := &fakeDocSnapshotRepo{snapshots: []docindex.DocumentSnapshot{
-		{
-			ID:          "doc-prev",
-			WorkspaceID: "ws-1",
-			RepoID:      root,
-			Path:        "design.md",
-			ContentHash: "sha256:old",
-			Sections: []docindex.DocumentSection{
-				{SectionID: "design", HeadingPath: []string{"Design"}, ContentHash: "sha256:old-design"},
-				{SectionID: "design/scope", HeadingPath: []string{"Design", "Scope"}, ContentHash: "sha256:old-scope"},
-			},
+	docRepo := &fakeDocSnapshotRepo{}
+	checkpointRepo := &fakeReviewCheckpointRepo{checkpoints: map[string]memory.ReviewCheckpoint{
+		"mem-checkpoint": {
+			MemoryID: "mem-checkpoint",
+			TargetHashesJSON: `[{
+				"doc_path":"design.md",
+				"content_hash":"sha256:old",
+				"sections":[
+					{"section_id":"design","heading_path":["Design"],"section_hash":"sha256:old-design"},
+					{"section_id":"design/scope","heading_path":["Design","Scope"],"section_hash":"sha256:old-scope"}
+				]
+			}]`,
 		},
 	}}
 	orchestrator := NewMemoryOrchestrator(config.Default(), searcher,
@@ -361,6 +362,7 @@ func TestMemoryOrchestratorContextBuildsDocReviewStrategy(t *testing.T) {
 		WithAccessLogRepository(accessRepo),
 		WithRelationRepository(&fakeRelationRepo{}),
 		WithDocSnapshotRepository(docRepo),
+		WithReviewCheckpointRepository(checkpointRepo),
 		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
 	)
 
@@ -519,6 +521,15 @@ func (f *fakeDocSnapshotRepo) ListDocSnapshots(ctx context.Context, query docind
 		}
 	}
 	return out, nil
+}
+
+type fakeReviewCheckpointRepo struct {
+	checkpoints map[string]memory.ReviewCheckpoint
+}
+
+func (f *fakeReviewCheckpointRepo) GetReviewCheckpoint(ctx context.Context, memoryID string) (memory.ReviewCheckpoint, bool, error) {
+	checkpoint, ok := f.checkpoints[memoryID]
+	return checkpoint, ok, nil
 }
 
 func countAccessEvents(records []AccessLogRecord, eventType string) int {

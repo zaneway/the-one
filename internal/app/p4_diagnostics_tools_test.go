@@ -170,6 +170,35 @@ func TestAppRegistersP4DiagnosticsTools(t *testing.T) {
 	}
 }
 
+func TestAppStatusReportsP4Capabilities(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
+	app, err := New(ctx, cfg, "test")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer app.Close()
+
+	raw, toolErr := app.CallTool(ctx, "memory.status", diagnostics.StatusRequest{IncludeConfig: true})
+	if toolErr != nil {
+		t.Fatalf("memory.status error = %v", toolErr)
+	}
+	status := raw.(diagnostics.StatusResponse)
+	if !status.CodeIndex.Enabled || status.CodeIndex.Provider != "local_basic" || status.CodeIndex.Capabilities.CallGraph {
+		t.Fatalf("code index status = %+v, want local_basic enabled without call graph", status.CodeIndex)
+	}
+	if status.Embedding.Provider != "none" || status.Embedding.QueryCacheSize != 256 || status.Embedding.OnlineQueryEmbeddingEnabled {
+		t.Fatalf("embedding status = %+v, want none with online disabled", status.Embedding)
+	}
+	if status.Vector.Backend != "none" || status.Vector.Available {
+		t.Fatalf("vector status = %+v, want disabled vector index", status.Vector)
+	}
+	if status.Config["codeindex_provider"] != "local_basic" || status.Config["vector_index_backend"] != "none" {
+		t.Fatalf("status config = %+v, want P4 config summary", status.Config)
+	}
+}
+
 func TestAppP4DiagnosticsRejectsUnboundedTraceQuery(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Default()

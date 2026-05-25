@@ -81,19 +81,27 @@ type DocSnapshotRepository interface {
 	ListDocSnapshots(ctx context.Context, query docindex.SnapshotQuery) ([]docindex.DocumentSnapshot, error)
 }
 
+// ReviewCheckpointRepository 定义 P4-C4 使用 checkpoint target_hashes 的最小读取能力。
+// Orchestrator 只读取结构化 hash 元数据，不读取或保存完整历史文档正文。
+type ReviewCheckpointRepository interface {
+	// GetReviewCheckpoint 按 review_checkpoint memory_id 读取 checkpoint 元数据。
+	GetReviewCheckpoint(ctx context.Context, memoryID string) (memory.ReviewCheckpoint, bool, error)
+}
+
 // MemoryOrchestrator 是 P4-C1 面向 memory.Service 的在线检索编排器。
 // 它复用现有 FTS + metadata repository，补齐 intent、score_breakdown、trace 和 access log；
 // C2 仅启用持久化 relation depth=1 expansion；vector/code/doc 扩展仍不在本阶段执行。
 type MemoryOrchestrator struct {
-	cfg           config.Config
-	memoryRepo    MemorySearcher
-	traceRepo     TraceRepository
-	accessLogRepo AccessLogRepository
-	relationRepo  RelationRepository
-	codeRefRepo   CodeRefRepository
-	codeIndex     CodeIndexAdapter
-	docRepo       DocSnapshotRepository
-	logger        *slog.Logger
+	cfg            config.Config
+	memoryRepo     MemorySearcher
+	traceRepo      TraceRepository
+	accessLogRepo  AccessLogRepository
+	relationRepo   RelationRepository
+	codeRefRepo    CodeRefRepository
+	codeIndex      CodeIndexAdapter
+	docRepo        DocSnapshotRepository
+	checkpointRepo ReviewCheckpointRepository
+	logger         *slog.Logger
 }
 
 // MemoryOrchestratorOption 配置 P4-C1 在线检索编排器的可选依赖。
@@ -144,6 +152,14 @@ func WithCodeIndexAdapter(adapter CodeIndexAdapter) MemoryOrchestratorOption {
 func WithDocSnapshotRepository(repo DocSnapshotRepository) MemoryOrchestratorOption {
 	return func(o *MemoryOrchestrator) {
 		o.docRepo = repo
+	}
+}
+
+// WithReviewCheckpointRepository 注入 review_checkpoint 读取能力。
+// 为空时 Doc Index strategy 会降级为当前 snapshot 与历史 snapshot 对比。
+func WithReviewCheckpointRepository(repo ReviewCheckpointRepository) MemoryOrchestratorOption {
+	return func(o *MemoryOrchestrator) {
+		o.checkpointRepo = repo
 	}
 }
 
@@ -232,7 +248,7 @@ func (o *MemoryOrchestrator) Search(ctx context.Context, req memory.SearchReques
 	diag.UsedCodeIndex = retrieved.UsedCodeIndex
 	diag.UsedDocIndex = false
 	diag.FallbackReasons = fallbackReasons
-	return memory.SearchResponse{Results: retrieved.Results, Diagnostics: diag}, nil
+	return memory.SearchResponse{RetrievalTraceID: trace.ID, Results: retrieved.Results, Diagnostics: diag}, nil
 }
 
 // Context 执行 P4-C1 上下文构造。
@@ -408,6 +424,7 @@ func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequ
 		TokenBudget:   tokenBudget,
 		Now:           now,
 	})
+	reranked = filterSupersededCandidates(reranked)
 	if req.Limit > 0 && len(reranked) > req.Limit {
 		reranked = reranked[:req.Limit]
 	}
@@ -442,7 +459,18 @@ func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequ
 }
 
 func (o *MemoryOrchestrator) contextSearch(ctx context.Context, req memory.ContextRequest, intent RetrievalIntent) (retrieveOutput, error) {
-	searchTypes := []string{memory.TypeConstraint, memory.TypeDecision, memory.TypeFailure, memory.TypePreference, memory.TypeProjectFact, memory.TypeProcedure, memory.TypeTemporaryState}
+	searchTypes := []string{
+		memory.TypeRequirement,
+		memory.TypeConstraint,
+		memory.TypeDecision,
+		memory.TypeAssumption,
+		memory.TypeOpenIssue,
+		memory.TypeFailure,
+		memory.TypePreference,
+		memory.TypeProjectFact,
+		memory.TypeProcedure,
+		memory.TypeTemporaryState,
+	}
 	if isArchitectureReviewTask(req.Task) {
 		searchTypes = append([]string{memory.TypeReviewCheckpoint}, searchTypes...)
 	}
@@ -537,7 +565,7 @@ func (o *MemoryOrchestrator) attachReviewStrategy(ctx context.Context, req memor
 	if len(docPaths) == 0 {
 		return false, nil
 	}
-	if !o.cfg.DocIndex.Enabled {
+	if !o.cfg.DocIndex.Enabled || !o.cfg.Retrieval.EnableDocIndex {
 		return false, []string{"doc_index_disabled"}
 	}
 	if o.docRepo == nil {
@@ -551,6 +579,10 @@ func (o *MemoryOrchestrator) attachReviewStrategy(ctx context.Context, req memor
 		IgnoredItemsPolicy: ignoredItemsPolicy(checkpointID),
 	}
 	fallbackReasons := []string{}
+	checkpoint, checkpointFound := o.loadReviewCheckpoint(ctx, checkpointID)
+	if checkpointID != "" && !checkpointFound {
+		fallbackReasons = appendFallbackReasons(fallbackReasons, "checkpoint_hash_unavailable")
+	}
 	used := false
 	for _, docPath := range docPaths {
 		current, err := docindex.BuildMarkdownSnapshot(docindex.MarkdownBuildOptions{
@@ -587,7 +619,7 @@ func (o *MemoryOrchestrator) attachReviewStrategy(ctx context.Context, req memor
 			continue
 		}
 		used = true
-		mode, changedSections := reviewModeForDoc(written, snapshots)
+		mode, changedSections := reviewModeForDoc(written, snapshots, checkpoint)
 		strategy.Mode = strongerReviewMode(strategy.Mode, mode)
 		strategy.ChangedSections = appendFallbackReasons(strategy.ChangedSections, changedSections...)
 	}
@@ -599,6 +631,18 @@ func (o *MemoryOrchestrator) attachReviewStrategy(ctx context.Context, req memor
 	}
 	pack.ReviewStrategy = &strategy
 	return true, fallbackReasons
+}
+
+func (o *MemoryOrchestrator) loadReviewCheckpoint(ctx context.Context, checkpointID string) (memory.ReviewCheckpoint, bool) {
+	if checkpointID == "" || o.checkpointRepo == nil {
+		return memory.ReviewCheckpoint{}, false
+	}
+	checkpoint, found, err := o.checkpointRepo.GetReviewCheckpoint(ctx, checkpointID)
+	if err != nil {
+		o.logger.Warn("review checkpoint lookup failed", "memory_id", checkpointID, "error", err)
+		return memory.ReviewCheckpoint{}, false
+	}
+	return checkpoint, found
 }
 
 func extractMarkdownDocPaths(task string, limit int) []string {
@@ -645,7 +689,13 @@ func ignoredItemsPolicy(checkpointID string) string {
 	return "respect_checkpoint_ignored_items"
 }
 
-func reviewModeForDoc(current docindex.DocumentSnapshot, snapshots []docindex.DocumentSnapshot) (string, []string) {
+func reviewModeForDoc(current docindex.DocumentSnapshot, snapshots []docindex.DocumentSnapshot, checkpoint memory.ReviewCheckpoint) (string, []string) {
+	if target, ok := checkpointTargetHashForDoc(checkpoint, current.Path); ok {
+		mode, changedSections := reviewModeAgainstCheckpoint(current, target)
+		if mode != "full_document" || len(target.Sections) > 0 || len(snapshots) == 0 {
+			return mode, changedSections
+		}
+	}
 	previous, found := previousDocSnapshot(current, snapshots)
 	if !found {
 		return "full_document", nil
@@ -658,6 +708,181 @@ func reviewModeForDoc(current docindex.DocumentSnapshot, snapshots []docindex.Do
 		return "changed_sections", changed
 	}
 	return "full_document", nil
+}
+
+type checkpointTargetHash struct {
+	DocPath     string
+	ContentHash string
+	Sections    []checkpointSectionHash
+}
+
+type checkpointSectionHash struct {
+	SectionID   string
+	HeadingPath []string
+	ContentHash string
+}
+
+func checkpointTargetHashForDoc(checkpoint memory.ReviewCheckpoint, docPath string) (checkpointTargetHash, bool) {
+	docPath = normalizeDocPathForCompare(docPath)
+	if docPath == "" {
+		return checkpointTargetHash{}, false
+	}
+	for _, target := range parseCheckpointTargets(checkpoint.TargetHashesJSON) {
+		if normalizeDocPathForCompare(target.DocPath) == docPath {
+			return target, true
+		}
+	}
+	for _, target := range parseCheckpointTargets(checkpoint.TargetDocsJSON) {
+		if normalizeDocPathForCompare(target.DocPath) == docPath && target.ContentHash != "" {
+			return target, true
+		}
+	}
+	return checkpointTargetHash{}, false
+}
+
+func parseCheckpointTargets(raw string) []checkpointTargetHash {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var list []map[string]any
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		var single map[string]any
+		if singleErr := json.Unmarshal([]byte(raw), &single); singleErr != nil {
+			return nil
+		}
+		list = []map[string]any{single}
+	}
+	out := make([]checkpointTargetHash, 0, len(list))
+	for _, item := range list {
+		target := checkpointTargetHash{
+			DocPath:     firstStringFromMap(item, "doc_path", "path"),
+			ContentHash: firstStringFromMap(item, "content_hash", "hash"),
+			Sections:    parseCheckpointSections(item["sections"]),
+		}
+		if target.DocPath == "" && target.ContentHash == "" && len(target.Sections) == 0 {
+			continue
+		}
+		out = append(out, target)
+	}
+	return out
+}
+
+func parseCheckpointSections(raw any) []checkpointSectionHash {
+	values, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]checkpointSectionHash, 0, len(values))
+	for _, value := range values {
+		item, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		section := checkpointSectionHash{
+			SectionID:   firstStringFromMap(item, "section_id"),
+			HeadingPath: stringSliceFromAny(item["heading_path"]),
+			ContentHash: firstStringFromMap(item, "section_hash", "content_hash"),
+		}
+		if section.SectionID == "" && section.ContentHash == "" {
+			continue
+		}
+		out = append(out, section)
+	}
+	return out
+}
+
+func reviewModeAgainstCheckpoint(current docindex.DocumentSnapshot, target checkpointTargetHash) (string, []string) {
+	if target.ContentHash != "" && target.ContentHash == current.ContentHash {
+		return "checkpoint_only", nil
+	}
+	if len(target.Sections) == 0 || len(current.Sections) == 0 {
+		return "full_document", nil
+	}
+	changed := changedSectionsFromCheckpoint(current, target, 20)
+	if len(changed) == 0 && target.ContentHash == "" {
+		return "checkpoint_only", nil
+	}
+	if len(changed) > 0 && len(changed) <= 6 {
+		return "changed_sections", changed
+	}
+	return "full_document", nil
+}
+
+func changedSectionsFromCheckpoint(current docindex.DocumentSnapshot, target checkpointTargetHash, limit int) []string {
+	targetByID := make(map[string]checkpointSectionHash, len(target.Sections))
+	for _, section := range target.Sections {
+		if section.SectionID == "" {
+			continue
+		}
+		targetByID[section.SectionID] = section
+	}
+	currentByID := make(map[string]bool, len(current.Sections))
+	changed := make([]string, 0)
+	for _, section := range current.Sections {
+		currentByID[section.SectionID] = true
+		expected, ok := targetByID[section.SectionID]
+		if !ok || expected.ContentHash != section.ContentHash {
+			changed = append(changed, formatChangedSection(current.Path, section))
+		}
+		if limit > 0 && len(changed) >= limit {
+			return changed
+		}
+	}
+	for _, section := range target.Sections {
+		if section.SectionID == "" || currentByID[section.SectionID] {
+			continue
+		}
+		changed = append(changed, current.Path+"#"+checkpointSectionLabel(section))
+		if limit > 0 && len(changed) >= limit {
+			return changed
+		}
+	}
+	return changed
+}
+
+func checkpointSectionLabel(section checkpointSectionHash) string {
+	if len(section.HeadingPath) > 0 {
+		return strings.Join(section.HeadingPath, " > ")
+	}
+	return section.SectionID
+}
+
+func firstStringFromMap(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := values[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func stringSliceFromAny(raw any) []string {
+	values, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		text, ok := value.(string)
+		if !ok || strings.TrimSpace(text) == "" {
+			continue
+		}
+		out = append(out, strings.TrimSpace(text))
+	}
+	return out
+}
+
+func normalizeDocPathForCompare(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	cleaned := filepath.Clean(filepath.FromSlash(path))
+	if filepath.IsAbs(cleaned) || cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.ToSlash(cleaned)
 }
 
 func previousDocSnapshot(current docindex.DocumentSnapshot, snapshots []docindex.DocumentSnapshot) (docindex.DocumentSnapshot, bool) {
@@ -726,8 +951,15 @@ func (o *MemoryOrchestrator) expandRelations(ctx context.Context, req memory.Sea
 	if len(seedIDs) == 0 {
 		return false, nil
 	}
+	if !o.cfg.Retrieval.EnableRelationExpansion {
+		return false, []string{"relation_disabled"}
+	}
 	if o.relationRepo == nil {
 		return false, []string{"relation_unavailable"}
+	}
+	limit := o.cfg.Retrieval.MaxRelationExpansion
+	if limit <= 0 {
+		limit = defaultRelationLimit
 	}
 	expansions, err := o.relationRepo.ListRelationExpansions(ctx, RelationExpansionQuery{
 		SeedMemoryIDs:   seedIDs,
@@ -738,7 +970,7 @@ func (o *MemoryOrchestrator) expandRelations(ctx context.Context, req memory.Sea
 		Scopes:          append([]string(nil), req.Scope...),
 		IncludeArchived: req.IncludeArchived,
 		RelationTypes:   DefaultRelationTypes(),
-		Limit:           defaultRelationLimit,
+		Limit:           limit,
 	})
 	if err != nil {
 		o.logger.Warn("relation expansion failed", "error", err)
@@ -759,6 +991,9 @@ func (o *MemoryOrchestrator) expandRelations(ctx context.Context, req memory.Sea
 func (o *MemoryOrchestrator) attachCodeRefs(ctx context.Context, req memory.SearchRequest, intent RetrievalIntent, candidates map[string]Candidate, byID map[string]memory.SearchResult) (bool, []string) {
 	if !req.IncludeCodeRefs && intent != IntentCodeTask {
 		return false, nil
+	}
+	if !o.cfg.Retrieval.EnableCodeRefResolution || o.cfg.CodeIndex.Provider == "none" {
+		return false, []string{"code_index_disabled"}
 	}
 	if len(candidates) == 0 {
 		return false, nil
@@ -891,6 +1126,27 @@ func mergeRelatedCandidate(candidates map[string]Candidate, byID map[string]memo
 	candidates[item.ID] = candidate
 }
 
+func filterSupersededCandidates(candidates []Candidate) []Candidate {
+	hasReplacement := false
+	for _, candidate := range candidates {
+		if containsReason(candidate.InclusionReasons, "supersedes_relation") {
+			hasReplacement = true
+			break
+		}
+	}
+	if !hasReplacement {
+		return candidates
+	}
+	out := make([]Candidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if containsReason(candidate.InclusionReasons, "superseded_relation") {
+			continue
+		}
+		out = append(out, candidate)
+	}
+	return out
+}
+
 func searchResultFromMemory(item memory.MemoryItem) memory.SearchResult {
 	return memory.SearchResult{
 		MemoryID:   item.ID,
@@ -929,6 +1185,10 @@ func (o *MemoryOrchestrator) startTrace(ctx context.Context, input traceInput) (
 		UsedFTS:     true,
 		Status:      TraceStarted,
 		CreatedAt:   time.Now().UTC(),
+	}
+	if !o.cfg.Retrieval.EnableTrace {
+		trace.ID = newTraceID(o.logger)
+		return trace, false, []string{"trace_disabled"}
 	}
 	if o.traceRepo == nil {
 		trace.ID = newTraceID(o.logger)
@@ -969,6 +1229,9 @@ type accessLogInput struct {
 func (o *MemoryOrchestrator) writeAccessLogs(ctx context.Context, input accessLogInput) error {
 	if len(input.Results) == 0 {
 		return nil
+	}
+	if !o.cfg.Retrieval.EnableAccessLog {
+		return fmt.Errorf("access_log_disabled")
 	}
 	if o.accessLogRepo == nil {
 		return fmt.Errorf("access log repository is unavailable")
@@ -1130,6 +1393,15 @@ func appendUniqueString(values []string, value string) []string {
 		}
 	}
 	return append(values, value)
+}
+
+func containsReason(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func clampRelationWeight(value float64) float64 {

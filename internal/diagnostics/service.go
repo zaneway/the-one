@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/zaneway/the-one/internal/codeindex"
 	"github.com/zaneway/the-one/internal/config"
 	"github.com/zaneway/the-one/internal/docindex"
 	"github.com/zaneway/the-one/internal/mcp"
@@ -105,6 +106,9 @@ type StatusResponse struct {
 	Version    string                 `json:"version"`
 	Storage    StatusStorage          `json:"storage"`
 	Migrations sqlite.MigrationStatus `json:"migrations"`
+	CodeIndex  StatusCodeIndex        `json:"code_index"`
+	Embedding  StatusEmbedding        `json:"embedding"`
+	Vector     StatusVectorIndex      `json:"vector_index"`
 	Config     map[string]any         `json:"config,omitempty"`
 }
 
@@ -116,6 +120,29 @@ type StatusStorage struct {
 	FTS5              bool     `json:"fts5"`
 	SQLiteVec         bool     `json:"sqlite_vec"`
 	FallbackRetrieval []string `json:"fallback_retrieval"`
+}
+
+// StatusCodeIndex 描述 P4 Code Index 当前能力。
+type StatusCodeIndex struct {
+	Provider     string                 `json:"provider"`
+	Enabled      bool                   `json:"enabled"`
+	Capabilities codeindex.Capabilities `json:"capabilities"`
+}
+
+// StatusEmbedding 描述 P4 embedding provider 和在线降级配置。
+type StatusEmbedding struct {
+	Provider                    string `json:"provider"`
+	Model                       string `json:"model,omitempty"`
+	QueryCacheSize              int    `json:"query_cache_size"`
+	OnlineQueryEmbeddingEnabled bool   `json:"online_query_embedding_enabled"`
+}
+
+// StatusVectorIndex 描述 P4 vector index 后端和 SQLite 能力。
+type StatusVectorIndex struct {
+	Backend          string `json:"backend"`
+	SQLiteVecEnabled string `json:"sqlite_vec_enabled"`
+	SQLiteVec        bool   `json:"sqlite_vec"`
+	Available        bool   `json:"available"`
 }
 
 // StatusTool 返回存储能力、migration 状态和可选配置摘要。
@@ -144,6 +171,19 @@ func (s *Service) StatusTool(_ context.Context, raw json.RawMessage) (any, *mcp.
 			FallbackRetrieval: storeStatus.Capabilities.FallbackRetrieval,
 		},
 		Migrations: storeStatus.Migrations,
+		CodeIndex:  statusCodeIndex(s.cfg),
+		Embedding: StatusEmbedding{
+			Provider:                    s.cfg.Embedding.Provider,
+			Model:                       s.cfg.Embedding.Model,
+			QueryCacheSize:              s.cfg.Embedding.QueryCacheSize,
+			OnlineQueryEmbeddingEnabled: s.cfg.Embedding.OnlineQueryEmbeddingEnabled,
+		},
+		Vector: StatusVectorIndex{
+			Backend:          s.cfg.VectorIndex.Backend,
+			SQLiteVecEnabled: firstNonEmptyString(s.cfg.VectorIndex.SQLiteVecEnabled, s.cfg.Storage.SQLiteVecEnabled),
+			SQLiteVec:        storeStatus.Capabilities.SQLiteVec,
+			Available:        s.cfg.VectorIndex.Backend != "none" && storeStatus.Capabilities.SQLiteVec,
+		},
 	}
 	// include_config=true 时暴露非敏感配置摘要（processor/automation/embedding/retention）
 	// 不暴露路径、密钥等敏感信息
@@ -160,12 +200,45 @@ func (s *Service) StatusTool(_ context.Context, raw json.RawMessage) (any, *mcp.
 			"automation_retry_base_delay_ms":     s.cfg.Automation.RetryBaseDelayMS,
 			"automation_running_timeout_ms":      s.cfg.Automation.RunningTimeoutMS,
 			"embedding_provider":                 s.cfg.Embedding.Provider,
+			"embedding_query_cache_size":         s.cfg.Embedding.QueryCacheSize,
+			"embedding_online_query_enabled":     s.cfg.Embedding.OnlineQueryEmbeddingEnabled,
+			"vector_index_backend":               s.cfg.VectorIndex.Backend,
+			"codeindex_provider":                 s.cfg.CodeIndex.Provider,
+			"codeindex_max_resolve_refs":         s.cfg.CodeIndex.MaxResolveRefs,
 			"retention_job_enabled":              s.cfg.Retention.JobEnabled,
 			"retrieval_timeout_ms":               s.cfg.Retrieval.OnlineTimeoutMS,
 			"default_token_budget":               s.cfg.Retrieval.DefaultTokenBudget,
+			"retrieval_max_relation_expansion":   s.cfg.Retrieval.MaxRelationExpansion,
+			"retrieval_max_candidates_rerank":    s.cfg.Retrieval.MaxCandidatesBeforeRerank,
 			"sqlite_vec_enabled":                 s.cfg.Storage.SQLiteVecEnabled,
 			"storage_busy_timeout_ms":            s.cfg.Storage.BusyTimeoutMS,
 		}
 	}
 	return response, nil
+}
+
+func statusCodeIndex(cfg config.Config) StatusCodeIndex {
+	status := StatusCodeIndex{
+		Provider: cfg.CodeIndex.Provider,
+		Enabled:  cfg.CodeIndex.Provider != "none",
+	}
+	if status.Enabled {
+		status.Capabilities = codeindex.Capabilities{
+			Provider:        cfg.CodeIndex.Provider,
+			FilePathResolve: true,
+			SymbolResolve:   true,
+			CallGraph:       false,
+			Impact:          false,
+		}
+	}
+	return status
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

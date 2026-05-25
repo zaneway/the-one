@@ -33,3 +33,20 @@ func TestDetectSearchIntentUsesHint(t *testing.T) {
 		t.Fatalf("DetectSearchIntent() = %q, want hint %q", got, IntentFailureRecall)
 	}
 }
+
+func TestDetectContextIntentUsesHint(t *testing.T) {
+	req := ContextRequest{
+		Task:       "继续复查 internal/retrieval/rerank.go 的详细设计",
+		IntentHint: IntentCodeTask,
+	}
+	if got := DetectContextIntent(req); got != IntentCodeTask {
+		t.Fatalf("DetectContextIntent() = %q, want hint %q", got, IntentCodeTask)
+	}
+}
+
+func TestDetectIntentPriorityKeepsArchitectureReviewAheadOfCodeTask(t *testing.T) {
+	got := DetectIntent("", "复查 internal/retrieval/rerank.go 的详细设计是否有逻辑缺失")
+	if got != IntentArchitectureReview {
+		t.Fatalf("DetectIntent() = %q, want architecture review priority", got)
+	}
+}

@@ -130,6 +130,43 @@ func TestScopeFitAllowsUserGlobalPreference(t *testing.T) {
 	}
 }
 
+func TestScoreCandidateAppliesConflictStalenessAndContextCostPenalty(t *testing.T) {
+	now := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+	candidate := Candidate{
+		Memory: memory.MemoryItem{
+			ID:         "mem_penalty",
+			Scope:      memory.ScopeProjectLocal,
+			MemoryType: memory.TypeDecision,
+			Content:    "这是一个非常长的历史设计结论，用于验证上下文成本惩罚会进入最终分数。",
+			State:      memory.StateStable,
+			Tier:       memory.TierLongTerm,
+			UpdatedAt:  now,
+		},
+		FTSScore:         0.95,
+		RelationSupport:  0.7,
+		ConflictPenalty:  1.0,
+		StalenessPenalty: 0.8,
+	}
+
+	score := ScoreCandidate(&candidate, RerankOptions{
+		Query:       "历史设计结论",
+		Scopes:      []string{memory.ScopeProjectLocal},
+		Intent:      IntentGeneralSearch,
+		TokenBudget: 10,
+		Now:         now,
+	})
+
+	if score.ConflictPenalty != 1.0 || score.StalenessPenalty != 0.8 {
+		t.Fatalf("penalties = conflict %v stale %v, want explicit penalties", score.ConflictPenalty, score.StalenessPenalty)
+	}
+	if score.ContextCostPenalty == 0 {
+		t.Fatalf("context cost penalty = 0, want long content penalty")
+	}
+	if score.Final >= 0.8 {
+		t.Fatalf("final score = %v, want penalties to reduce final score", score.Final)
+	}
+}
+
 func contains(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {

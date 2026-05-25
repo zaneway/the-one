@@ -607,6 +607,10 @@ type SearchDiagnostics struct {
 
 // SearchResponse memory.search 响应结构体
 type SearchResponse struct {
+	// RetrievalTraceID 检索追踪ID
+	// P4 在线检索会同时填充顶层字段和 diagnostics.retrieval_trace_id，便于调用方直接关联 access log。
+	RetrievalTraceID string `json:"retrieval_trace_id,omitempty"`
+
 	// Results 搜索结果列表
 	Results []SearchResult `json:"results"`
 

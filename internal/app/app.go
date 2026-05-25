@@ -54,13 +54,18 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	diagnosticService := diagnostics.NewService(version, cfg, store)
 	diagnostics.RegisterTools(registry, diagnosticService)
 	// Step 5: 注册 P1/P4 记忆工具（remember/review 保持 P1，search/context 通过 P4-C1 Orchestrator 写 trace/access log）
+	var codeIndexAdapter retrieval.CodeIndexAdapter
+	if cfg.CodeIndex.Provider != "none" {
+		codeIndexAdapter = codeindex.NewLocalBasicAdapter(cfg.CodeIndex, "")
+	}
 	retrievalOrchestrator := retrieval.NewMemoryOrchestrator(cfg, store,
 		retrieval.WithTraceRepository(store),
 		retrieval.WithAccessLogRepository(store),
 		retrieval.WithRelationRepository(store),
 		retrieval.WithCodeRefRepository(store),
-		retrieval.WithCodeIndexAdapter(codeindex.NewLocalBasicAdapter(cfg.CodeIndex, "")),
+		retrieval.WithCodeIndexAdapter(codeIndexAdapter),
 		retrieval.WithDocSnapshotRepository(store),
+		retrieval.WithReviewCheckpointRepository(store),
 		retrieval.WithLogger(logger),
 	)
 	memoryService := memory.NewService(cfg, store, memory.WithRetrievalOrchestrator(retrievalOrchestrator))

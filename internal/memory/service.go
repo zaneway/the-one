@@ -300,7 +300,7 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse
 	diag.RetrievalIntent = "general_search"
 	diag.RetrievalMode = "fts_metadata"
 	diag.UsedFTS = true
-	return SearchResponse{Results: results, Diagnostics: diag}, nil
+	return SearchResponse{RetrievalTraceID: traceID, Results: results, Diagnostics: diag}, nil
 }
 
 // Context 构造 P1 压缩上下文包，为 Agent 提供可注入 prompt 的记忆集合。

@@ -50,6 +50,14 @@ type Config struct {
 	// P4 默认启用 Markdown snapshot，只保存路径、hash、标题和摘要，不保存完整正文
 	DocIndex DocIndexConfig `yaml:"docindex" json:"docindex"`
 
+	// VectorIndex 向量索引配置
+	// P4 默认 none，向量能力作为可选增强，不影响 FTS + metadata + relation 基础路径
+	VectorIndex VectorIndexConfig `yaml:"vector_index" json:"vector_index"`
+
+	// AccessLog 访问反馈日志配置
+	// 控制 retrieved/injected 明细保留周期和清理前是否需要聚合
+	AccessLog AccessLogConfig `yaml:"access_log" json:"access_log"`
+
 	// Retention 保留配置
 	// retention job 默认策略，P0不启动后台retention job
 	Retention RetentionConfig `yaml:"retention" json:"retention"`
@@ -188,6 +196,27 @@ type RetrievalConfig struct {
 	// 在线检索的超时时间，默认100ms
 	// 外部模型调用不能进入该时间预算
 	OnlineTimeoutMS int `yaml:"online_timeout_ms" json:"online_timeout_ms"`
+
+	// MaxRelationExpansion 单次 relation expansion 上限，默认 20。
+	MaxRelationExpansion int `yaml:"max_relation_expansion" json:"max_relation_expansion"`
+
+	// MaxCandidatesBeforeRerank rerank 前候选上限，默认 80。
+	MaxCandidatesBeforeRerank int `yaml:"max_candidates_before_rerank" json:"max_candidates_before_rerank"`
+
+	// EnableTrace 是否写入 retrieval_trace，默认 true。
+	EnableTrace bool `yaml:"enable_trace" json:"enable_trace"`
+
+	// EnableAccessLog 是否写入 memory_access_log，默认 true。
+	EnableAccessLog bool `yaml:"enable_access_log" json:"enable_access_log"`
+
+	// EnableRelationExpansion 是否启用一跳 relation expansion，默认 true。
+	EnableRelationExpansion bool `yaml:"enable_relation_expansion" json:"enable_relation_expansion"`
+
+	// EnableCodeRefResolution 是否在线解析 code_ref，默认 true。
+	EnableCodeRefResolution bool `yaml:"enable_code_ref_resolution" json:"enable_code_ref_resolution"`
+
+	// EnableDocIndex 是否在架构复查任务中启用 Doc Index strategy，默认 true。
+	EnableDocIndex bool `yaml:"enable_doc_index" json:"enable_doc_index"`
 }
 
 // EmbeddingConfig 嵌入配置结构体
@@ -201,6 +230,12 @@ type EmbeddingConfig struct {
 	// Model 嵌入模型
 	// 嵌入模型名称，Provider为none时为空
 	Model string `yaml:"model" json:"model"`
+
+	// QueryCacheSize 查询 embedding 进程内缓存容量，默认 256。
+	QueryCacheSize int `yaml:"query_cache_size" json:"query_cache_size"`
+
+	// OnlineQueryEmbeddingEnabled 是否允许在线生成 query embedding，默认 false。
+	OnlineQueryEmbeddingEnabled bool `yaml:"online_query_embedding_enabled" json:"online_query_embedding_enabled"`
 }
 
 // CodeIndexConfig 代码索引配置结构体。
@@ -218,6 +253,30 @@ type CodeIndexConfig struct {
 
 	// MaxResolveRefs 单次在线解析 code_ref 的最大数量，默认 30。
 	MaxResolveRefs int `yaml:"max_resolve_refs" json:"max_resolve_refs"`
+}
+
+// VectorIndexConfig 向量索引配置结构体。
+// backend=none 是 P4 默认路径；sqlite_vec 只在后续可选增强中启用。
+type VectorIndexConfig struct {
+	// Backend 向量索引后端，可选 none、blob、sqlite_vec。
+	Backend string `yaml:"backend" json:"backend"`
+
+	// SQLiteVecEnabled sqlite-vec 能力开关，auto/true/false。
+	// 为空时兼容回退到 storage.sqlite_vec_enabled。
+	SQLiteVecEnabled string `yaml:"sqlite_vec_enabled" json:"sqlite_vec_enabled"`
+}
+
+// AccessLogConfig 访问反馈日志配置结构体。
+// 清理任务只删除低价值明细，不影响在线检索结果。
+type AccessLogConfig struct {
+	// RetentionDaysRetrieved retrieved 明细保留天数，默认 30。
+	RetentionDaysRetrieved int `yaml:"retention_days_retrieved" json:"retention_days_retrieved"`
+
+	// RetentionDaysInjected injected 明细保留天数，默认 180。
+	RetentionDaysInjected int `yaml:"retention_days_injected" json:"retention_days_injected"`
+
+	// AggregateBeforeCleanup 清理前是否要求聚合，默认 true；当前 P4 仅保留配置语义。
+	AggregateBeforeCleanup bool `yaml:"aggregate_before_cleanup" json:"aggregate_before_cleanup"`
 }
 
 // DocIndexConfig 文档索引配置结构体。
@@ -363,13 +422,22 @@ func Default() Config {
 			DefaultAgentType:             "unknown",
 		},
 		Retrieval: RetrievalConfig{
-			DefaultLimit:       10,
-			DefaultTokenBudget: 1800,
-			OnlineTimeoutMS:    100,
+			DefaultLimit:              10,
+			DefaultTokenBudget:        1800,
+			OnlineTimeoutMS:           100,
+			MaxRelationExpansion:      20,
+			MaxCandidatesBeforeRerank: 80,
+			EnableTrace:               true,
+			EnableAccessLog:           true,
+			EnableRelationExpansion:   true,
+			EnableCodeRefResolution:   true,
+			EnableDocIndex:            true,
 		},
 		Embedding: EmbeddingConfig{
-			Provider: "none",
-			Model:    "",
+			Provider:                    "none",
+			Model:                       "",
+			QueryCacheSize:              256,
+			OnlineQueryEmbeddingEnabled: false,
 		},
 		CodeIndex: CodeIndexConfig{
 			Provider:       "local_basic",
@@ -383,6 +451,15 @@ func Default() Config {
 			MaxSections:         200,
 			MaxSnapshotsPerDoc:  10,
 			StoreSectionSummary: true,
+		},
+		VectorIndex: VectorIndexConfig{
+			Backend:          "none",
+			SQLiteVecEnabled: "auto",
+		},
+		AccessLog: AccessLogConfig{
+			RetentionDaysRetrieved: 30,
+			RetentionDaysInjected:  180,
+			AggregateBeforeCleanup: true,
 		},
 		Retention: RetentionConfig{
 			JobEnabled:       false,
@@ -477,10 +554,28 @@ func validate(cfg Config) error {
 	if strings.TrimSpace(cfg.Processor.Provider) == "" || cfg.Processor.MaxRelatedEvents <= 0 || cfg.Processor.MaxCandidatesPerEvent <= 0 {
 		return errors.New("CONFIG_INVALID: processor config values must be positive and provider is required")
 	}
+	if cfg.Retrieval.DefaultLimit <= 0 || cfg.Retrieval.DefaultTokenBudget <= 0 || cfg.Retrieval.OnlineTimeoutMS <= 0 ||
+		cfg.Retrieval.MaxRelationExpansion <= 0 || cfg.Retrieval.MaxCandidatesBeforeRerank <= 0 {
+		return errors.New("CONFIG_INVALID: retrieval config values must be positive")
+	}
+	if cfg.Embedding.QueryCacheSize <= 0 {
+		return errors.New("CONFIG_INVALID: embedding.query_cache_size must be positive")
+	}
+	if cfg.AccessLog.RetentionDaysRetrieved <= 0 || cfg.AccessLog.RetentionDaysInjected <= 0 {
+		return errors.New("CONFIG_INVALID: access_log retention values must be positive")
+	}
+	if strings.TrimSpace(cfg.VectorIndex.Backend) == "" {
+		cfg.VectorIndex.Backend = "none"
+	}
+	switch cfg.VectorIndex.Backend {
+	case "none", "blob", "sqlite_vec":
+	default:
+		return fmt.Errorf("CONFIG_INVALID: unsupported vector_index backend %q", cfg.VectorIndex.Backend)
+	}
 	if strings.TrimSpace(cfg.CodeIndex.Provider) == "" || cfg.CodeIndex.MaxFileSizeKB <= 0 || cfg.CodeIndex.MaxResolveRefs <= 0 {
 		return errors.New("CONFIG_INVALID: codeindex config values must be positive and provider is required")
 	}
-	if cfg.CodeIndex.Provider != "local_basic" {
+	if cfg.CodeIndex.Provider != "local_basic" && cfg.CodeIndex.Provider != "none" {
 		return fmt.Errorf("CONFIG_INVALID: unsupported codeindex provider %q", cfg.CodeIndex.Provider)
 	}
 	if cfg.DocIndex.MaxDocSizeKB <= 0 || cfg.DocIndex.MaxSections <= 0 || cfg.DocIndex.MaxSnapshotsPerDoc <= 0 {

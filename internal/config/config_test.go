@@ -43,6 +43,20 @@ func TestLoadDefaults(t *testing.T) {
 	if !cfg.DocIndex.Enabled || cfg.DocIndex.MaxDocSizeKB != 512 || cfg.DocIndex.MaxSections != 200 || cfg.DocIndex.MaxSnapshotsPerDoc != 10 {
 		t.Fatalf("docindex defaults = %+v, want enabled bounded markdown snapshot", cfg.DocIndex)
 	}
+	if !cfg.Retrieval.EnableTrace || !cfg.Retrieval.EnableAccessLog || !cfg.Retrieval.EnableRelationExpansion ||
+		!cfg.Retrieval.EnableCodeRefResolution || !cfg.Retrieval.EnableDocIndex ||
+		cfg.Retrieval.MaxRelationExpansion != 20 || cfg.Retrieval.MaxCandidatesBeforeRerank != 80 {
+		t.Fatalf("retrieval P4 defaults = %+v, want enabled bounded retrieval", cfg.Retrieval)
+	}
+	if cfg.Embedding.QueryCacheSize != 256 || cfg.Embedding.OnlineQueryEmbeddingEnabled {
+		t.Fatalf("embedding P4 defaults = %+v, want cache=256 and online disabled", cfg.Embedding)
+	}
+	if cfg.VectorIndex.Backend != "none" || cfg.VectorIndex.SQLiteVecEnabled != "auto" {
+		t.Fatalf("vector index defaults = %+v, want none/auto", cfg.VectorIndex)
+	}
+	if cfg.AccessLog.RetentionDaysRetrieved != 30 || cfg.AccessLog.RetentionDaysInjected != 180 || !cfg.AccessLog.AggregateBeforeCleanup {
+		t.Fatalf("access log defaults = %+v, want retrieved=30 injected=180 aggregate=true", cfg.AccessLog)
+	}
 }
 
 func TestLoadEnvAndOverrides(t *testing.T) {
@@ -90,6 +104,14 @@ func TestValidateRejectsInvalidCodeIndexConfig(t *testing.T) {
 	cfg.CodeIndex.Provider = "remote_lsp"
 	if err := validate(cfg); err == nil {
 		t.Fatal("validate() error = nil, want invalid codeindex provider")
+	}
+}
+
+func TestValidateAllowsDisabledCodeIndexProvider(t *testing.T) {
+	cfg := Default()
+	cfg.CodeIndex.Provider = "none"
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate() error = %v, want provider=none allowed", err)
 	}
 }
 

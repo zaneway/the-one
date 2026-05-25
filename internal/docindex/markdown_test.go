@@ -75,3 +75,82 @@ func TestBuildMarkdownSnapshotLargeFileOnlyHashesDocument(t *testing.T) {
 		t.Fatalf("snapshot = %+v, want file hash without sections", snapshot)
 	}
 }
+
+func TestBuildMarkdownSnapshotHashIsStableForLineEndingAndTrailingSpaces(t *testing.T) {
+	root := t.TempDir()
+	docPath := filepath.Join(root, "stable.md")
+	if err := os.WriteFile(docPath, []byte("# Design  \r\nline with trailing spaces  \r\n## Scope\t \r\nbody\t \r\n"), 0o644); err != nil {
+		t.Fatalf("write markdown v1: %v", err)
+	}
+	first, err := BuildMarkdownSnapshot(MarkdownBuildOptions{
+		WorkspaceID:  "ws",
+		RepoID:       root,
+		Path:         "stable.md",
+		MaxDocSizeKB: 64,
+		MaxSections:  10,
+	})
+	if err != nil {
+		t.Fatalf("BuildMarkdownSnapshot(v1) error = %v", err)
+	}
+	if err := os.WriteFile(docPath, []byte("# Design\nline with trailing spaces\n## Scope\nbody\n"), 0o644); err != nil {
+		t.Fatalf("write markdown v2: %v", err)
+	}
+	second, err := BuildMarkdownSnapshot(MarkdownBuildOptions{
+		WorkspaceID:  "ws",
+		RepoID:       root,
+		Path:         "stable.md",
+		MaxDocSizeKB: 64,
+		MaxSections:  10,
+	})
+	if err != nil {
+		t.Fatalf("BuildMarkdownSnapshot(v2) error = %v", err)
+	}
+	if first.ContentHash != second.ContentHash {
+		t.Fatalf("content hash changed: first=%s second=%s", first.ContentHash, second.ContentHash)
+	}
+	if len(first.Sections) != len(second.Sections) || first.Sections[1].ContentHash != second.Sections[1].ContentHash {
+		t.Fatalf("section hash mismatch: first=%+v second=%+v", first.Sections, second.Sections)
+	}
+}
+
+func TestBuildMarkdownSnapshotRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("# Outside\n"), 0o644); err != nil {
+		t.Fatalf("write outside markdown: %v", err)
+	}
+	linkPath := filepath.Join(root, "link.md")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+	_, err := BuildMarkdownSnapshot(MarkdownBuildOptions{
+		WorkspaceID:  "ws",
+		RepoID:       root,
+		Path:         "link.md",
+		MaxDocSizeKB: 64,
+		MaxSections:  10,
+	})
+	if err == nil {
+		t.Fatal("BuildMarkdownSnapshot() error = nil, want symlink escape rejection")
+	}
+}
+
+func TestBuildMarkdownSnapshotRespectsMaxSections(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "limited.md"), []byte("# A\n\n## B\n\n## C\n"), 0o644); err != nil {
+		t.Fatalf("write markdown: %v", err)
+	}
+	snapshot, err := BuildMarkdownSnapshot(MarkdownBuildOptions{
+		WorkspaceID:  "ws",
+		RepoID:       root,
+		Path:         "limited.md",
+		MaxDocSizeKB: 64,
+		MaxSections:  1,
+	})
+	if err != nil {
+		t.Fatalf("BuildMarkdownSnapshot() error = %v", err)
+	}
+	if snapshot.SectionCount != 1 || len(snapshot.Sections) != 1 || snapshot.Sections[0].SectionID != "a" {
+		t.Fatalf("snapshot sections = %+v, want only first section", snapshot.Sections)
+	}
+}

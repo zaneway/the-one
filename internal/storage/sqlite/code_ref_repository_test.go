@@ -113,6 +113,41 @@ func TestP4B3CodeRefRepositoryUpdateStatusAndListByRepoFile(t *testing.T) {
 	}
 }
 
+func TestP4B3CodeRefRepositoryListForRefreshRequiresRepo(t *testing.T) {
+	ctx := context.Background()
+	store := openP4B3TestStore(t)
+	defer store.Close()
+
+	if _, err := store.ListCodeRefsForRefresh(ctx, "", 10); err == nil {
+		t.Fatal("ListCodeRefsForRefresh() without repo_id error = nil, want validation error")
+	}
+	if _, err := store.WriteCodeRef(ctx, memory.CodeRef{
+		ID:            "cr_refresh_unresolved",
+		MemoryID:      "mem_refresh",
+		RepoID:        "repo_refresh",
+		FilePath:      "a.go",
+		ResolveStatus: memory.CodeRefStatusUnresolved,
+	}); err != nil {
+		t.Fatalf("WriteCodeRef(unresolved) error = %v", err)
+	}
+	if _, err := store.WriteCodeRef(ctx, memory.CodeRef{
+		ID:            "cr_refresh_missing",
+		MemoryID:      "mem_refresh",
+		RepoID:        "repo_refresh",
+		FilePath:      "b.go",
+		ResolveStatus: memory.CodeRefStatusMissing,
+	}); err != nil {
+		t.Fatalf("WriteCodeRef(missing) error = %v", err)
+	}
+	refs, err := store.ListCodeRefsForRefresh(ctx, "repo_refresh", 10)
+	if err != nil {
+		t.Fatalf("ListCodeRefsForRefresh() error = %v", err)
+	}
+	if len(refs) != 1 || refs[0].ID != "cr_refresh_unresolved" {
+		t.Fatalf("refresh refs = %+v, want unresolved/resolved/stale only", refs)
+	}
+}
+
 func TestP4B3CodeRefRepositoryDeleteAndValidation(t *testing.T) {
 	ctx := context.Background()
 	store := openP4B3TestStore(t)

@@ -503,7 +503,7 @@ func TestServiceRunsP4JobsThroughDispatcher(t *testing.T) {
 		JobType:     automation.JobTypeResolveCodeRef,
 		TargetType:  automation.TargetTypeMemoryItem,
 		TargetID:    "mem_p4_code",
-		PayloadJSON: `{"repo_id":"repo_p4","file_path":"internal/memory/service.go","symbol":"Service.Search","content_hash":"sha256:code"}`,
+		PayloadJSON: `{"repo_id":"repo_p4","file_path":"internal/memory/service.go","symbol":"Service.Search","content_hash":"sha256:code","resolve_mode":"adapter"}`,
 		NextRunAt:   now,
 	}); err != nil {
 		t.Fatalf("EnqueueJob(job_p4_code_ref) error = %v", err)
@@ -515,6 +515,39 @@ func TestServiceRunsP4JobsThroughDispatcher(t *testing.T) {
 	}
 	if len(refs) != 1 || refs[0].RepoID != "repo_p4" || refs[0].ResolveStatus != memory.CodeRefStatusStale || refs[0].ContentHash == "sha256:code" {
 		t.Fatalf("code refs = %+v, want one stale ref with refreshed hash", refs)
+	}
+
+	repoRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repoRoot, "worker.go"), []byte("package demo\n\nfunc RefreshMe() {}\n"), 0o644); err != nil {
+		t.Fatalf("write worker.go: %v", err)
+	}
+	if _, err := store.WriteCodeRef(ctx, memory.CodeRef{
+		ID:            "cr_refresh",
+		MemoryID:      "mem_refresh",
+		RepoID:        repoRoot,
+		FilePath:      "worker.go",
+		Symbol:        "RefreshMe",
+		ResolveStatus: memory.CodeRefStatusUnresolved,
+	}); err != nil {
+		t.Fatalf("WriteCodeRef(refresh) error = %v", err)
+	}
+	if _, _, err := store.EnqueueJob(ctx, automation.AsyncJob{
+		ID:          "job_p4_refresh_code_ref",
+		JobType:     automation.JobTypeRefreshCodeRefStatus,
+		TargetType:  automation.TargetTypeRepo,
+		TargetID:    repoRoot,
+		PayloadJSON: `{"repo_root":"` + repoRoot + `"}`,
+		NextRunAt:   now.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("EnqueueJob(job_p4_refresh_code_ref) error = %v", err)
+	}
+	runNextJob(t, ctx, store, service, automation.JobTypeRefreshCodeRefStatus, repoRoot)
+	refreshed, err := store.GetCodeRef(ctx, "cr_refresh")
+	if err != nil {
+		t.Fatalf("GetCodeRef(cr_refresh) error = %v", err)
+	}
+	if refreshed.ResolveStatus != memory.CodeRefStatusResolved || refreshed.ContentHash == "" {
+		t.Fatalf("refreshed code ref = %+v, want resolved with hash", refreshed)
 	}
 
 	if _, _, err := store.EnqueueJob(ctx, automation.AsyncJob{
