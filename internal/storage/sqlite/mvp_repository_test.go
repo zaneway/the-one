@@ -128,6 +128,39 @@ func TestP5AAcceptanceTaskRepositoryRecordAndList(t *testing.T) {
 	if _, err := store.ListAcceptanceTasks(ctx, mvp.TaskQuery{}); err == nil {
 		t.Fatal("ListAcceptanceTasks() without run_id error = nil, want validation error")
 	}
+	if _, err := store.RecordTask(ctx, mvp.AcceptanceTask{
+		RunID:       "mvp_run_missing",
+		ScenarioID:  "mvp_03_decision_recall",
+		AgentType:   mvp.AgentCodex,
+		TaskSuccess: true,
+	}); err == nil {
+		t.Fatal("RecordTask() with missing run error = nil, want not found error")
+	}
+	if _, err := store.RecordTask(ctx, mvp.AcceptanceTask{
+		RunID:       run.ID,
+		ScenarioID:  "mvp_03_decision_recall",
+		AgentType:   "unknown_agent",
+		TaskSuccess: true,
+	}); err == nil {
+		t.Fatal("RecordTask() with unknown agent error = nil, want validation error")
+	}
+	if _, err := store.RecordTask(ctx, mvp.AcceptanceTask{
+		RunID:       run.ID,
+		ScenarioID:  "unknown_scenario",
+		AgentType:   mvp.AgentCodex,
+		TaskSuccess: true,
+	}); err == nil {
+		t.Fatal("RecordTask() with unknown scenario error = nil, want validation error")
+	}
+	if _, err := store.RecordTask(ctx, mvp.AcceptanceTask{
+		RunID:       run.ID,
+		ScenarioID:  "mvp_03_decision_recall",
+		AgentType:   mvp.AgentCodex,
+		Status:      "unknown_status",
+		TaskSuccess: true,
+	}); err == nil {
+		t.Fatal("RecordTask() with invalid status error = nil, want validation error")
+	}
 }
 
 func TestP5AMetricRepositoryUpsertAndList(t *testing.T) {
@@ -229,6 +262,30 @@ func TestP5AAgentCapabilityRepositoryUpsertAndList(t *testing.T) {
 	}
 	if _, err := store.ListAgentCapabilities(ctx, mvp.CapabilityQuery{}); err == nil {
 		t.Fatal("ListAgentCapabilities() without run_id error = nil, want validation error")
+	}
+	if _, err := store.UpsertAgentCapability(ctx, mvp.AgentCapability{
+		RunID:        "mvp_run_missing",
+		AgentType:    mvp.AgentCodex,
+		CaptureLevel: 4,
+		Completeness: 0.95,
+	}); err == nil {
+		t.Fatal("UpsertAgentCapability() with missing run error = nil, want not found error")
+	}
+	if _, err := store.UpsertAgentCapability(ctx, mvp.AgentCapability{
+		RunID:        run.ID,
+		AgentType:    "unknown_agent",
+		CaptureLevel: 4,
+		Completeness: 0.95,
+	}); err == nil {
+		t.Fatal("UpsertAgentCapability() with unknown agent error = nil, want validation error")
+	}
+	if _, err := store.UpsertAgentCapability(ctx, mvp.AgentCapability{
+		RunID:        run.ID,
+		AgentType:    mvp.AgentCodex,
+		CaptureLevel: 4,
+		Completeness: 1.1,
+	}); err == nil {
+		t.Fatal("UpsertAgentCapability() with invalid completeness error = nil, want validation error")
 	}
 }
 

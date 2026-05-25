@@ -12,6 +12,7 @@ import (
 type MVPService interface {
 	StartRun(ctx context.Context, req mvp.StartRunRequest) (mvp.StartRunResponse, error)
 	RecordTask(ctx context.Context, req mvp.RecordTaskRequest) (mvp.RecordTaskResponse, error)
+	RecordCapability(ctx context.Context, req mvp.RecordCapabilityRequest) (mvp.RecordCapabilityResponse, error)
 	ComputeMetrics(ctx context.Context, req mvp.ComputeMetricsRequest) (mvp.ComputeMetricsResponse, error)
 	Report(ctx context.Context, req mvp.ReportRequest) (mvp.ReportResponse, error)
 }
@@ -38,6 +39,18 @@ func RegisterMVPTools(registry *mcp.Registry, service MVPService, logger *slog.L
 		resp, err := service.RecordTask(ctx, req)
 		if err != nil {
 			logger.Warn("mvp task record failed", "error", err)
+			return nil, toMCPError(err)
+		}
+		return resp, nil
+	})
+	registry.Register("memory.mvp.capability.record", func(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
+		var req mvp.RecordCapabilityRequest
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return nil, validationError("invalid mvp capability.record params")
+		}
+		resp, err := service.RecordCapability(ctx, req)
+		if err != nil {
+			logger.Warn("mvp capability record failed", "error", err)
 			return nil, toMCPError(err)
 		}
 		return resp, nil

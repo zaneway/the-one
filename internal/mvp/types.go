@@ -45,6 +45,7 @@ const (
 	MetricLevel4CapabilityCoverage     = "level4_capability_coverage"
 	MetricReviewContextTokenSavings    = "review_context_token_savings"
 	MetricWriteBlockingErrorCount      = "write_blocking_error_count"
+	MetricTaskSuccessRate              = "task_success_rate"
 )
 
 const (
@@ -64,6 +65,31 @@ const (
 	AgentClaudeCode = "claude_code"
 	AgentCursor     = "cursor"
 )
+
+// RequiredCertificationAgents 返回 P5-D 必须单独认证的 Agent 集合。
+func RequiredCertificationAgents() []string {
+	return []string{AgentCodex, AgentClaudeCode, AgentCursor}
+}
+
+// IsCertificationAgent 校验 agent_type 是否属于 P5-D 认证范围。
+func IsCertificationAgent(agentType string) bool {
+	for _, item := range RequiredCertificationAgents() {
+		if agentType == item {
+			return true
+		}
+	}
+	return false
+}
+
+// IsTaskStatus 校验 P5 task 结果状态，空值表示由存储层按 task_success 推导。
+func IsTaskStatus(status string) bool {
+	switch status {
+	case "", TaskStatusRunning, TaskStatusPassed, TaskStatusFailed, TaskStatusSkipped:
+		return true
+	default:
+		return false
+	}
+}
 
 // AcceptanceRun 表示一次 P5 MVP 验收。该结构只保存验收摘要和关联标识，不保存完整对话或工具输出。
 type AcceptanceRun struct {

@@ -37,6 +37,10 @@ func TestRetrievalLatencyP95MS(t *testing.T) {
 	if failed.MetricValue != 130 || failed.Passed {
 		t.Fatalf("p95 sample = %+v, want 130 failed", failed)
 	}
+	missing := RetrievalLatencyP95MS("run_1", nil)
+	if missing.Passed || missing.Denominator != 0 {
+		t.Fatalf("missing p95 sample = %+v, want failed zero denominator", missing)
+	}
 }
 
 func TestCapabilityCoverageAndCompleteness(t *testing.T) {
@@ -108,4 +112,66 @@ func TestBuildMetricSamplesFailsMissingCertificationAgents(t *testing.T) {
 	if missingFailures != 4 {
 		t.Fatalf("missing failure samples = %d, want 4", missingFailures)
 	}
+}
+
+func TestBuildMetricSamplesFailsWhenTaskFailedDespitePassingObservedMetrics(t *testing.T) {
+	samples := buildMetricSamples("run_1", []AcceptanceTask{
+		{
+			ID:          "task_1",
+			RunID:       "run_1",
+			ScenarioID:  "mvp_01_task_continuation",
+			AgentType:   AgentCodex,
+			Status:      TaskStatusFailed,
+			TaskSuccess: false,
+			ObservedJSON: `{
+				"repeated_explanation_count": 0,
+				"task_state_recall": 1,
+				"baseline_context_tokens": 1000,
+				"candidate_context_tokens": 500
+			}`,
+		},
+	}, fullTestCapabilities("run_1"), []float64{30})
+
+	summary := summarizeMetrics(samples)
+	if summary.EngineMVPPassed {
+		t.Fatalf("summary = %+v, want failed task to fail engine mvp", summary)
+	}
+	var sawTaskSuccess, sawTokenSavings bool
+	for _, sample := range samples {
+		switch sample.MetricName {
+		case MetricTaskSuccessRate:
+			sawTaskSuccess = true
+			if sample.Passed {
+				t.Fatalf("task success sample = %+v, want failed", sample)
+			}
+		case MetricTokenSavings:
+			sawTokenSavings = true
+			if sample.Passed {
+				t.Fatalf("token savings sample = %+v, want failed because task failed", sample)
+			}
+		}
+	}
+	if !sawTaskSuccess || !sawTokenSavings {
+		t.Fatalf("samples = %+v, want task_success_rate and token_savings", samples)
+	}
+}
+
+func fullTestCapabilities(runID string) []AgentCapability {
+	out := make([]AgentCapability, 0, len(RequiredCertificationAgents()))
+	for _, agentType := range RequiredCertificationAgents() {
+		out = append(out, AgentCapability{
+			ID:                  "cap_" + agentType,
+			RunID:               runID,
+			AgentType:           agentType,
+			ConversationCapture: true,
+			ToolCallCapture:     true,
+			ToolOutputCapture:   true,
+			FileEditCapture:     true,
+			SessionLifecycle:    true,
+			MemoryObserve:       true,
+			CapabilityCoverage:  1,
+			Completeness:        0.95,
+		})
+	}
+	return out
 }

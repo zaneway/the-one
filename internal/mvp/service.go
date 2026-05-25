@@ -60,6 +60,31 @@ type RecordTaskResponse struct {
 	Accepted     bool   `json:"accepted"`
 }
 
+type RecordCapabilityRequest struct {
+	RunID               string          `json:"run_id"`
+	AgentType           string          `json:"agent_type"`
+	AdapterName         string          `json:"adapter_name,omitempty"`
+	AdapterVersion      string          `json:"adapter_version,omitempty"`
+	CaptureLevel        int             `json:"capture_level"`
+	ConversationCapture bool            `json:"conversation_capture"`
+	ToolCallCapture     bool            `json:"tool_call_capture"`
+	ToolOutputCapture   bool            `json:"tool_output_capture"`
+	FileEditCapture     bool            `json:"file_edit_capture"`
+	SessionLifecycle    bool            `json:"session_lifecycle"`
+	MemoryObserve       bool            `json:"memory_observe"`
+	Completeness        float64         `json:"completeness"`
+	DegradationReasons  json.RawMessage `json:"degradation_reasons,omitempty"`
+}
+
+type RecordCapabilityResponse struct {
+	RequestID          string  `json:"request_id,omitempty"`
+	CapabilityID       string  `json:"capability_id"`
+	AgentType          string  `json:"agent_type"`
+	CapabilityCoverage float64 `json:"capability_coverage"`
+	Completeness       float64 `json:"completeness"`
+	Accepted           bool    `json:"accepted"`
+}
+
 // StartRun 创建一次 P5 验收 run。
 func (s *Service) StartRun(ctx context.Context, req StartRunRequest) (StartRunResponse, error) {
 	if s == nil || s.repo == nil {
@@ -91,8 +116,17 @@ func (s *Service) RecordTask(ctx context.Context, req RecordTaskRequest) (Record
 	if s == nil || s.repo == nil {
 		return RecordTaskResponse{}, fmt.Errorf("MVP_SERVICE_UNAVAILABLE: repository is nil")
 	}
+	if _, err := s.repo.GetRun(ctx, req.RunID); err != nil {
+		return RecordTaskResponse{}, err
+	}
 	if _, ok := FindScenario(req.ScenarioID); !ok {
 		return RecordTaskResponse{}, fmt.Errorf("VALIDATION_FAILED: unknown mvp scenario_id")
+	}
+	if !IsCertificationAgent(req.AgentType) {
+		return RecordTaskResponse{}, fmt.Errorf("VALIDATION_FAILED: unsupported p5 agent_type")
+	}
+	if !IsTaskStatus(req.Status) {
+		return RecordTaskResponse{}, fmt.Errorf("VALIDATION_FAILED: invalid task status")
 	}
 	expected, err := compactRawJSON(req.Expected)
 	if err != nil {
@@ -121,6 +155,59 @@ func (s *Service) RecordTask(ctx context.Context, req RecordTaskRequest) (Record
 		return RecordTaskResponse{}, err
 	}
 	return RecordTaskResponse{TaskResultID: task.ID, Accepted: true}, nil
+}
+
+// RecordCapability 记录 P5-D 单个 Agent 的捕获能力快照。
+func (s *Service) RecordCapability(ctx context.Context, req RecordCapabilityRequest) (RecordCapabilityResponse, error) {
+	if s == nil || s.repo == nil {
+		return RecordCapabilityResponse{}, fmt.Errorf("MVP_SERVICE_UNAVAILABLE: repository is nil")
+	}
+	if _, err := s.repo.GetRun(ctx, req.RunID); err != nil {
+		return RecordCapabilityResponse{}, err
+	}
+	if !IsCertificationAgent(req.AgentType) {
+		return RecordCapabilityResponse{}, fmt.Errorf("VALIDATION_FAILED: unsupported p5 agent_type")
+	}
+	if req.CaptureLevel < 1 || req.CaptureLevel > 4 {
+		return RecordCapabilityResponse{}, fmt.Errorf("VALIDATION_FAILED: capture_level must be between 1 and 4")
+	}
+	if req.Completeness < 0 || req.Completeness > 1 {
+		return RecordCapabilityResponse{}, fmt.Errorf("VALIDATION_FAILED: completeness must be between 0 and 1")
+	}
+	degradationReasons, err := compactRawJSON(req.DegradationReasons)
+	if err != nil {
+		return RecordCapabilityResponse{}, err
+	}
+	capability := AgentCapability{
+		RunID:                  req.RunID,
+		AgentType:              req.AgentType,
+		AdapterName:            req.AdapterName,
+		AdapterVersion:         req.AdapterVersion,
+		CaptureLevel:           req.CaptureLevel,
+		ConversationCapture:    req.ConversationCapture,
+		ToolCallCapture:        req.ToolCallCapture,
+		ToolOutputCapture:      req.ToolOutputCapture,
+		FileEditCapture:        req.FileEditCapture,
+		SessionLifecycle:       req.SessionLifecycle,
+		MemoryObserve:          req.MemoryObserve,
+		Completeness:           req.Completeness,
+		DegradationReasonsJSON: degradationReasons,
+	}
+	coverage := CapabilityCoverage(capability)
+	if (coverage < 1 || req.Completeness < 0.90) && degradationReasons == "" {
+		return RecordCapabilityResponse{}, fmt.Errorf("VALIDATION_FAILED: degradation_reasons are required for degraded agent capability")
+	}
+	written, err := s.repo.UpsertAgentCapability(ctx, capability)
+	if err != nil {
+		return RecordCapabilityResponse{}, err
+	}
+	return RecordCapabilityResponse{
+		CapabilityID:       written.ID,
+		AgentType:          written.AgentType,
+		CapabilityCoverage: written.CapabilityCoverage,
+		Completeness:       written.Completeness,
+		Accepted:           true,
+	}, nil
 }
 
 // ComputeMetrics 聚合 P5 run 下的 task、trace 和 capability，生成可持久化指标样本。
@@ -194,6 +281,13 @@ func (s *Service) Report(ctx context.Context, req ReportRequest) (ReportResponse
 	if err != nil {
 		return ReportResponse{}, err
 	}
+	var tasks []AcceptanceTask
+	if req.IncludeFailures {
+		tasks, err = s.repo.ListAcceptanceTasks(ctx, TaskQuery{RunID: run.ID, Limit: 500})
+		if err != nil {
+			return ReportResponse{}, err
+		}
+	}
 	summary := summarizeMetrics(metrics)
 	format := req.Format
 	if format == "" {
@@ -202,9 +296,9 @@ func (s *Service) Report(ctx context.Context, req ReportRequest) (ReportResponse
 	var report string
 	switch format {
 	case "markdown":
-		report = renderMarkdownReport(run, summary, metrics, capabilities, req.IncludeFailures)
+		report = renderMarkdownReport(run, summary, metrics, capabilities, tasks, req.IncludeFailures)
 	case "json":
-		report, err = renderJSONReport(run, summary, metrics, capabilities, req.IncludeFailures)
+		report, err = renderJSONReport(run, summary, metrics, capabilities, tasks, req.IncludeFailures)
 		if err != nil {
 			return ReportResponse{}, err
 		}
@@ -252,6 +346,22 @@ func buildMetricSamples(runID string, tasks []AcceptanceTask, capabilities []Age
 	for _, task := range tasks {
 		observed := decodeObservedNumbers(task.ObservedJSON)
 		scenario, _ := FindScenario(task.ScenarioID)
+		taskSuccess := taskMetricPassed(task)
+		samples = append(samples, MetricSample{
+			RunID:             runID,
+			ScenarioID:        task.ScenarioID,
+			TaskResultID:      task.ID,
+			AgentType:         task.AgentType,
+			MetricName:        MetricTaskSuccessRate,
+			MetricValue:       boolAsFloat(taskSuccess),
+			Numerator:         boolAsFloat(taskSuccess),
+			Denominator:       1,
+			Unit:              MetricUnitRatio,
+			ThresholdValue:    1,
+			ThresholdOperator: ThresholdEqual,
+			Passed:            taskSuccess,
+			SourceJSON:        metricSourceJSON("mvp_acceptance_task", task.ID),
+		})
 		for _, threshold := range scenario.Metrics {
 			if value, ok := observed[threshold.MetricName]; ok {
 				samples = append(samples, MetricSample{
@@ -266,7 +376,7 @@ func buildMetricSamples(runID string, tasks []AcceptanceTask, capabilities []Age
 					Unit:              threshold.Unit,
 					ThresholdValue:    threshold.Value,
 					ThresholdOperator: threshold.Operator,
-					Passed:            CompareThreshold(value, threshold.Operator, threshold.Value),
+					Passed:            taskSuccess && CompareThreshold(value, threshold.Operator, threshold.Value),
 					SourceJSON:        metricSourceJSON("observed_json", task.ID),
 				})
 			}
@@ -277,6 +387,7 @@ func buildMetricSamples(runID string, tasks []AcceptanceTask, capabilities []Age
 				sample.TaskResultID = task.ID
 				sample.AgentType = task.AgentType
 				sample.SourceJSON = metricSourceJSON("observed_json", task.ID)
+				sample.Passed = taskSuccess && sample.Passed
 				samples = append(samples, sample)
 			}
 		}
@@ -287,6 +398,7 @@ func buildMetricSamples(runID string, tasks []AcceptanceTask, capabilities []Age
 				sample.TaskResultID = task.ID
 				sample.AgentType = task.AgentType
 				sample.SourceJSON = metricSourceJSON("observed_json", task.ID)
+				sample.Passed = taskSuccess && sample.Passed
 				samples = append(samples, sample)
 			}
 		}
@@ -296,13 +408,12 @@ func buildMetricSamples(runID string, tasks []AcceptanceTask, capabilities []Age
 				sample.TaskResultID = task.ID
 				sample.AgentType = task.AgentType
 				sample.SourceJSON = metricSourceJSON("observed_json", task.ID)
+				sample.Passed = taskSuccess && sample.Passed
 				samples = append(samples, sample)
 			}
 		}
 	}
-	if len(latencies) > 0 {
-		samples = append(samples, RetrievalLatencyP95MS(runID, latencies))
-	}
+	samples = append(samples, RetrievalLatencyP95MS(runID, latencies))
 	seenAgents := map[string]bool{}
 	for _, capability := range capabilities {
 		seenAgents[capability.AgentType] = true
@@ -333,7 +444,7 @@ func buildMetricSamples(runID string, tasks []AcceptanceTask, capabilities []Age
 			SourceJSON:        metricSourceJSON("mvp_agent_capability", capability.ID),
 		})
 	}
-	for _, agentType := range requiredCertificationAgents() {
+	for _, agentType := range RequiredCertificationAgents() {
 		if seenAgents[agentType] {
 			continue
 		}
@@ -341,10 +452,6 @@ func buildMetricSamples(runID string, tasks []AcceptanceTask, capabilities []Age
 		samples = append(samples, missingAgentMetric(runID, agentType, MetricEventCaptureCompleteness, 0.90, ThresholdGreaterOrEqual))
 	}
 	return samples
-}
-
-func requiredCertificationAgents() []string {
-	return []string{AgentCodex, AgentClaudeCode, AgentCursor}
 }
 
 func missingAgentMetric(runID, agentType, metricName string, threshold float64, operator string) MetricSample {
@@ -361,6 +468,25 @@ func missingAgentMetric(runID, agentType, metricName string, threshold float64, 
 		Passed:            false,
 		SourceJSON:        metricSourceJSON("missing_agent_capability", agentType),
 	}
+}
+
+func taskMetricPassed(task AcceptanceTask) bool {
+	if !task.TaskSuccess {
+		return false
+	}
+	switch task.Status {
+	case "", TaskStatusPassed:
+		return true
+	default:
+		return false
+	}
+}
+
+func boolAsFloat(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func decodeObservedNumbers(value string) map[string]float64 {
@@ -460,7 +586,7 @@ func metricSourceJSON(sourceType, sourceID string) string {
 	return string(data)
 }
 
-func renderMarkdownReport(run AcceptanceRun, summary MetricsSummary, metrics []MetricSample, capabilities []AgentCapability, _ bool) string {
+func renderMarkdownReport(run AcceptanceRun, summary MetricsSummary, metrics []MetricSample, capabilities []AgentCapability, tasks []AcceptanceTask, includeFailures bool) string {
 	var buf bytes.Buffer
 	buf.WriteString("# P5 MVP Acceptance Report\n\n")
 	buf.WriteString(fmt.Sprintf("- run_id: `%s`\n", run.ID))
@@ -489,16 +615,29 @@ func renderMarkdownReport(run AcceptanceRun, summary MetricsSummary, metrics []M
 			capability.AgentType, capability.CaptureLevel, capability.CapabilityCoverage,
 			capability.Completeness, compactString(capability.DegradationReasonsJSON, 240)))
 	}
+	if includeFailures {
+		buf.WriteString("\n## Failure Details\n\n")
+		buf.WriteString("| Scenario | Agent | Status | Task Success | Reason |\n")
+		buf.WriteString("|---|---|---|---:|---|\n")
+		for _, task := range failedTasks(tasks) {
+			buf.WriteString(fmt.Sprintf("| `%s` | `%s` | `%s` | `%t` | `%s` |\n",
+				task.ScenarioID, task.AgentType, task.Status, task.TaskSuccess, compactString(task.FailureReason, 240)))
+		}
+	}
 	return buf.String()
 }
 
-func renderJSONReport(run AcceptanceRun, summary MetricsSummary, metrics []MetricSample, capabilities []AgentCapability, _ bool) (string, error) {
-	data, err := json.MarshalIndent(map[string]any{
+func renderJSONReport(run AcceptanceRun, summary MetricsSummary, metrics []MetricSample, capabilities []AgentCapability, tasks []AcceptanceTask, includeFailures bool) (string, error) {
+	payload := map[string]any{
 		"run":          run,
 		"summary":      summary,
 		"metrics":      metrics,
 		"capabilities": capabilities,
-	}, "", "  ")
+	}
+	if includeFailures {
+		payload["failures"] = failedTasks(tasks)
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("VALIDATION_FAILED: encode mvp report: %w", err)
 	}
@@ -512,6 +651,22 @@ func sortedMetrics(metrics []MetricSample) []MetricSample {
 			return out[i].ScenarioID < out[j].ScenarioID
 		}
 		return out[i].MetricName < out[j].MetricName
+	})
+	return out
+}
+
+func failedTasks(tasks []AcceptanceTask) []AcceptanceTask {
+	out := make([]AcceptanceTask, 0)
+	for _, task := range tasks {
+		if !taskMetricPassed(task) || task.FailureReason != "" {
+			out = append(out, task)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ScenarioID == out[j].ScenarioID {
+			return out[i].AgentType < out[j].AgentType
+		}
+		return out[i].ScenarioID < out[j].ScenarioID
 	})
 	return out
 }

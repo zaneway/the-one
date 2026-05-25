@@ -142,6 +142,18 @@ func (s *Store) RecordTask(ctx context.Context, task mvp.AcceptanceTask) (mvp.Ac
 	if strings.TrimSpace(task.RunID) == "" || strings.TrimSpace(task.ScenarioID) == "" || strings.TrimSpace(task.AgentType) == "" {
 		return mvp.AcceptanceTask{}, fmt.Errorf("VALIDATION_FAILED: run_id, scenario_id and agent_type are required")
 	}
+	if _, err := s.GetRun(ctx, task.RunID); err != nil {
+		return mvp.AcceptanceTask{}, err
+	}
+	if _, ok := mvp.FindScenario(task.ScenarioID); !ok {
+		return mvp.AcceptanceTask{}, fmt.Errorf("VALIDATION_FAILED: unknown mvp scenario_id")
+	}
+	if !mvp.IsCertificationAgent(task.AgentType) {
+		return mvp.AcceptanceTask{}, fmt.Errorf("VALIDATION_FAILED: unsupported p5 agent_type")
+	}
+	if !mvp.IsTaskStatus(task.Status) {
+		return mvp.AcceptanceTask{}, fmt.Errorf("VALIDATION_FAILED: invalid task status")
+	}
 	if task.ID == "" {
 		id, err := idgen.New("mvp_task")
 		if err != nil {
@@ -305,6 +317,15 @@ func (s *Store) ListMetricSamples(ctx context.Context, query mvp.MetricQuery) ([
 func (s *Store) UpsertAgentCapability(ctx context.Context, capability mvp.AgentCapability) (mvp.AgentCapability, error) {
 	if strings.TrimSpace(capability.RunID) == "" || strings.TrimSpace(capability.AgentType) == "" {
 		return mvp.AgentCapability{}, fmt.Errorf("VALIDATION_FAILED: run_id and agent_type are required")
+	}
+	if _, err := s.GetRun(ctx, capability.RunID); err != nil {
+		return mvp.AgentCapability{}, err
+	}
+	if !mvp.IsCertificationAgent(capability.AgentType) {
+		return mvp.AgentCapability{}, fmt.Errorf("VALIDATION_FAILED: unsupported p5 agent_type")
+	}
+	if capability.Completeness < 0 || capability.Completeness > 1 {
+		return mvp.AgentCapability{}, fmt.Errorf("VALIDATION_FAILED: completeness must be between 0 and 1")
 	}
 	if capability.ID == "" {
 		id, err := idgen.New("mvp_cap")
