@@ -94,6 +94,14 @@ func (a *LocalBasicAdapter) ResolveCodeRefs(ctx context.Context, refs []memory.C
 	return out, nil
 }
 
+// resolveOne 对单个 code_ref 做 best-effort 文件/符号解析。
+// 解析流程：
+//  1. 路径安全校验（拒绝绝对路径、.. 路径逃逸）
+//  2. 文件存在性和大小检查（超过 MaxFileSizeKB 跳过）
+//  3. 计算文件 hash，与已有 hash 对比判断是否 stale
+//  4. 字符串扫描定位符号行号（唯一匹配 → resolved，多匹配 → ambiguous，无匹配 → missing）
+//
+// 设计约束：不读取完整源码到 memory，只更新定位、hash 和摘要。
 func (a *LocalBasicAdapter) resolveOne(ref memory.CodeRef) memory.CodeRef {
 	resolved := ref
 	path := strings.TrimSpace(ref.FilePath)
@@ -131,6 +139,7 @@ func (a *LocalBasicAdapter) resolveOne(ref memory.CodeRef) memory.CodeRef {
 		return resolved
 	}
 	fileHash := "sha256:" + fmt.Sprintf("%x", sha256.Sum256(data))
+	// hash 不一致：文件已被修改，标记为 stale
 	if ref.ContentHash != "" && ref.ContentHash != fileHash {
 		resolved.ResolveStatus = memory.CodeRefStatusStale
 		resolved.ContentHash = fileHash
@@ -178,6 +187,9 @@ func (a *LocalBasicAdapter) safeFullPath(repoID, refPath string) (string, bool) 
 	return fullAbs, true
 }
 
+// resolveSymbolLines 通过字符串扫描定位符号的行号。
+// 解析策略：逐行扫描，使用 symbolMatchesLine 匹配多种语言的声明模式。
+// 结果：唯一匹配 → resolved，多匹配 → ambiguous，无匹配 → missing。
 func resolveSymbolLines(data []byte, symbol string) (int, int, string) {
 	symbol = strings.TrimSpace(symbol)
 	if symbol == "" {

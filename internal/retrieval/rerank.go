@@ -82,6 +82,11 @@ func ScoreCandidate(candidate *Candidate, opts RerankOptions) memory.ScoreBreakd
 	return breakdown
 }
 
+// normalizeFTSScores 将 FTS 原始分数归一化到 [0,1] 区间。
+// 归一化策略：
+//   - 无命中：跳过
+//   - 单条命中或所有分数相同：统一设为 0.8（避免除零，给单条结果一个合理分数）
+//   - 多条命中：min-max 归一化，(score - min) / (max - min)
 func normalizeFTSScores(candidates []Candidate) {
 	minScore := math.Inf(1)
 	maxScore := math.Inf(-1)
@@ -115,6 +120,23 @@ func normalizeFTSScores(candidates []Candidate) {
 	}
 }
 
+// finalScore 计算 P4-D2 最终排序分数。
+// 公式：positive_sum - conflict_penalty - staleness_penalty - context_cost_penalty
+//
+// 正向因子（权重归一化后求和）：
+//   - Semantic (0.28): 向量相似度，vector_enabled=false 时权重为 0
+//   - BM25 (0.22): FTS 全文检索分数（已归一化）
+//   - TaskFit (0.16): 查询/任务与记忆内容的 token 重叠度 + intent boost
+//   - ScopeFit (0.12): 作用域匹配度（exact match=1.0, partial=0.6~0.8）
+//   - Retention (0.10): 保留分数（tier 级别：temporary=0.2, short_term=0.4, long_term=0.7, durable=0.95）
+//   - RelationSupport (0.06): 关系扩展支持度
+//   - SourceQuality (0.04): 来源质量
+//   - Recency (0.02): 时效性（7天内=1.0, 30天=0.6, 90天=0.3, 更久=0.1）
+//
+// 负向因子（直接扣减）：
+//   - ConflictPenalty (0.20): 矛盾关系惩罚
+//   - StalenessPenalty (0.16): 过时惩罚（deleted=1.0, archived=0.8）
+//   - ContextCostPenalty (0.10): 上下文成本惩罚（token 预算占用比例）
 func finalScore(score memory.ScoreBreakdown, vectorEnabled bool) float64 {
 	semanticWeight := 0.28
 	if !vectorEnabled {
@@ -137,6 +159,7 @@ func finalScore(score memory.ScoreBreakdown, vectorEnabled bool) float64 {
 	for _, item := range positiveWeights {
 		totalPositiveWeight += item.weight
 	}
+	// 权重归一化：当 semantic 被禁用时，其余因子权重按比例放大
 	positive := 0.0
 	for _, item := range positiveWeights {
 		if item.weight > 0 {
@@ -157,6 +180,12 @@ func semanticScore(candidate Candidate, opts RerankOptions) float64 {
 	return clamp01(candidate.SemanticScore)
 }
 
+// taskFitScore 计算任务适配分数。
+// 计算方式：
+//   - 如果已有预计算的 TaskFit（来自 relation expansion），直接使用
+//   - 否则通过 token 重叠率计算：overlap(query+task tokens, memory tokens) / total query+task tokens
+//   - 基础分上叠加 intentBoost（根据检索意图和记忆类型的匹配加成 0~0.25）
+//   - 无查询 token 时返回 0.3 的默认分
 func taskFitScore(candidate Candidate, opts RerankOptions) float64 {
 	if candidate.TaskFit > 0 {
 		return clamp01(candidate.TaskFit)
@@ -176,6 +205,15 @@ func taskFitScore(candidate Candidate, opts RerankOptions) float64 {
 	return clamp01(base + intentBoost(candidate.Memory.MemoryType, opts.Intent, len(candidate.CodeRefs) > 0))
 }
 
+// intentBoost 根据检索意图和记忆类型的匹配度返回加成分数。
+// 设计意图：不同类型的记忆对不同检索场景的价值不同。
+//
+// 意图-类型加成映射：
+//   - ArchitectureReview: checkpoint/decision/constraint/open_issue → +0.25
+//   - CodeTask: 有 code_ref 或 failure/procedure/project_fact/decision → +0.20
+//   - FailureRecall: failure/procedure → +0.25
+//   - TaskContinuation: temporary_state/session_summary/failure → +0.20
+//   - UserPreference: preference/procedure → +0.25
 func intentBoost(memoryType string, intent RetrievalIntent, hasCodeRefs bool) float64 {
 	switch intent {
 	case IntentArchitectureReview:
@@ -202,6 +240,13 @@ func intentBoost(memoryType string, intent RetrievalIntent, hasCodeRefs bool) fl
 	return 0
 }
 
+// scopeFitScore 计算作用域适配分数。
+// 分数规则：
+//   - exact match（scope 在请求的 scopes 列表中）= 1.0
+//   - 用户全局偏好（UserGlobal + TypePreference）= 0.8（跨作用域有参考价值）
+//   - 任务延续意图 + session 作用域 = 0.7（session 级记忆对延续有帮助）
+//   - 无 scope 约束 = 0.6（默认召回）
+//   - 不匹配 = 0
 func scopeFitScore(item memory.MemoryItem, opts RerankOptions) float64 {
 	for _, scope := range opts.Scopes {
 		if scope == item.Scope {
@@ -220,6 +265,9 @@ func scopeFitScore(item memory.MemoryItem, opts RerankOptions) float64 {
 	return 0
 }
 
+// retentionScore 计算保留分数。
+// 优先级：预计算分数 > 记忆 retention_score 字段 > tier 默认值。
+// tier 默认值反映记忆生命周期：temporary(0.2) < short_term(0.4) < long_term(0.7) < durable(0.95)。
 func retentionScore(item memory.MemoryItem, explicit float64) float64 {
 	if explicit > 0 {
 		return clamp01(explicit)
@@ -251,6 +299,9 @@ func sourceQualityScore(item memory.MemoryItem, explicit float64) float64 {
 	return 0.7
 }
 
+// recencyScore 计算时效性分数。
+// 时间衰减梯度：7天内(1.0) > 30天(0.6) > 90天(0.3) > 更久(0.1)。
+// 无更新时间的记忆返回最低分 0.1。
 func recencyScore(item memory.MemoryItem, explicit float64, now time.Time) float64 {
 	if explicit > 0 {
 		return clamp01(explicit)
@@ -271,6 +322,8 @@ func recencyScore(item memory.MemoryItem, explicit float64, now time.Time) float
 	}
 }
 
+// stalenessScore 计算过时惩罚分数。
+// deleted 状态 = 1.0（完全过时），archived = 0.8（大部分过时），其余 = 0。
 func stalenessScore(item memory.MemoryItem, explicit float64) float64 {
 	if explicit > 0 {
 		return clamp01(explicit)
@@ -285,6 +338,10 @@ func stalenessScore(item memory.MemoryItem, explicit float64) float64 {
 	}
 }
 
+// contextCostScore 计算上下文成本惩罚分数。
+// 按内容 token 数占预算比例计算：estimated_tokens / budget。
+// token 估算：字符数 / 2（粗略估算中文约 2 字符 = 1 token）。
+// 无预算时返回 0.1 的默认惩罚。
 func contextCostScore(content string, explicit float64, budget int) float64 {
 	if explicit > 0 {
 		return clamp01(explicit)
@@ -296,6 +353,13 @@ func contextCostScore(content string, explicit float64, budget int) float64 {
 	return clamp01(estimated / float64(budget))
 }
 
+// candidateLess 候选记忆的稳定排序比较函数。
+// 排序优先级（先比较先排序）：
+//  1. FinalScore 降序（核心排序依据）
+//  2. State 优先级降序（stable > pending_review > provisional）
+//  3. Tier 优先级降序（durable > long_term > short_term > temporary）
+//  4. UpdatedAt 降序（更新时间越新越靠前）
+//  5. ID 升序（兜底确定性排序）
 func candidateLess(left, right Candidate) bool {
 	if left.FinalScore != right.FinalScore {
 		return left.FinalScore > right.FinalScore
@@ -340,6 +404,8 @@ func tierPriority(tier string) int {
 	}
 }
 
+// inclusionReasons 生成候选记忆的入选原因标签。
+// 用于诊断和解释为什么某条记忆被包含在检索结果中。
 func inclusionReasons(item memory.MemoryItem, opts RerankOptions, score memory.ScoreBreakdown) []string {
 	reasons := []string{}
 	if score.TaskFit >= 0.5 {
@@ -370,6 +436,9 @@ func mergeReasons(existing []string, additions ...string) []string {
 	return merged
 }
 
+// tokenSet 将文本分词为 token 集合。
+// 分词规则：按非字母数字下划线字符切分，全部转小写。
+// 额外处理：如果文本包含 JSON 字符串数组，将数组元素也加入 token 集合。
 func tokenSet(text string) map[string]bool {
 	values := map[string]bool{}
 	var current strings.Builder

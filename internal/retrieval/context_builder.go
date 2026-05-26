@@ -53,7 +53,14 @@ type contextBucketReportBucket struct {
 }
 
 // buildContextPack 按 P4-C5 多 bucket 预算构造可注入上下文。
-// 预算使用确定性 token 估算 ceil(rune_count/2)，不依赖外部 tokenizer，保证本地测试和线上行为一致。
+// 核心流程：
+//  1. 按 intent 选择 bucket profile（不同意图下各 bucket 的权重和限制不同）
+//  2. 将检索结果分配到 6 个 bucket：stable_design / preferences_procedures / failure / recent_session / code_refs / review_checkpoint
+//  3. 按 bucket 权重分配 token 预算（预留 10% 作为安全余量）
+//  4. 每个 bucket 内按分数降序填充，压缩内容到预算限制
+//  5. 单独处理 code_refs（最多 8 条）和 constraints 收集
+//
+// token 估算：ceil(rune_count/2)，不依赖外部 tokenizer，保证本地测试和线上行为一致。
 func buildContextPack(results []memory.SearchResult, opts contextBuilderOptions) (memory.ContextPack, []string, contextBudgetReport) {
 	if opts.TokenBudget <= 0 {
 		opts.TokenBudget = defaultContextBudget
@@ -188,6 +195,12 @@ func newContextBudgetReport(total int, specs []contextBucketSpec) contextBudgetR
 	return report
 }
 
+// contextBucketProfile 根据检索意图返回 bucket 配置。
+// 不同意图下的 bucket 权重调整策略：
+//   - ArchitectureReview：checkpoint 权重提升到 30%，新增 doc_changed bucket（20%）
+//   - TaskContinuation：recent_session 权重提升到 35%（延续场景需要最新状态）
+//   - FailureRecall：failure 权重提升到 40%（聚焦失败记忆）
+//   - CodeTask：code_refs 权重提升到 20%，preferences 提升到 25%
 func contextBucketProfile(intent RetrievalIntent) []contextBucketSpec {
 	specs := []contextBucketSpec{
 		{name: bucketStableDesign, maxItems: 6, maxTokensPerItem: 180, weight: 30},
@@ -230,6 +243,14 @@ func bucketSearchResults(results []memory.SearchResult) map[contextBucketName][]
 	return buckets
 }
 
+// bucketForSearchResult 将检索结果分配到对应的 context bucket。
+// 分配规则：
+//   - review_checkpoint → review_checkpoint bucket
+//   - session 作用域 / temporary_state / session_summary → recent_session bucket
+//   - constraint/decision/project_fact/requirement/assumption/open_issue → stable_design bucket
+//   - preference/procedure → preferences_procedures bucket
+//   - failure → failure_memories bucket
+//   - 其余 → stable_design bucket（兜底）
 func bucketForSearchResult(result memory.SearchResult) contextBucketName {
 	if result.MemoryType == memory.TypeReviewCheckpoint {
 		return bucketReviewCheckpoint
@@ -282,6 +303,10 @@ func stateRank(state string) int {
 	}
 }
 
+// shouldDropContextCandidate 判断是否应从上下文中丢弃该候选。
+// 丢弃条件：
+//   - temporary_state 且非 TaskContinuation 意图（临时状态对非延续场景无价值）
+//   - provisional 状态且分数 < 0.2（低分的临时记忆不值得注入）
 func shouldDropContextCandidate(result memory.SearchResult, intent RetrievalIntent) bool {
 	if result.MemoryType == memory.TypeTemporaryState && intent != IntentTaskContinuation {
 		return true
@@ -292,6 +317,9 @@ func shouldDropContextCandidate(result memory.SearchResult, intent RetrievalInte
 	return false
 }
 
+// compressForTokenBudget 按 token 预算压缩内容。
+// 压缩策略：token_budget * 2 = 最大字符数（粗估 2 字符 ≈ 1 token）。
+// 超出预算时截断并添加 "..." 后缀。
 func compressForTokenBudget(content string, tokenBudget int) string {
 	content = strings.TrimSpace(content)
 	if tokenBudget <= 0 || content == "" {

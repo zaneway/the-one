@@ -191,7 +191,8 @@ func NewMemoryOrchestrator(cfg config.Config, memoryRepo MemorySearcher, opts ..
 }
 
 // Search 执行 P4-C1 在线检索编排。
-// 流程：参数校验 -> 创建 trace -> FTS + metadata 召回 -> 可解释 rerank -> 写入 retrieved access log -> 更新 trace。
+// 流程：参数校验 -> 创建 trace -> FTS + metadata 召回 -> relation expansion -> code ref attach -> rerank -> 写入 retrieved access log -> 更新 trace。
+// 设计约束：所有可选依赖（trace/access log/relation/code ref）降级时不影响核心检索响应，仅在 diagnostics 中标记 fallback reason。
 func (o *MemoryOrchestrator) Search(ctx context.Context, req memory.SearchRequest) (memory.SearchResponse, error) {
 	startedAt := time.Now()
 	if strings.TrimSpace(req.Query) == "" {
@@ -252,7 +253,9 @@ func (o *MemoryOrchestrator) Search(ctx context.Context, req memory.SearchReques
 }
 
 // Context 执行 P4-C1 上下文构造。
-// 流程：参数校验 -> 单 trace 下执行 FTS 检索 -> 写 retrieved/injected access log -> 按预算裁剪上下文。
+// 流程：参数校验 -> intent 检测 -> 创建 trace -> FTS 检索 + 补充检索（偏好/ checkpoint）-> 写 retrieved access log
+// -> buildContextPack（按预算裁剪）-> attachReviewStrategy（Doc Index 策略）-> 写 injected access log -> 更新 trace。
+// 与 Search 的区别：Context 会做两次补充检索（偏好和 review_checkpoint），并按 token budget 裁剪输出。
 func (o *MemoryOrchestrator) Context(ctx context.Context, req memory.ContextRequest) (memory.ContextResponse, error) {
 	startedAt := time.Now()
 	if strings.TrimSpace(req.Task) == "" {
@@ -376,6 +379,8 @@ type retrieveOutput struct {
 	FallbackReasons []string
 }
 
+// retrieve 执行核心检索流程：FTS 召回 -> relation expansion -> code ref attach -> rerank -> filter -> limit。
+// 该方法被 Search 和 Context 共用，tokenBudget 仅在 Context 路径下非零。
 func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequest, intent RetrievalIntent, tokenBudget int) (retrieveOutput, error) {
 	if o.memoryRepo == nil {
 		return retrieveOutput{}, fmt.Errorf("RETRIEVAL_UNAVAILABLE: memory search repository is required")
@@ -458,6 +463,13 @@ func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequ
 	}, nil
 }
 
+// contextSearch 执行 Context 专用的多轮检索策略。
+// 流程：
+//  1. 主检索：按 searchTypes（10 种记忆类型）+ 作用域检索
+//  2. 偏好补充：如果主结果不含 TypePreference，额外检索用户全局偏好（最多 3 条）
+//  3. Checkpoint 补充：如果是架构复查任务且不含 TypeReviewCheckpoint，额外检索 checkpoint（最多 3 条）
+//
+// 设计意图：Context 场景需要更完整的记忆覆盖，偏好和 checkpoint 是高频遗漏项。
 func (o *MemoryOrchestrator) contextSearch(ctx context.Context, req memory.ContextRequest, intent RetrievalIntent) (retrieveOutput, error) {
 	searchTypes := []string{
 		memory.TypeRequirement,
@@ -557,6 +569,15 @@ func (o *MemoryOrchestrator) contextSearch(ctx context.Context, req memory.Conte
 	return out, nil
 }
 
+// attachReviewStrategy 为架构复查任务附加 Doc Index 策略。
+// 流程：
+//  1. 从 task 中提取 .md 文件路径
+//  2. 加载 review checkpoint（如有）获取 target_hashes
+//  3. 构建当前文档 snapshot 并持久化
+//  4. 对比历史 snapshot 或 checkpoint hash，确定 review mode：
+//     - checkpoint_only：文档未变更，只需复查 checkpoint 标记的项目
+//     - changed_sections：仅部分 section 变更（≤6 个），只复查变更部分
+//     - full_document：大量变更或无法对比，全文复查
 func (o *MemoryOrchestrator) attachReviewStrategy(ctx context.Context, req memory.ContextRequest, pack *memory.ContextPack) (bool, []string) {
 	if pack == nil || !isArchitectureReviewTask(req.Task) {
 		return false, nil
@@ -689,6 +710,12 @@ func ignoredItemsPolicy(checkpointID string) string {
 	return "respect_checkpoint_ignored_items"
 }
 
+// reviewModeForDoc 确定单个文档的复查模式。
+// 决策逻辑：
+//  1. 优先对比 checkpoint target_hashes（如有）→ hash 一致则 checkpoint_only
+//  2. 回退到对比历史 snapshot → hash 一致则 checkpoint_only
+//  3. 有变更 section 且 ≤6 个 → changed_sections
+//  4. 其余情况 → full_document
 func reviewModeForDoc(current docindex.DocumentSnapshot, snapshots []docindex.DocumentSnapshot, checkpoint memory.ReviewCheckpoint) (string, []string) {
 	if target, ok := checkpointTargetHashForDoc(checkpoint, current.Path); ok {
 		mode, changedSections := reviewModeAgainstCheckpoint(current, target)
@@ -947,6 +974,10 @@ func strongerReviewMode(current, next string) string {
 	return current
 }
 
+// expandRelations 对 seed 候选执行一跳关系扩展（P4-C2）。
+// 扩展策略：查询 seed memory 的 depth=1 强关系边（supports/supersedes/superseded_by/contradicts），
+// 将 related memory 合并到候选集，并调整 seed 的 RelationSupport/StalenessPenalty/ConflictPenalty。
+// 设计边界：只读取已持久化的关系边，不在线生成关系。
 func (o *MemoryOrchestrator) expandRelations(ctx context.Context, req memory.SearchRequest, candidates map[string]Candidate, byID map[string]memory.SearchResult, seedIDs []string) (bool, []string) {
 	if len(seedIDs) == 0 {
 		return false, nil
@@ -988,6 +1019,13 @@ func (o *MemoryOrchestrator) expandRelations(ctx context.Context, req memory.Sea
 	return used, nil
 }
 
+// attachCodeRefs 为候选记忆附加 code_ref 信息（P4-C3）。
+// 流程：
+//  1. 按 memory_id 查询已持久化的 code_ref
+//  2. 如果 CodeIndexAdapter 可用，对 code_ref 做在线文件/符号解析并写回状态
+//  3. 根据解析状态计算 codeRefStalenessPenalty（stale=0.2, missing/ambiguous=0.5, unresolved=0.1）
+//
+// 设计边界：只在 IncludeCodeRefs=true 或 intent=code_task 时执行。
 func (o *MemoryOrchestrator) attachCodeRefs(ctx context.Context, req memory.SearchRequest, intent RetrievalIntent, candidates map[string]Candidate, byID map[string]memory.SearchResult) (bool, []string) {
 	if !req.IncludeCodeRefs && intent != IntentCodeTask {
 		return false, nil
@@ -1048,6 +1086,14 @@ func (o *MemoryOrchestrator) attachCodeRefs(ctx context.Context, req memory.Sear
 	return used, fallbackReasons
 }
 
+// applyRelationExpansion 将单条关系扩展应用到候选集。
+// 不同关系类型的处理策略：
+//   - supports：seed 的 RelationSupport 提升，related memory 以 0.75 权重加入候选
+//   - supersedes（正向）：seed 的 RelationSupport 大幅提升（0.9），related 以 0.95 权重加入
+//   - supersedes（反向/被取代）：seed 的 StalenessPenalty 提升（0.75），标记为过时
+//   - supersedes_by（正向）：同 supersedes 反向处理
+//   - supersedes_by（反向/取代方）：seed 的 RelationSupport 大幅提升（0.9）
+//   - contradicts：seed 和 related 的 ConflictPenalty 均提升（0.65）
 func applyRelationExpansion(candidates map[string]Candidate, byID map[string]memory.SearchResult, expansion RelationExpansion) bool {
 	seed, ok := candidates[expansion.SeedMemoryID]
 	if !ok {
@@ -1126,6 +1172,9 @@ func mergeRelatedCandidate(candidates map[string]Candidate, byID map[string]memo
 	candidates[item.ID] = candidate
 }
 
+// filterSupersededCandidates 过滤被取代的候选记忆。
+// 如果存在 supersedes_relation 标记的候选（取代方），则移除被取代方（superseded_relation）。
+// 设计意图：同一对记忆的取代关系只保留较新的一方。
 func filterSupersededCandidates(candidates []Candidate) []Candidate {
 	hasReplacement := false
 	for _, candidate := range candidates {
@@ -1172,6 +1221,8 @@ type traceInput struct {
 	Mode        RetrievalMode
 }
 
+// startTrace 创建检索 trace 记录。
+// 设计约束：trace 写入失败时返回本地生成的 trace ID 和 fallback reason，不阻塞检索流程。
 func (o *MemoryOrchestrator) startTrace(ctx context.Context, input traceInput) (TraceRecord, bool, []string) {
 	trace := TraceRecord{
 		SessionID:   input.SessionID,
@@ -1226,6 +1277,8 @@ type accessLogInput struct {
 	UsedInContext bool
 }
 
+// writeAccessLogs 写入 memory_access_log（retrieved 或 injected 类型）。
+// 设计约束：access log 写入失败不影响检索响应，但必须通过 logger 和 diagnostics 暴露。
 func (o *MemoryOrchestrator) writeAccessLogs(ctx context.Context, input accessLogInput) error {
 	if len(input.Results) == 0 {
 		return nil

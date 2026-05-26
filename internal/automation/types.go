@@ -6,12 +6,16 @@ import (
 	"github.com/zaneway/the-one/internal/memory"
 )
 
+// ============================================================================
+// 异步任务状态常量
+// Worker 通过状态流转控制 job 的生命周期
+// ============================================================================
 const (
-	JobStatusPending   = "pending"
-	JobStatusRunning   = "running"
-	JobStatusSucceeded = "succeeded"
-	JobStatusFailed    = "failed"
-	JobStatusCancelled = "cancelled"
+	JobStatusPending   = "pending"   // 等待领取
+	JobStatusRunning   = "running"   // 执行中
+	JobStatusSucceeded = "succeeded" // 执行成功
+	JobStatusFailed    = "failed"    // 执行失败（达到最大重试次数）
+	JobStatusCancelled = "cancelled" // 已取消
 )
 
 const (
@@ -52,16 +56,22 @@ const (
 	TargetTypeCodeRef = "code_ref"
 )
 
+// ============================================================================
+// 候选记忆状态常量
+// 记录候选记忆在 admission 管道中的状态流转
+// ============================================================================
 const (
-	CandidateStatusGenerated = "generated"
-	CandidateStatusAdmitted  = "admitted"
-	CandidateStatusDropped   = "dropped"
-	CandidateStatusMerged    = "merged"
-	CandidateStatusFailed    = "failed"
+	CandidateStatusGenerated = "generated" // Provider 已生成，等待 admission
+	CandidateStatusAdmitted  = "admitted"  // admission 通过，已写入 memory_item
+	CandidateStatusDropped   = "dropped"   // admission 拒绝，不写入长期记忆
+	CandidateStatusMerged    = "merged"    // 与已有记忆合并（预留）
+	CandidateStatusFailed    = "failed"    // 处理失败
 )
 
 // AsyncJob 表示 P3 异步处理队列中的一条任务记录。
 // Worker 通过 status、next_run_at 和 retry_count 控制本地重试，不在事务内执行 Provider 逻辑。
+// 管道流转：extract_evidence → generate_memory_candidate → compute_admission。
+// 每个 job 通过 TargetType + TargetID 关联处理对象，DedupKey 保证幂等入队。
 type AsyncJob struct {
 	ID          string
 	JobType     string

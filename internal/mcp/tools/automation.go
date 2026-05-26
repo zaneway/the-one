@@ -43,6 +43,9 @@ func (h *AutomationHandler) ListJobs(ctx context.Context, raw json.RawMessage) (
 	return resp, nil
 }
 
+// GetJob 处理 memory.jobs.get 工具调用。
+// 功能：获取单个异步任务的详细信息，包括重试次数、错误信息、payload 摘要等。
+// 用于 P3 诊断：排查单个 job 的执行状态和失败原因。
 func (h *AutomationHandler) GetJob(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 	var req automation.GetJobRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -56,6 +59,9 @@ func (h *AutomationHandler) GetJob(ctx context.Context, raw json.RawMessage) (an
 	return resp, nil
 }
 
+// ListCandidates 处理 memory.candidates.list 工具调用。
+// 功能：查询候选记忆列表，支持按状态、类型、provider 和 scope 过滤。
+// 用于 P3 诊断：查看 generate_memory_candidate 的输出和 admission 决策结果。
 func (h *AutomationHandler) ListCandidates(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 	var req automation.ListCandidatesRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -69,6 +75,9 @@ func (h *AutomationHandler) ListCandidates(ctx context.Context, raw json.RawMess
 	return resp, nil
 }
 
+// GetCandidate 处理 memory.candidates.get 工具调用。
+// 功能：获取单个候选记忆的详细信息，包括 admission 评分、决策原因和结果 memory_id。
+// 用于 P3 诊断：排查为什么某条候选被 admit 或 dropped。
 func (h *AutomationHandler) GetCandidate(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 	var req automation.GetCandidateRequest
 	if err := json.Unmarshal(raw, &req); err != nil {

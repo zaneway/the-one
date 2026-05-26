@@ -404,6 +404,20 @@ func compactRetrievalText(value string, maxRunes int) string {
 	return string(runes[:maxRunes])
 }
 
+// accessLogEventWeight 返回不同访问事件类型的权重。
+// 权重用于 P4 retention score 重算中的 reinforcement 因子计算。
+//
+// 正向事件（记忆被有效使用）：
+//   - retrieved (0.2)：被检索返回（最低正向）
+//   - injected (0.5)：被注入上下文
+//   - cited_by_agent (1.0)：被 Agent 引用
+//   - task_success (1.5)：关联任务成功
+//   - user_confirmed (2.0)：用户确认（最高正向）
+//
+// 负向事件（记忆价值存疑）：
+//   - ignored (-0.5)：被忽略
+//   - task_failure (-1.5)：关联任务失败
+//   - user_rejected (-3.0)：用户拒绝（最高负向）
 func accessLogEventWeight(eventType string) float64 {
 	switch eventType {
 	case "retrieved":

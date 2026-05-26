@@ -173,6 +173,12 @@ func normalizeMarkdownForHash(value string) string {
 	return strings.Join(lines, "\n")
 }
 
+// buildMarkdownSections 解析 Markdown 文档为 section 列表。
+// 解析策略：
+//  1. 收集所有标题（跳过代码块内的 # 行）
+//  2. 按标题层级构建 heading path（如 "P4 > 检索 > rerank"）
+//  3. 每个 section 计算独立的 content_hash，用于后续变更检测
+//  4. section_id 由 heading path 生成 slug，重复时追加序号
 func buildMarkdownSections(markdown string, maxSections int, storeSummary bool) []DocumentSection {
 	if maxSections <= 0 {
 		return nil

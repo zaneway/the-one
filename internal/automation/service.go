@@ -87,6 +87,8 @@ func NewService(cfg config.Config, repo Repository, provider processor.Provider)
 }
 
 // EnqueueRawEvent 为 raw_event 创建 evidence 抽取任务。
+// P3 入口：capture service 在 raw_event 写入成功后调用此方法，触发自动记忆处理管道。
+// 设计约束：enable_auto_processing=false 或 provider=none 时直接返回，不入队。
 func (s *Service) EnqueueRawEvent(ctx context.Context, rawEvent capture.RawEvent) error {
 	if rawEvent.ID == "" {
 		return fmt.Errorf("VALIDATION_FAILED: raw_event id is required")
@@ -111,6 +113,8 @@ func (s *Service) EnqueueRawEvent(ctx context.Context, rawEvent capture.RawEvent
 }
 
 // RunJob 执行单个已领取 job，并负责把结果状态回写为 succeeded 或 failed。
+// 处理流程：通过 JobDispatcher 分发到对应 handler → 成功则 MarkJobSucceeded，失败则 MarkJobFailed。
+// 设计约束：Provider 执行发生在 claim 事务之外，避免长时间持锁。
 func (s *Service) RunJob(ctx context.Context, job AsyncJob) error {
 	now := time.Now().UTC()
 	payload, err := s.dispatcher.RunJob(ctx, job)
@@ -126,6 +130,13 @@ func (s *Service) RunJob(ctx context.Context, job AsyncJob) error {
 	return s.repo.MarkJobSucceeded(ctx, job.ID, payloadJSON, now)
 }
 
+// runExtractEvidence 执行 P3 管道第一步：从 raw_event 抽取 evidence。
+// 处理流程：
+//  1. 加载原始事件及其关联的 session 和 task
+//  2. 加载同 session/task 的近邻事件（最多 20 条），用于上下文理解
+//  3. 调用 Provider（默认 rule_based）抽取 evidence drafts
+//  4. 将 drafts 物化为 evidence 记录（去重检测 + 序列化 + 写入）
+//  5. 为每条 evidence 入队下一步 job（generate_memory_candidate）
 func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[string]any, error) {
 	rawEvent, err := s.repo.GetRawEvent(ctx, job.TargetID)
 	if err != nil {
@@ -171,6 +182,14 @@ func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[str
 	return map[string]any{"evidence_count": written}, nil
 }
 
+// runGenerateMemoryCandidate 执行 P3 管道第二步：从 evidence 生成候选记忆。
+// 处理流程：
+//  1. 加载 evidence 及其关联的 raw_event
+//  2. 查找同 scope 的相关已有记忆（用于冲突检测和去重）
+//  3. 加载 session 和 task 上下文
+//  4. 调用 Provider 生成 memory candidates
+//  5. 将 candidates 物化为 MemoryCandidateRecord（序列化所有 JSON 字段）
+//  6. 为每个 candidate 入队下一步 job（compute_admission）
 func (s *Service) runGenerateMemoryCandidate(ctx context.Context, job AsyncJob) (map[string]any, error) {
 	evidence, err := s.repo.GetEvidence(ctx, job.TargetID)
 	if err != nil {
@@ -226,6 +245,16 @@ func (s *Service) runGenerateMemoryCandidate(ctx context.Context, job AsyncJob) 
 	return map[string]any{"candidate_count": written}, nil
 }
 
+// runComputeAdmission 执行 P3 管道第三步：对候选记忆执行准入控制。
+// 处理流程：
+//  1. 加载 candidate 记录和关联的 evidence
+//  2. 查找同 scope 的相关已有记忆（用于冲突检测）
+//  3. 调用 AdmissionController.Decide 计算准入决策
+//  4. 根据决策结果：
+//     - drop/write_raw_only → 更新 candidate 状态为 dropped
+//     - write_temporary/provisional/pending_review/stable → 构建 memory_item 并写入
+//  5. 写入时如果是用户纠正（user_correction），执行原地覆盖语义
+//  6. 更新 candidate 的 admission 结果和 resulting_memory_id
 func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[string]any, error) {
 	record, err := s.repo.GetCandidate(ctx, job.TargetID)
 	if err != nil {
@@ -276,6 +305,10 @@ func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[st
 	}
 }
 
+// writeAdmittedMemory 写入通过准入控制的记忆。
+// 特殊处理：如果候选记忆是用户纠正（user_correction），执行原地覆盖语义——
+// 保留旧 memory_id，更新内容和检索字段，并追加新 evidence/review 轨迹。
+// 非纠正场景：写入新的 memory_item + evidence 关联 + 可选的 review_checkpoint。
 func (s *Service) writeAdmittedMemory(ctx context.Context, record MemoryCandidateRecord, candidate processor.MemoryCandidate, admission AdmissionResult, evidence memory.Evidence, item memory.MemoryItem) (memory.MemoryItem, error) {
 	if isUserCorrection(candidate, evidence) {
 		target, found, err := s.resolveCorrectionTarget(ctx, evidence)
@@ -311,6 +344,9 @@ func (s *Service) writeAdmittedMemory(ctx context.Context, record MemoryCandidat
 	})
 }
 
+// resolveCorrectionTarget 从 evidence 的 source_ref 中解析纠正目标 memory。
+// 纠正场景：用户通过 user.correction 事件声明某条记忆需要修正，
+// source_ref 中携带 target_memory_id 或 target_event_id，用于定位被纠正的旧记忆。
 func (s *Service) resolveCorrectionTarget(ctx context.Context, evidence memory.Evidence) (memory.MemoryItem, bool, error) {
 	ref := decodeObject(evidence.SourceRefJSON)
 	req := CorrectionTargetRequest{
@@ -397,6 +433,9 @@ func reviewCheckpointFromRecord(record MemoryCandidateRecord, item memory.Memory
 	}, nil
 }
 
+// materializeEvidence 将 Provider 生成的 EvidenceDraft 物化为持久化的 Evidence 记录。
+// 处理流程：校验必填字段 → 幂等检测（按 rawEventID + sourceType + interpretedStatement 去重）→
+// 生成 evidence_id → 序列化 JSON 字段 → 写入 repository。
 func (s *Service) materializeEvidence(ctx context.Context, rawEventID string, draft processor.EvidenceDraft) (memory.Evidence, error) {
 	if strings.TrimSpace(draft.SourceType) == "" || strings.TrimSpace(draft.InterpretedStatement) == "" {
 		return memory.Evidence{}, fmt.Errorf("VALIDATION_FAILED: evidence source_type and interpreted_statement are required")
@@ -440,6 +479,10 @@ func (s *Service) materializeEvidence(ctx context.Context, rawEventID string, dr
 	return evidence, nil
 }
 
+// materializeCandidate 将 Provider 生成的 MemoryCandidate 物化为 MemoryCandidateRecord。
+// 处理流程：生成 candidate_id → 序列化所有 JSON 字段（keywords、entities、tags 等）→
+// 填充默认值（confidence、importance、encoding_depth）→ 构建 dedup_key → 返回记录。
+// dedup_key 由 provider + evidence_id + memory_type + scope + content 拼接，用于幂等检测。
 func (s *Service) materializeCandidate(candidate processor.MemoryCandidate, evidence memory.Evidence, rawEvent capture.RawEvent) (MemoryCandidateRecord, error) {
 	candidateID := candidate.CandidateID
 	if candidateID == "" {
@@ -510,6 +553,8 @@ func (s *Service) materializeCandidate(candidate processor.MemoryCandidate, evid
 	}, nil
 }
 
+// memoryItemFromAdmission 根据准入结果构建 MemoryItem 领域对象。
+// 将 candidate record 的字段映射到 memory_item 结构，并设置准入决定的 state、tier、decay_rate 和 retention_score。
 func (s *Service) memoryItemFromAdmission(record MemoryCandidateRecord, candidate processor.MemoryCandidate, admission AdmissionResult, evidence memory.Evidence) (memory.MemoryItem, error) {
 	memoryID, err := idgen.New("mem")
 	if err != nil {
@@ -586,6 +631,9 @@ func candidateFromRecord(record MemoryCandidateRecord, sourceType string) proces
 	}
 }
 
+// enqueueNext 为当前管道步骤的输出入队下一步 job。
+// 用于管道衔接：extract_evidence → generate_memory_candidate → compute_admission。
+// dedup_key 由 jobType + targetID 拼接，确保同一 target 不会重复入队。
 func (s *Service) enqueueNext(ctx context.Context, jobType, targetType, targetID string, priority int) error {
 	jobID, err := idgen.New("job")
 	if err != nil {

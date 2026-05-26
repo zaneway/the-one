@@ -41,6 +41,9 @@ func (s *Service) Run(ctx context.Context, req RunRequest) (RunResponse, error) 
 	}
 }
 
+// runCleanupTemporary 清理过期的临时记忆。
+// 流程：查询超过 TemporaryTTLDays 的 temporary 记忆 → 逐条归档（state=archived）。
+// 支持 dry_run 模式：只返回将要归档的记忆列表，不实际执行。
 func (s *Service) runCleanupTemporary(ctx context.Context, req RunRequest) (RunResponse, error) {
 	now := time.Now().UTC()
 	limit, diagnostics := normalizeRunLimit(req.Limit)
@@ -77,6 +80,10 @@ func (s *Service) runCleanupTemporary(ctx context.Context, req RunRequest) (RunR
 	return resp, nil
 }
 
+// runRecomputeScores 重新计算记忆的保留分数和 tier。
+// 流程：查询需要重算的记忆 → 逐条计算 ComputeScore + ComputeTier → 更新 retention_score 和 tier。
+// 设计约束：pinned 记忆跳过更新（但仍计算并返回诊断信息）。
+// score < 0.30 的记忆标记为 archive_candidate（由上层决策是否归档）。
 func (s *Service) runRecomputeScores(ctx context.Context, req RunRequest) (RunResponse, error) {
 	now := time.Now().UTC()
 	limit, diagnostics := normalizeRunLimit(req.Limit)
