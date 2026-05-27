@@ -79,14 +79,16 @@ AI 工具事件
 
 ```bash
 make build
-bin/memoryd serve --data-dir /tmp/the-one-memoryd
+bin/theone serve --data-dir /tmp/theone
 ```
+
+默认日志会同时输出到终端 stderr 和 `~/.theone/logs/theone.log`。如需自定义路径，可在 `theone.yaml` 中设置 `logging.path`，或通过环境变量 `THEONE_LOG_PATH` 覆盖。服务启动时还会把当前进程号写入 `~/.theone/theone.pid`，重启后会自动覆盖为新的 PID。
 
 健康检查：
 
 ```bash
-make run-health DATA_DIR=/tmp/the-one-memoryd
-make run-status DATA_DIR=/tmp/the-one-memoryd
+make run-health DATA_DIR=/tmp/theone
+make run-status DATA_DIR=/tmp/theone
 ```
 
 ### 验收
@@ -103,7 +105,7 @@ make test-p5-mvp
 P5 synthetic 验收只验证 Engine MVP，不启动真实 Agent。真实 Agent certification 参考：
 
 ```text
-examples/agents/shared-memoryd/README.md
+examples/agents/shared-theone/README.md
 ```
 
 
