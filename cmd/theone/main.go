@@ -9,22 +9,24 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"syscall"
 
-	"github.com/zaneway/the-one/internal/app"
-	"github.com/zaneway/the-one/internal/config"
+	"github.com/zaneway/theone/internal/app"
+	"github.com/zaneway/theone/internal/config"
 )
 
 const version = "v0.1.0-dev"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "memoryd: %v\n", err)
+		fmt.Fprintf(os.Stderr, "theone: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// run 是 memoryd 的命令分发入口。
+// run 是 theone 的命令分发入口。
 // 子命令职责：
 //
 //	serve  - 解析配置、初始化运行时依赖（SQLite + migration + MCP Registry + Worker）、启动 MCP stdio 服务
@@ -51,6 +53,9 @@ func run(args []string) error {
 			return err
 		}
 		defer runtime.Close()
+		if err := writePIDFile(os.Getpid()); err != nil {
+			return err
+		}
 		//启动 MCP：当前只支持 stdio 传输，通过 stdin/stdout 与 Agent 通信
 		return runtime.Serve(ctx)
 	case "health":
@@ -76,7 +81,7 @@ func run(args []string) error {
 // parseConfig 解析 CLI flag 并与配置文件/环境变量/默认值合并。
 // includeStatusFlag 为 true 时额外注册 --include-config flag（status 子命令专用）。
 func parseConfig(args []string, includeStatusFlag bool) (config.Config, error) {
-	fs := flag.NewFlagSet("memoryd", flag.ContinueOnError)
+	fs := flag.NewFlagSet("theone", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var overrides config.Overrides
 	fs.StringVar(&overrides.ConfigPath, "config", "", "config file path")
@@ -106,6 +111,28 @@ func statusIncludeConfig(args []string) bool {
 		return false
 	}
 	return *includeConfig
+}
+
+func writePIDFile(pid int) error {
+	path, err := pidFilePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("write pid file: create dir: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write pid file: %w", err)
+	}
+	return nil
+}
+
+func pidFilePath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve pid file home dir: %w", err)
+	}
+	return filepath.Join(home, ".theone", "theone.pid"), nil
 }
 
 // callLocalTool 为 health/status 子命令提供本地工具调用能力。
