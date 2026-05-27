@@ -72,6 +72,105 @@ AI 工具事件
 - 删除要覆盖主表、索引、缓存、导出和备份边界。
 - 用户画像必须 evidence-based，不做心理、人格或价值观推断。
 
+## 系统架构
+
+The One 在存储上分为**事实层**（`raw_event`）与**记忆层**（`memory_item`），在写入上分为**显式写入**（`memory.remember`）与**事件捕获 + 异步管道**（`memory.observe` → P3）。
+
+### 总体数据流
+
+```mermaid
+flowchart TB
+  subgraph 写入
+    O["memory.observe<br/>事件捕获"]
+    R["memory.remember<br/>显式长期记忆"]
+  end
+  subgraph SQLite
+    RE["raw_event<br/>事实层"]
+    EV["evidence"]
+    CAND["memory_candidate"]
+    MI["memory_item + FTS"]
+    AJ["async_job 队列"]
+  end
+  subgraph 查询
+    S["memory.search"]
+    C["memory.context"]
+  end
+  O --> RE
+  RE --> AJ
+  AJ --> EV
+  EV --> CAND
+  CAND --> MI
+  R --> MI
+  S --> MI
+  C --> S
+  C --> MI
+```
+
+| 层级 | 主要表 | 作用 |
+|------|--------|------|
+| 事实层 | `agent_session`、`agent_task`、`raw_event` | 会话/任务边界与最小化事件流水（可审计、可去重） |
+| 记忆层 | `memory_item`、`evidence`、`memory_evidence_link`、FTS | 可检索的长期/中期记忆 |
+| 自动化 | `async_job`、`memory_candidate` | 从事件抽证据 → 候选 → 准入 → 写入记忆 |
+
+`memory.observe` 同步返回时 `pipeline` 为 `raw_event_only`：**单次 observe 不直接写 `memory_item`**。长期记忆来自 `memory.remember`，或 P3 后台管道在准入通过后写入。
+
+### 事件捕获 → async_job → memory_item（P3 自动管道）
+
+前提：`theone.yaml` 中 `processor.enable_auto_processing: true`（默认开启），且 `serve` 模式下 `automation.worker_enabled: true` 时后台 Worker 会轮询执行任务。
+
+```mermaid
+sequenceDiagram
+  participant Agent as Cursor / Agent
+  participant MCP as memory.observe
+  participant Cap as capture.Service
+  participant DB as raw_event
+  participant Auto as automation.Service
+  participant Q as async_job
+  participant W as Worker
+  participant Prov as rule_based Provider
+  participant Adm as AdmissionController
+  participant Mem as memory_item
+
+  Agent->>MCP: 摘要事件（content_summary 等）
+  MCP->>Cap: Observe
+  Cap->>DB: InsertRawEvent（append-only）
+  Cap->>Auto: EnqueueRawEvent
+  Auto->>Q: job extract_evidence
+  W->>Q: ClaimJobs / RunJob
+  W->>Prov: ExtractEvidence
+  Prov-->>W: evidence drafts
+  W->>DB: WriteEvidence
+  W->>Q: job generate_memory_candidate
+  W->>Prov: GenerateCandidates
+  Prov-->>W: memory candidates
+  W->>DB: WriteCandidate
+  W->>Q: job compute_admission
+  W->>Adm: Decide（评分 + 规则）
+  alt drop / write_raw_only
+    Adm-->>W: 仅更新 candidate 状态
+  else write_* 
+    W->>Mem: WriteAutomatedMemory
+  end
+```
+
+三步 job 类型（`internal/automation/types.go`）：
+
+| 顺序 | `job_type` | `target` | 作用 |
+|------|------------|----------|------|
+| 1 | `extract_evidence` | `raw_event` | 规则引擎从事件抽 `evidence`（低信号事件可能跳过） |
+| 2 | `generate_memory_candidate` | `evidence` | 生成 `memory_candidate` 草稿 |
+| 3 | `compute_admission` | `memory_candidate` | 准入评分；通过则写入 `memory_item`，否则 `dropped` |
+
+准入决策示例：`drop`、`write_raw_only`（不建记忆）、`write_temporary` / `write_provisional` / `write_pending_review` / `write_stable`。高影响类型（如架构决策）常进入 `pending_review`，需 `memory.review` 确认后变为 `stable`。
+
+规则引擎（`processor.rule_based`）会过滤多数普通对话与成功工具输出；用户声明、纠正、失败工具、含「记住/约束」等信号的消息更易进入候选。
+
+### Cursor 侧写入说明
+
+- **IDE 不会自动写库**：需配置 MCP，并由 Agent 按 Rules 调用 `memory_observe` / `memory_remember`。
+- **每条用户消息** → 通常只进 `raw_event`；是否晋升为 `memory_item` 取决于 P3 过滤与准入，或 Agent 显式 `memory.remember`。
+- 详见 `doc/Cursor 适配与安装后配置说明.md`。
+
 ## v1.0.0 本地 
 
 
@@ -226,6 +325,8 @@ P5 synthetic 验收只验证 Engine MVP，不启动真实 Agent。三 Agent 真�
 - Level4 全量捕获依赖各 Agent 侧配置，v1.0.0 后置完善（核心 MCP 与记忆链路已本地验收）。
 
 ## 展望
+
+计划中的增强项与已知局限见 [doc/后续完善规划.md](doc/后续完善规划.md)（含基于大模型的记忆价值判断、多厂商模型对接等）。
 
 The One 的长期愿景是成为一个个人与团队都能使用的认知状态层。
 

@@ -154,10 +154,11 @@ Cursor 以子进程方式拉起 `theone serve`。在受限环境下需注意：
 ### 5.2 作用
 
 - 引导 Agent 在 `session.start`、任务完成、工具结果、架构改动等节点调用 **`memory_observe`**
+- 按事件类型规定 **必填字段**（`content_summary`、`keywords`、`salient_spans`、`session_id`、`source_refs` 等）
 - 说明与 `memory_remember` / `memory_search` / `memory_context` 的分工
-- 强调只写**摘要**，禁止全文、完整 diff、密钥
+- 强调只写**摘要**，禁止全文、完整 diff、密钥；**禁止**在 `conversation.message` 中伪造工具字段
 
-**重要**：仅配置 MCP **不会**自动写入记忆；无 Rule 且无 Agent 主动调用时，`raw_event` / `memory_item` 仍为空。
+**重要**：仅配置 MCP **不会**自动写入记忆；无 Rule 且无 Agent 主动调用时，`raw_event` / `memory_item` 仍为空。完整规范见 `.cursor/rules/theone-memory-observe.mdc`。
 
 ### 5.3 用户级 Rules（可选）
 
