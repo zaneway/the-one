@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -34,7 +33,7 @@ func main() {
 //	status - 复用运行时调用 memory.status 工具，返回 capability 和配置摘要
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("missing command: serve, health, status")
+		args = []string{"serve"}
 	}
 
 	switch args[0] {
@@ -53,9 +52,7 @@ func run(args []string) error {
 			return err
 		}
 		defer runtime.Close()
-		if err := writePIDFile(os.Getpid()); err != nil {
-			return err
-		}
+		tryWritePIDFile(os.Getpid())
 		//启动 MCP：当前只支持 stdio 传输，通过 stdin/stdout 与 Agent 通信
 		return runtime.Serve(ctx)
 	case "health":
@@ -78,8 +75,6 @@ func run(args []string) error {
 	}
 }
 
-// parseConfig 解析 CLI flag 并与配置文件/环境变量/默认值合并。
-// includeStatusFlag 为 true 时额外注册 --include-config flag（status 子命令专用）。
 func parseConfig(args []string, includeStatusFlag bool) (config.Config, error) {
 	fs := flag.NewFlagSet("theone", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -111,6 +106,17 @@ func statusIncludeConfig(args []string) bool {
 		return false
 	}
 	return *includeConfig
+}
+
+func tryWritePIDFile(pid int) {
+	// Cursor MCP 进程经常运行在受限环境（例如禁止写 $HOME），此时 PID 文件并非必需。
+	// 通过环境变量允许显式关闭 PID 写入，避免启动直接失败或产生噪声告警。
+	if os.Getenv("THEONE_DISABLE_PID") == "1" {
+		return
+	}
+	if err := writePIDFile(pid); err != nil {
+		slog.Warn("write pid file failed", "error", err)
+	}
 }
 
 func writePIDFile(pid int) error {

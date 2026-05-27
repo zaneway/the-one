@@ -1,11 +1,30 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestTryWritePIDFileLogsWarningAndDoesNotFail(t *testing.T) {
+	t.Setenv("HOME", "/dev/null")
+
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buffer, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	tryWritePIDFile(12345)
+
+	output := buffer.String()
+	if !strings.Contains(output, "write pid file failed") {
+		t.Fatalf("log output = %q, want warning message", output)
+	}
+}
 
 func TestWritePIDFileCreatesAndOverwrites(t *testing.T) {
 	home := t.TempDir()
