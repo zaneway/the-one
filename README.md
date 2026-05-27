@@ -212,11 +212,7 @@ make test-p4-retrieval
 make test-p5-mvp
 ```
 
-P5 synthetic 验收只验证 Engine MVP，不启动真实 Agent。真实 Agent certification 参考：
-
-```text
-examples/agents/shared-theone/README.md
-```
+P5 synthetic 验收只验证 Engine MVP，不启动真实 Agent。三 Agent 真实环境手工验收已于 **2026-05-27** 在本地完成（清单与步骤见 `examples/agents/shared-theone/README.md`）。**Level4 全量捕获**（六能力齐套）依赖各 Agent 侧 Rules/Adapter/hooks，列入后续版本完善，不阻塞 v1.0.0。
 
 
 ### 当前限制
@@ -227,7 +223,7 @@ examples/agents/shared-theone/README.md
 - 不包含团队权限、企业审计、备份恢复。
 - 不保存完整源码、完整工具输出、完整 diff、完整历史对话。
 - token savings 是本地近似估算口径。
-- real_agent certification 需要用户在真实 Codex、Claude Code、Cursor 环境中手工执行。
+- Level4 全量捕获依赖各 Agent 侧配置，v1.0.0 后置完善（核心 MCP 与记忆链路已本地验收）。
 
 ## 展望
 
