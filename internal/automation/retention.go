@@ -3,7 +3,7 @@ package automation
 import (
 	"context"
 
-	"github.com/zaneway/the-one/internal/retention"
+	"github.com/zaneway/theone/internal/retention"
 )
 
 func (s *Service) RunRetention(ctx context.Context, req retention.RunRequest) (retention.RunResponse, error) {

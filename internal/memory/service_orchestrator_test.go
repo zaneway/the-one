@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/zaneway/the-one/internal/config"
+	"github.com/zaneway/theone/internal/config"
 )
 
 type stubRetrievalOrchestrator struct {

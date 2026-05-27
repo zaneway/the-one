@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zaneway/the-one/internal/capture"
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/capture"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 func TestRuleBasedUserDeclarationPreferenceCandidate(t *testing.T) {
@@ -86,7 +86,7 @@ func TestRuleBasedToolSuccessNoEvidence(t *testing.T) {
 	provider := NewRuleBasedProvider()
 	event := rawEvent(capture.EventToolResultSummary, "")
 	event.ToolName = "go test"
-	event.OutputSummary = "ok github.com/zaneway/the-one/internal/memory"
+	event.OutputSummary = "ok github.com/zaneway/theone/internal/memory"
 	event.SourceRefsJSON = refsJSON(map[string]any{"exit_code": 0})
 
 	evidence, err := provider.ExtractEvidence(context.Background(), EvidenceInput{RawEvent: event})

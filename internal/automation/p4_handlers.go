@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/zaneway/the-one/internal/codeindex"
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/docindex"
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/codeindex"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/docindex"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 type codeRefRepository interface {

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/zaneway/the-one/internal/config"
+	"github.com/zaneway/theone/internal/config"
 )
 
 // forbiddenRawFields 禁止出现在 source_refs 中的原始内容字段列表

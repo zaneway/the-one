@@ -7,13 +7,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zaneway/the-one/internal/capture"
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/idgen"
-	"github.com/zaneway/the-one/internal/ingest"
-	"github.com/zaneway/the-one/internal/memory"
-	"github.com/zaneway/the-one/internal/processor"
-	"github.com/zaneway/the-one/internal/retention"
+	"github.com/zaneway/theone/internal/capture"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/idgen"
+	"github.com/zaneway/theone/internal/ingest"
+	"github.com/zaneway/theone/internal/memory"
+	"github.com/zaneway/theone/internal/processor"
+	"github.com/zaneway/theone/internal/retention"
 )
 
 const (

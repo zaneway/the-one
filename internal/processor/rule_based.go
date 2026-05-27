@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/zaneway/the-one/internal/capture"
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/capture"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 const RuleBasedProviderName = "rule_based"

@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/zaneway/the-one/internal/codeindex"
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/docindex"
-	"github.com/zaneway/the-one/internal/mcp"
-	"github.com/zaneway/the-one/internal/memory"
-	"github.com/zaneway/the-one/internal/retrieval"
-	"github.com/zaneway/the-one/internal/storage/sqlite"
+	"github.com/zaneway/theone/internal/codeindex"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/docindex"
+	"github.com/zaneway/theone/internal/mcp"
+	"github.com/zaneway/theone/internal/memory"
+	"github.com/zaneway/theone/internal/retrieval"
+	"github.com/zaneway/theone/internal/storage/sqlite"
 )
 
 type Store interface {
@@ -83,7 +83,7 @@ func (s *Service) HealthTool(ctx context.Context, _ json.RawMessage) (any, *mcp.
 				ErrorCode:    "STORAGE_UNAVAILABLE",
 				Message:      "sqlite ping failed",
 				Retryable:    true,
-				FallbackHint: "restart memoryd or check db path",
+				FallbackHint: "restart theone or check db path",
 			},
 		}, nil
 	}

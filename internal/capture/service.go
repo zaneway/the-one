@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/idgen"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/idgen"
 )
 
 const pipelineRawEventOnly = "raw_event_only"

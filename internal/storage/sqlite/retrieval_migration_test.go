@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zaneway/the-one/internal/config"
+	"github.com/zaneway/theone/internal/config"
 )
 
 func TestP4RetrievalMigrationDefaultsAndConstraints(t *testing.T) {

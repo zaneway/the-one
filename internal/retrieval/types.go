@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 // Orchestrator 定义 P4 检索编排器内部接口。

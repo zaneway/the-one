@@ -4,42 +4,44 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 
-	"github.com/zaneway/the-one/internal/automation"
-	"github.com/zaneway/the-one/internal/capture"
-	"github.com/zaneway/the-one/internal/codeindex"
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/diagnostics"
-	"github.com/zaneway/the-one/internal/logging"
-	"github.com/zaneway/the-one/internal/mcp"
-	"github.com/zaneway/the-one/internal/mcp/tools"
-	"github.com/zaneway/the-one/internal/memory"
-	"github.com/zaneway/the-one/internal/mvp"
-	"github.com/zaneway/the-one/internal/processor"
-	"github.com/zaneway/the-one/internal/retrieval"
-	"github.com/zaneway/the-one/internal/storage/sqlite"
+	"github.com/zaneway/theone/internal/automation"
+	"github.com/zaneway/theone/internal/capture"
+	"github.com/zaneway/theone/internal/codeindex"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/diagnostics"
+	"github.com/zaneway/theone/internal/logging"
+	"github.com/zaneway/theone/internal/mcp"
+	"github.com/zaneway/theone/internal/mcp/tools"
+	"github.com/zaneway/theone/internal/memory"
+	"github.com/zaneway/theone/internal/mvp"
+	"github.com/zaneway/theone/internal/processor"
+	"github.com/zaneway/theone/internal/retrieval"
+	"github.com/zaneway/theone/internal/storage/sqlite"
 )
 
-// App 组装 memoryd 的 P0 运行时依赖。
+// App 组装 theone 的 P0 运行时依赖。
 //
 // P0 只负责配置、日志、SQLite、migration 和 health/status 工具注册；
 // 记忆写入、检索和 review 业务会在 P1 基于同一 Registry 扩展。
 type App struct {
-	cfg      config.Config
-	version  string
-	logger   *slog.Logger
-	store    *sqlite.Store
-	registry *mcp.Registry
-	worker   *automation.Worker
+	cfg       config.Config
+	version   string
+	logger    *slog.Logger
+	logCloser io.Closer
+	store     *sqlite.Store
+	registry  *mcp.Registry
+	worker    *automation.Worker
 }
 
-// New 初始化 memoryd 运行时。
+// New 初始化 theone 运行时。
 // 初始化顺序：日志 -> SQLite（WAL + migration + 能力探测）-> MCP Registry -> 诊断工具 -> 记忆服务 -> 捕获服务 -> 自动化服务 -> Worker。
 // 设计约束：migration 失败时不会启动 MCP 工具，避免半初始化状态对外可见。
 func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
-	// Step 1: 初始化日志（slog + 可选文件输出）
-	logger, err := logging.New(cfg.Logging)
+	// Step 1: 初始化日志（slog + stderr/file 双写）
+	logger, logCloser, err := logging.New(cfg.Logging)
 	if err != nil {
 		return nil, err
 	}
@@ -47,6 +49,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	store, err := sqlite.Open(ctx, cfg.Storage, logger)
 	if err != nil {
 		logger.Error("sqlite open failed", "db_path", cfg.Storage.Path, "error", err)
+		_ = logCloser.Close()
 		return nil, err
 	}
 	// Step 3: 创建 MCP 工具注册中心，所有工具通过 registry.Register 注册
@@ -89,18 +92,19 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		RetryBaseDelayMS: cfg.Automation.RetryBaseDelayMS,
 		RunningTimeoutMS: cfg.Automation.RunningTimeoutMS,
 	})
-	logger.Info("memoryd initialized",
+	logger.Info("theone initialized",
 		"version", version,
 		"db_path", cfg.Storage.Path,
 		"mcp_addr", cfg.Server.MCPAddr,
 	)
 	return &App{
-		cfg:      cfg,
-		version:  version,
-		logger:   logger,
-		store:    store,
-		registry: registry,
-		worker:   worker,
+		cfg:       cfg,
+		version:   version,
+		logger:    logger,
+		logCloser: logCloser,
+		store:     store,
+		registry:  registry,
+		worker:    worker,
 	}, nil
 }
 
@@ -132,8 +136,14 @@ func (a *App) CallTool(ctx context.Context, name string, params any) (any, *mcp.
 
 // Close 释放运行时资源。
 func (a *App) Close() error {
-	if a.store == nil {
-		return nil
+	var closeErr error
+	if a.store != nil {
+		closeErr = a.store.Close()
 	}
-	return a.store.Close()
+	if a.logCloser != nil {
+		if err := a.logCloser.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
 }

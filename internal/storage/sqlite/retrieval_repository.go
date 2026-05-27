@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zaneway/the-one/internal/idgen"
-	"github.com/zaneway/the-one/internal/memory"
-	"github.com/zaneway/the-one/internal/retrieval"
+	"github.com/zaneway/theone/internal/idgen"
+	"github.com/zaneway/theone/internal/memory"
+	"github.com/zaneway/theone/internal/retrieval"
 )
 
 const (

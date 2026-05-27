@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zaneway/the-one/internal/idgen"
-	"github.com/zaneway/the-one/internal/mvp"
+	"github.com/zaneway/theone/internal/idgen"
+	"github.com/zaneway/theone/internal/mvp"
 )
 
 const defaultMVPLimit = 50

@@ -57,7 +57,7 @@ func (r *Registry) Call(ctx context.Context, name string, params any) (any, *Err
 			ErrorCode:    "VALIDATION_FAILED",
 			Message:      "unknown tool: " + name,
 			Retryable:    false,
-			FallbackHint: "check memoryd status and tool name",
+			FallbackHint: "check theone status and tool name",
 		}
 	}
 	// 将 params 统一序列化为 json.RawMessage，handler 内部再按需反序列化

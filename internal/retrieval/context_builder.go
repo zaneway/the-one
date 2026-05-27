@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 const (

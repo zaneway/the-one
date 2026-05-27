@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/zaneway/the-one/internal/capture"
-	"github.com/zaneway/the-one/internal/idgen"
-	"github.com/zaneway/the-one/internal/mcp"
+	"github.com/zaneway/theone/internal/capture"
+	"github.com/zaneway/theone/internal/idgen"
+	"github.com/zaneway/theone/internal/mcp"
 )
 
 // RegisterCaptureTools 注册 P2 事件捕获和捕获诊断工具到 MCP 注册表

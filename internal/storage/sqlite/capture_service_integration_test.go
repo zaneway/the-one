@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/zaneway/the-one/internal/automation"
-	"github.com/zaneway/the-one/internal/capture"
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/processor"
+	"github.com/zaneway/theone/internal/automation"
+	"github.com/zaneway/theone/internal/capture"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/processor"
 )
 
 func TestCaptureServiceObserveWithSQLiteRepository(t *testing.T) {

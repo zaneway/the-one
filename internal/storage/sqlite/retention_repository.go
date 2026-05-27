@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/zaneway/the-one/internal/memory"
-	"github.com/zaneway/the-one/internal/retention"
+	"github.com/zaneway/theone/internal/memory"
+	"github.com/zaneway/theone/internal/retention"
 )
 
 // ListExpiredTemporaryMemories 查询已过期的临时记忆。

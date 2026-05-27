@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zaneway/the-one/internal/automation"
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/automation"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 // FindDuplicateEvidence 按 P3 evidence 幂等键查找已有证据。
@@ -116,7 +116,7 @@ func (s *Store) FindRelatedMemory(ctx context.Context, req automation.RelatedMem
 // 与手动 Remember 的区别：
 //   - 必须关联至少一个 evidence（自动化记忆必须有证据链）
 //   - 自动设置默认值（confidence=0.7, importance=0.5, encoding_depth=2, decay_rate=0.8）
-//   - 创建者标记为 "automation"（区别于手动写入的 "memoryd"）
+//   - 创建者标记为 "automation"（区别于手动写入的 "theone"）
 //   - 支持批量写入 evidence 关联和可选 review_checkpoint
 //
 // 事务保证：memory_item + evidence_link + FTS + checkpoint 在同一事务中原子写入。
@@ -163,7 +163,7 @@ func (s *Store) WriteAutomatedMemory(ctx context.Context, input automation.Autom
 	if item.Version == 0 {
 		item.Version = 1
 	}
-	// 创建者标记为 "automation"，区别于手动写入的 "memoryd"
+	// 创建者标记为 "automation"，区别于手动写入的 "theone"
 	if item.CreatedBy == "" {
 		item.CreatedBy = "automation"
 	}

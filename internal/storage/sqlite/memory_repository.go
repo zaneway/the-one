@@ -9,8 +9,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/zaneway/the-one/internal/idgen"
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/idgen"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 // FindDuplicate 按 P1 幂等键查找同 scope/type/content 的现有记忆。
@@ -390,7 +390,7 @@ func insertMemoryItem(ctx context.Context, tx *sql.Tx, item memory.MemoryItem) e
 	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID, item.Scope, nullString(item.WorkspaceID), nullString(item.UserID), nullString(item.ProjectID),
 		nullString(item.RepoID), nullString(item.SessionID), nullString(item.TaskID), item.MemoryType,
-		nullString(item.SourceType), nullString(firstNonEmpty(item.CreatedBy, "memoryd")), item.SourceQuality, nullString(item.Title), item.Content,
+		nullString(item.SourceType), nullString(firstNonEmpty(item.CreatedBy, "theone")), item.SourceQuality, nullString(item.Title), item.Content,
 		nullString(item.NormalizedContent), nullString(item.SearchText), nullString(item.KeywordsJSON),
 		nullString(item.EntitiesJSON), nullString(item.RetrievalCuesJSON), nullString(item.TagsJSON), item.State,
 		item.Confidence, item.Importance, item.EncodingDepth, item.DecayRate, item.RetentionScore, item.Tier,

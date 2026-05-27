@@ -4,7 +4,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 // ComputeScore 计算记忆的保留分数（0~1）。

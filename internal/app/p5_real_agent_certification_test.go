@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/mvp"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/mvp"
 )
 
 func TestP5DMissingAgentCertificationFails(t *testing.T) {

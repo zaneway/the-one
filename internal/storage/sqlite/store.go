@@ -11,7 +11,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/zaneway/the-one/internal/config"
+	"github.com/zaneway/theone/internal/config"
 )
 
 //go:embed migrations/*.sql
@@ -160,7 +160,7 @@ func (s *Store) detectCapabilities(ctx context.Context) Capabilities {
 // detectFTS5 通过创建临时虚表检测 FTS5 模块是否可用。
 // 使用时间戳作为表名避免并发检测冲突。
 func (s *Store) detectFTS5(ctx context.Context) bool {
-	tableName := fmt.Sprintf("temp.memoryd_fts5_check_%d", time.Now().UnixNano())
+	tableName := fmt.Sprintf("temp.the_one_fts5_check_%d", time.Now().UnixNano())
 	if _, err := s.db.ExecContext(ctx, "create virtual table "+tableName+" using fts5(content);"); err != nil {
 		s.logger.Warn("fts5 unavailable", "error", err)
 		return false

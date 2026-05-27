@@ -3,7 +3,7 @@ package retrieval
 import (
 	"testing"
 
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 func TestFromMemorySearchRequestCopiesFields(t *testing.T) {

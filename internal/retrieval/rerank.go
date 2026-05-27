@@ -9,7 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 // RerankOptions 控制 P4-D2 排序公式的上下文参数。

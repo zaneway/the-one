@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"log/slog"
 
-	"github.com/zaneway/the-one/internal/automation"
-	"github.com/zaneway/the-one/internal/mcp"
-	"github.com/zaneway/the-one/internal/retention"
+	"github.com/zaneway/theone/internal/automation"
+	"github.com/zaneway/theone/internal/mcp"
+	"github.com/zaneway/theone/internal/retention"
 )
 
 // RegisterAutomationTools 注册 P3 自动记忆诊断工具到 MCP 注册表。

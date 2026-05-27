@@ -5,8 +5,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/zaneway/the-one/internal/memory"
-	"github.com/zaneway/the-one/internal/processor"
+	"github.com/zaneway/theone/internal/memory"
+	"github.com/zaneway/theone/internal/processor"
 )
 
 func TestAdmissionClampAndDropByScore(t *testing.T) {

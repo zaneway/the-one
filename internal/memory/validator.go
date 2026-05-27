@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/zaneway/the-one/internal/config"
+	"github.com/zaneway/theone/internal/config"
 )
 
 // NormalizeRemember 归一化并校验 remember 请求

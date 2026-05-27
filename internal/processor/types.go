@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/zaneway/the-one/internal/capture"
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/capture"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 // Provider turns minimized capture events into explainable evidence and memory candidates.

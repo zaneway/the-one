@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/docindex"
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/docindex"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 func TestMemoryOrchestratorSearchWritesTraceAndRetrievedLogs(t *testing.T) {

@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zaneway/the-one/internal/automation"
-	"github.com/zaneway/the-one/internal/capture"
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/docindex"
-	"github.com/zaneway/the-one/internal/memory"
-	"github.com/zaneway/the-one/internal/processor"
-	"github.com/zaneway/the-one/internal/retrieval"
-	"github.com/zaneway/the-one/internal/storage/sqlite"
+	"github.com/zaneway/theone/internal/automation"
+	"github.com/zaneway/theone/internal/capture"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/docindex"
+	"github.com/zaneway/theone/internal/memory"
+	"github.com/zaneway/theone/internal/processor"
+	"github.com/zaneway/theone/internal/retrieval"
+	"github.com/zaneway/theone/internal/storage/sqlite"
 )
 
 func TestServiceRunsEvidenceCandidateAdmissionChain(t *testing.T) {
@@ -407,7 +407,7 @@ func TestServiceSkipsOrdinaryToolSuccessWithoutCandidate(t *testing.T) {
 		OccurredAt:     now,
 		Actor:          capture.ActorTool,
 		ToolName:       "go test",
-		OutputSummary:  "ok github.com/zaneway/the-one/internal/automation",
+		OutputSummary:  "ok github.com/zaneway/theone/internal/automation",
 		SourceRefsJSON: `[{"exit_code":0,"command_hash":"sha256:tool-success"}]`,
 		ContentHash:    "sha256:tool-success",
 		CreatedAt:      now,

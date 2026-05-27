@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zaneway/the-one/internal/automation"
-	"github.com/zaneway/the-one/internal/capture"
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/processor"
-	"github.com/zaneway/the-one/internal/storage/sqlite"
+	"github.com/zaneway/theone/internal/automation"
+	"github.com/zaneway/theone/internal/capture"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/processor"
+	"github.com/zaneway/theone/internal/storage/sqlite"
 )
 
 func TestServiceReconcileDryRunFindsOrphanRawEvents(t *testing.T) {

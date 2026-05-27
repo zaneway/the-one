@@ -165,7 +165,7 @@ func (s *Store) applyMigration(ctx context.Context, item migration) error {
 }
 
 func (s *Store) canCreateFTS5(ctx context.Context) bool {
-	tableName := fmt.Sprintf("temp.memoryd_migration_fts5_check_%d", time.Now().UnixNano())
+	tableName := fmt.Sprintf("temp.the_one_migration_fts5_check_%d", time.Now().UnixNano())
 	if _, err := s.db.ExecContext(ctx, "create virtual table "+tableName+" using fts5(content);"); err != nil {
 		return false
 	}

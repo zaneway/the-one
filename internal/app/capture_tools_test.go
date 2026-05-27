@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zaneway/the-one/internal/capture"
-	"github.com/zaneway/the-one/internal/config"
+	"github.com/zaneway/theone/internal/capture"
+	"github.com/zaneway/theone/internal/config"
 )
 
 func TestAppRegistersCaptureTools(t *testing.T) {

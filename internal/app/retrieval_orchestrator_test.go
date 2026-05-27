@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/memory"
-	"github.com/zaneway/the-one/internal/retrieval"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/memory"
+	"github.com/zaneway/theone/internal/retrieval"
 )
 
 func TestAppMemorySearchUsesP4RetrievalOrchestrator(t *testing.T) {

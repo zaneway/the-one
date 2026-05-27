@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zaneway/the-one/internal/automation"
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/memory"
-	"github.com/zaneway/the-one/internal/retention"
+	"github.com/zaneway/theone/internal/automation"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/memory"
+	"github.com/zaneway/theone/internal/retention"
 )
 
 func TestRetentionRepositoryListsAndArchivesExpiredTemporary(t *testing.T) {

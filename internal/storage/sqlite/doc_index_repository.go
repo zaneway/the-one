@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zaneway/the-one/internal/docindex"
-	"github.com/zaneway/the-one/internal/idgen"
+	"github.com/zaneway/theone/internal/docindex"
+	"github.com/zaneway/theone/internal/idgen"
 )
 
 const (

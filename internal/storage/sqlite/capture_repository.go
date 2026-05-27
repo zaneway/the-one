@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/zaneway/the-one/internal/automation"
-	"github.com/zaneway/the-one/internal/capture"
+	"github.com/zaneway/theone/internal/automation"
+	"github.com/zaneway/theone/internal/capture"
 )
 
 const defaultCaptureLimit = 50

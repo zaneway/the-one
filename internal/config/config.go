@@ -10,8 +10,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config memoryd 主配置结构体
-// memoryd 的最小配置模型，P0 保持默认可启动
+// Config theone 主配置结构体
+// theone 的最小配置模型，P0 保持默认可启动
 // 设计原则：embedding 和 retention 默认关闭，保证无外部依赖也能启动
 type Config struct {
 	// Storage 存储配置
@@ -79,7 +79,7 @@ type StorageConfig struct {
 	Backend string `yaml:"backend" json:"backend"`
 
 	// Path 数据库路径
-	// SQLite数据库文件路径，默认$HOME/.memoryd/memory.db
+	// SQLite数据库文件路径，默认$HOME/.theone/memory.db
 	Path string `yaml:"path" json:"path"`
 
 	// SQLiteVecEnabled sqlite-vec启用状态
@@ -101,7 +101,8 @@ type ServerConfig struct {
 }
 
 // LoggingConfig 日志配置结构体
-// 描述本地日志级别和格式
+// 描述本地日志级别、格式和落盘路径
+// 设计约束：默认同时输出到 stderr 和日志文件，既保留本地排障体验，也避免日志只存在于终端会话。
 type LoggingConfig struct {
 	// Level 日志级别
 	// 可选值：debug、info、warn、error
@@ -109,8 +110,11 @@ type LoggingConfig struct {
 
 	// Format 日志格式
 	// 可选值：text、json
-	// 日志输出到stderr，避免污染stdio响应
 	Format string `yaml:"format" json:"format"`
+
+	// Path 日志文件路径
+	// 支持 ~ 展开；默认写入 ~/.theone/logs/theone.log
+	Path string `yaml:"path" json:"path"`
 }
 
 // MemoryConfig 记忆配置结构体
@@ -380,14 +384,14 @@ type Overrides struct {
 }
 
 // Default 返回 P0 可直接启动的默认配置
-// 默认数据库路径位于 $HOME/.memoryd/memory.db
+// 默认数据库路径位于 $HOME/.theone/memory.db
 // 设计原则：默认配置能直接启动，避免用户先理解完整系统才能使用
 func Default() Config {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		home = "."
 	}
-	dataDir := filepath.Join(home, ".memoryd")
+	dataDir := filepath.Join(home, ".theone")
 	return Config{
 		Storage: StorageConfig{
 			Backend:          "sqlite",
@@ -401,6 +405,7 @@ func Default() Config {
 		Logging: LoggingConfig{
 			Level:  "info",
 			Format: "text",
+			Path:   filepath.Join(dataDir, "logs", "theone.log"),
 		},
 		Memory: MemoryConfig{
 			DefaultUserID:       "local_default_user",
@@ -488,15 +493,15 @@ func Default() Config {
 // 优先级：命令行 > 环境变量 > 配置文件 > 默认值
 func Load(overrides Overrides) (Config, error) {
 	cfg := Default()
-	configPath := firstNonEmpty(overrides.ConfigPath, os.Getenv("MEMORYD_CONFIG"))
+	configPath := firstNonEmpty(overrides.ConfigPath, os.Getenv("THEONE_CONFIG"))
 	if configPath != "" {
 		if err := loadYAML(configPath, &cfg); err != nil {
 			return Config{}, err
 		}
 	}
 
-	dataDir := os.Getenv("MEMORYD_DATA_DIR")
-	dbPath := os.Getenv("MEMORYD_DB_PATH")
+	dataDir := os.Getenv("THEONE_DATA_DIR")
+	dbPath := os.Getenv("THEONE_DB_PATH")
 	if overrides.DataDir != "" {
 		dataDir = overrides.DataDir
 	}
@@ -510,13 +515,17 @@ func Load(overrides Overrides) (Config, error) {
 		cfg.Storage.Path = expandHome(dbPath)
 	}
 
-	if level := firstNonEmpty(overrides.LogLevel, os.Getenv("MEMORYD_LOG_LEVEL")); level != "" {
+	if level := firstNonEmpty(overrides.LogLevel, os.Getenv("THEONE_LOG_LEVEL")); level != "" {
 		cfg.Logging.Level = level
 	}
-	if addr := firstNonEmpty(overrides.MCPAddr, os.Getenv("MEMORYD_MCP_ADDR")); addr != "" {
+	if addr := firstNonEmpty(overrides.MCPAddr, os.Getenv("THEONE_MCP_ADDR")); addr != "" {
 		cfg.Server.MCPAddr = addr
 	}
+	if logPath := os.Getenv("THEONE_LOG_PATH"); logPath != "" {
+		cfg.Logging.Path = logPath
+	}
 	cfg.Storage.Path = expandHome(cfg.Storage.Path)
+	cfg.Logging.Path = expandHome(cfg.Logging.Path)
 	return cfg, validate(cfg)
 }
 
@@ -592,6 +601,9 @@ func validate(cfg Config) error {
 	case "debug", "info", "warn", "error":
 	default:
 		return fmt.Errorf("CONFIG_INVALID: unsupported log level %q", cfg.Logging.Level)
+	}
+	if strings.TrimSpace(cfg.Logging.Path) == "" {
+		return errors.New("CONFIG_INVALID: logging.path is required")
 	}
 	return nil
 }

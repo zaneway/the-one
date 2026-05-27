@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 // ErrUnsupported 表示 local_basic 不能可靠提供调用图、影响面等高级 Code Index 能力。

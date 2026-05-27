@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/docindex"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/docindex"
 )
 
 func TestP4B4DocSnapshotRepositoryWriteDedupAndList(t *testing.T) {

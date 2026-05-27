@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,12 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.Server.MCPAddr != "stdio" {
 		t.Fatalf("mcp addr = %q, want stdio", cfg.Server.MCPAddr)
+	}
+	if cfg.Logging.Path == "" {
+		t.Fatal("logging path = empty, want default log file path")
+	}
+	if !strings.HasSuffix(cfg.Logging.Path, filepath.Join("logs", "theone.log")) {
+		t.Fatalf("logging path = %q, want suffix logs/theone.log", cfg.Logging.Path)
 	}
 	if cfg.Embedding.Provider != "none" {
 		t.Fatalf("embedding provider = %q, want none", cfg.Embedding.Provider)
@@ -60,8 +67,10 @@ func TestLoadDefaults(t *testing.T) {
 }
 
 func TestLoadEnvAndOverrides(t *testing.T) {
-	t.Setenv("MEMORYD_DATA_DIR", filepath.Join(t.TempDir(), "from-env"))
-	t.Setenv("MEMORYD_LOG_LEVEL", "debug")
+	t.Setenv("THEONE_DATA_DIR", filepath.Join(t.TempDir(), "from-env"))
+	t.Setenv("THEONE_LOG_LEVEL", "debug")
+	logPath := filepath.Join(t.TempDir(), "logs", "custom.log")
+	t.Setenv("THEONE_LOG_PATH", logPath)
 
 	dbPath := filepath.Join(t.TempDir(), "explicit.db")
 	cfg, err := Load(Overrides{DBPath: dbPath, LogLevel: "warn"})
@@ -73,6 +82,9 @@ func TestLoadEnvAndOverrides(t *testing.T) {
 	}
 	if cfg.Logging.Level != "warn" {
 		t.Fatalf("log level = %q, want warn", cfg.Logging.Level)
+	}
+	if cfg.Logging.Path != logPath {
+		t.Fatalf("log path = %q, want %q", cfg.Logging.Path, logPath)
 	}
 }
 

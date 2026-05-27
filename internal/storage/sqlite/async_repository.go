@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zaneway/the-one/internal/automation"
+	"github.com/zaneway/theone/internal/automation"
 )
 
 const defaultAutomationLimit = 50

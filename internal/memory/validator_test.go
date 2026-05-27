@@ -3,7 +3,7 @@ package memory
 import (
 	"testing"
 
-	"github.com/zaneway/the-one/internal/config"
+	"github.com/zaneway/theone/internal/config"
 )
 
 func TestValidateScopeRejectsProjectLocalWithoutProject(t *testing.T) {

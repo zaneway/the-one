@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zaneway/the-one/internal/automation"
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/automation"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 func TestAsyncRepositoryJobLifecycle(t *testing.T) {

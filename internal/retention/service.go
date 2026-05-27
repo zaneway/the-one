@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/zaneway/the-one/internal/config"
+	"github.com/zaneway/theone/internal/config"
 )
 
 const runLimitMax = 100

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 func TestLocalBasicAdapterResolveCodeRefs(t *testing.T) {

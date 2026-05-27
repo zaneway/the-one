@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/zaneway/the-one/internal/config"
+	"github.com/zaneway/theone/internal/config"
 )
 
 func TestP4B5EmbeddingRepositoryUpsertReplacesModelVersion(t *testing.T) {

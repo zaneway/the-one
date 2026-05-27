@@ -1,6 +1,6 @@
 package retrieval
 
-import "github.com/zaneway/the-one/internal/memory"
+import "github.com/zaneway/theone/internal/memory"
 
 const (
 	// RelationTypeSupersedes 表示 source 记忆替代 target 记忆。

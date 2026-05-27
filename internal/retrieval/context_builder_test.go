@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 func TestBuildContextPackUsesBucketBudgetInsteadOfInputOrder(t *testing.T) {

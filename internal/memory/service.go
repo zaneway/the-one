@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/idgen"
-	"github.com/zaneway/the-one/internal/ingest"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/idgen"
+	"github.com/zaneway/theone/internal/ingest"
 )
 
 // Repository 记忆仓库接口

@@ -871,7 +871,7 @@ type MemoryItem struct {
 	SourceType string `json:"source_type,omitempty"`
 
 	// CreatedBy 创建者
-	// 标记手动写入或自动写入来源，如 memoryd、automation:rule_based
+	// 标记手动写入或自动写入来源，如 theone、automation:rule_based
 	CreatedBy string `json:"created_by,omitempty"`
 
 	// SourceQuality 来源质量

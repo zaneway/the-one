@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zaneway/the-one/internal/automation"
-	"github.com/zaneway/the-one/internal/capture"
-	"github.com/zaneway/the-one/internal/memory"
-	"github.com/zaneway/the-one/internal/retrieval"
+	"github.com/zaneway/theone/internal/automation"
+	"github.com/zaneway/theone/internal/capture"
+	"github.com/zaneway/theone/internal/memory"
+	"github.com/zaneway/theone/internal/retrieval"
 )
 
 // TestAppCrossPhaseObserveToSearchAndContext 验证 P2 observe 事件可经 P3 worker 写入 P1，并被 P4 search/context 召回。

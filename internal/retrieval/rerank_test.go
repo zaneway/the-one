@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 func TestScoreCandidateVectorDisabledRenormalizesPositiveWeights(t *testing.T) {

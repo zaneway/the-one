@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zaneway/the-one/internal/mcp"
-	"github.com/zaneway/the-one/internal/memory"
+	"github.com/zaneway/theone/internal/mcp"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 // RegisterMemoryTools 注册 P1 手动记忆工具到 MCP 注册表
@@ -202,11 +202,11 @@ func fallbackHint(code string) string {
 	case "SCOPE_INVALID":
 		return "check scope required fields before retrying"
 	case "FTS_UNAVAILABLE":
-		return "restart memoryd with sqlite fts5 support or use status diagnostics"
+		return "restart theone with sqlite fts5 support or use status diagnostics"
 	case "STORAGE_BUSY":
 		return "retry after the current SQLite write completes"
 	default:
-		return "check request fields and memoryd diagnostics"
+		return "check request fields and theone diagnostics"
 	}
 }
 

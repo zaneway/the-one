@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zaneway/the-one/internal/config"
-	"github.com/zaneway/the-one/internal/mvp"
-	"github.com/zaneway/the-one/internal/retrieval"
+	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/mvp"
+	"github.com/zaneway/theone/internal/retrieval"
 )
 
 func TestAppRegistersMVPTools(t *testing.T) {
