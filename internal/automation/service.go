@@ -14,6 +14,7 @@ import (
 	"github.com/zaneway/theone/internal/memory"
 	"github.com/zaneway/theone/internal/processor"
 	"github.com/zaneway/theone/internal/retention"
+	"github.com/zaneway/theone/internal/retrieval"
 )
 
 const (
@@ -49,9 +50,17 @@ type Repository interface {
 	OverwriteMemoryWithCorrection(ctx context.Context, input AutomatedMemoryCorrection) (memory.MemoryItem, error)
 	ResolveCorrectionTargetMemory(ctx context.Context, req CorrectionTargetRequest) (memory.MemoryItem, bool, error)
 	WriteMemoryRelation(ctx context.Context, relation memory.MemoryRelation) error
+	ArchiveMemoryForSupersedes(ctx context.Context, memoryID string, now time.Time) error
+	UpdateMemorySupersedesID(ctx context.Context, memoryID, supersedesID string, now time.Time) error
 	ListOrphanRawEvents(ctx context.Context, req OrphanRawEventRequest) ([]capture.RawEvent, error)
 
+	WriteMemoryAccessLog(ctx context.Context, record retrieval.AccessLogRecord) (retrieval.AccessLogRecord, error)
+	ListMemoryAccessLogs(ctx context.Context, query retrieval.AccessLogQuery) ([]retrieval.AccessLogRecord, error)
+
 	ListExpiredTemporaryMemories(ctx context.Context, req retention.ListRequest) ([]retention.MemoryRecord, error)
+	ListAccessEvents(ctx context.Context, memoryIDs []string) (map[string][]retention.AccessFeedbackEvent, error)
+	AggregateRelationSignals(ctx context.Context, memoryIDs []string) (map[string]retention.RelationSignals, error)
+	CountStaleCodeRefs(ctx context.Context, memoryIDs []string) (map[string]int, error)
 	ArchiveTemporaryMemory(ctx context.Context, memoryID string, now time.Time) error
 	ListMemoriesForScoreRecalc(ctx context.Context, req retention.ListRequest) ([]retention.MemoryRecord, error)
 	UpdateRetentionFields(ctx context.Context, memoryID string, update retention.ScoreUpdate) error
@@ -289,8 +298,11 @@ func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[st
 		if err != nil {
 			return nil, err
 		}
-		written, err := s.writeAdmittedMemory(ctx, record, candidate, admission, evidence, item)
+		written, err := s.writeAdmittedMemory(ctx, record, candidate, admission, evidence, item, related)
 		if err != nil {
+			return nil, err
+		}
+		if err := s.applyCorrectionSupersedes(ctx, written, candidate, evidence, related); err != nil {
 			return nil, err
 		}
 		if err := s.repo.UpdateCandidateAdmission(ctx, record.ID, admission, CandidateStatusAdmitted, written.ID); err != nil {
@@ -309,7 +321,7 @@ func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[st
 // 特殊处理：如果候选记忆是用户纠正（user_correction），执行原地覆盖语义——
 // 保留旧 memory_id，更新内容和检索字段，并追加新 evidence/review 轨迹。
 // 非纠正场景：写入新的 memory_item + evidence 关联 + 可选的 review_checkpoint。
-func (s *Service) writeAdmittedMemory(ctx context.Context, record MemoryCandidateRecord, candidate processor.MemoryCandidate, admission AdmissionResult, evidence memory.Evidence, item memory.MemoryItem) (memory.MemoryItem, error) {
+func (s *Service) writeAdmittedMemory(ctx context.Context, record MemoryCandidateRecord, candidate processor.MemoryCandidate, admission AdmissionResult, evidence memory.Evidence, item memory.MemoryItem, related []memory.MemoryItem) (memory.MemoryItem, error) {
 	if isUserCorrection(candidate, evidence) {
 		target, found, err := s.resolveCorrectionTarget(ctx, evidence)
 		if err != nil {
@@ -337,11 +349,12 @@ func (s *Service) writeAdmittedMemory(ctx context.Context, record MemoryCandidat
 	if err != nil {
 		return memory.MemoryItem{}, err
 	}
-	return s.repo.WriteAutomatedMemory(ctx, AutomatedMemoryWrite{
+	written, err := s.repo.WriteAutomatedMemory(ctx, AutomatedMemoryWrite{
 		Item:             item,
 		EvidenceIDs:      candidate.SourceEvidenceIDs,
 		ReviewCheckpoint: checkpoint,
 	})
+	return written, err
 }
 
 // resolveCorrectionTarget 从 evidence 的 source_ref 中解析纠正目标 memory。

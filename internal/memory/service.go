@@ -60,9 +60,10 @@ type Repository interface {
 // Service 记忆服务结构体
 // 编排 P1 手动记忆写入、检索、上下文构建和 review 流转
 type Service struct {
-	cfg          config.Config         // 配置信息
-	repo         Repository            // 仓库接口，负责持久化
-	orchestrator RetrievalOrchestrator // P4 检索编排器；为空时保持 P1 FTS 路径
+	cfg            config.Config         // 配置信息
+	repo           Repository            // 仓库接口，负责持久化
+	orchestrator   RetrievalOrchestrator // P4 检索编排器；为空时保持 P1 FTS 路径
+	accessFeedback AccessFeedbackWriter  // P0 质量闭环：review 等写入 access log
 }
 
 // RetrievalOrchestrator 定义 memory.Service 可选接入的 P4 检索编排接口。
@@ -84,6 +85,13 @@ type ServiceOption func(*Service)
 func WithRetrievalOrchestrator(orchestrator RetrievalOrchestrator) ServiceOption {
 	return func(s *Service) {
 		s.orchestrator = orchestrator
+	}
+}
+
+// WithAccessFeedbackWriter 注入 access log 写入能力，用于 review 反馈进入 retention 闭环。
+func WithAccessFeedbackWriter(writer AccessFeedbackWriter) ServiceOption {
+	return func(s *Service) {
+		s.accessFeedback = writer
 	}
 }
 
@@ -553,10 +561,16 @@ func (s *Service) Review(ctx context.Context, req ReviewRequest) (ReviewResponse
 	// approve: pending_review -> stable，记录 user_confirmed=true（用户确认的稳定记忆）
 	case "approve":
 		item, err := s.repo.Approve(ctx, req.MemoryID, req.Reviewer, req.Feedback)
+		if err == nil {
+			s.recordAccessFeedback(ctx, item.ID, "user_confirmed", item.SourceQuality)
+		}
 		return ReviewResponse{MemoryID: item.ID, State: item.State, UserConfirmed: item.UserConfirmed}, err
 	// reject/archive: -> archived，记录审核意见
 	case "reject", "archive":
 		item, err := s.repo.RejectOrArchive(ctx, req.MemoryID, req.Action, req.Reviewer, req.Feedback)
+		if err == nil {
+			s.recordAccessFeedback(ctx, item.ID, "user_rejected", item.SourceQuality)
+		}
 		return ReviewResponse{MemoryID: item.ID, State: item.State, UserConfirmed: item.UserConfirmed}, err
 	// edit: 原地更新内容，version+1，同步 FTS 索引，记录编辑历史
 	case "edit":

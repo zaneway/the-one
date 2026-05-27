@@ -187,7 +187,7 @@ func estimateFeatures(input AdmissionInput) admissionFeatures {
 	// conflictRisk 子特征：与 stable 记忆内容矛盾（含"改为""不再""instead""deprecated"等信号词）
 	conflict := 0.0
 	for _, item := range input.RelatedMemory {
-		if item.State == memory.StateStable && isLikelyConflict(candidate, item) {
+		if item.State == memory.StateStable && memory.LikelyConflict(candidate.MemoryType, candidate.Scope, candidate.Content, item) {
 			conflict += 0.4
 		}
 		if item.Confidence > 0 && item.Confidence < 0.5 {
@@ -514,19 +514,6 @@ func projectScopeRelevance(candidate processor.MemoryCandidate) float64 {
 		}
 	}
 	return 0
-}
-
-// isLikelyConflict 检测候选记忆与已有 stable 记忆是否可能存在内容冲突。
-// 判定规则：同类型同 scope，且合并文本中包含"改为""不再""instead""deprecated"等冲突信号词。
-func isLikelyConflict(candidate processor.MemoryCandidate, item memory.MemoryItem) bool {
-	if item.MemoryType != candidate.MemoryType || item.Scope != candidate.Scope {
-		return false
-	}
-	text := strings.ToLower(candidate.Content + " " + item.Content)
-	return strings.Contains(text, "改为") ||
-		strings.Contains(text, "不再") ||
-		strings.Contains(text, "instead") ||
-		strings.Contains(text, "deprecated")
 }
 
 func overlapKeywords(keywords []string, item memory.MemoryItem) bool {

@@ -7,45 +7,42 @@ import (
 	"github.com/zaneway/theone/internal/memory"
 )
 
-// ComputeScore 计算记忆的保留分数（0~1）。
-// 公式：0.35*importance + 0.25*confidence + 0.20*confirmation + 0.10*reinforcement + 0.10*recency - decayPenalty
-//
-// 正向因子：
-//   - Importance (0.35)：记忆重要性（由 admission 或 rule_based 设定）
-//   - Confidence (0.25)：置信度（来源可信度）
-//   - Confirmation (0.20)：用户确认 + 状态因子（user_confirmed+stable=1.0, stable=0.8, pending=0.4, provisional=0.3）
-//   - Reinforcement (0.10)：有效强化次数（effective_reinforcement / 5, max 1.0）
-//   - Recency (0.10)：时效性（7天=1.0, 30天=0.6, 90天=0.3, 更久=0.1）
-//
-// 负向因子：
-//   - DecayPenalty：tier 衰减惩罚（temporary=0.40, short_term=0.20, long_term=0.05, durable=0.00）
+// ComputeScore 按架构 §8.2 计算 retention_score（0~1）。
 func ComputeScore(in Input) float64 {
 	now := in.Now
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	updatedAt := in.UpdatedAt
-	if updatedAt.IsZero() {
-		updatedAt = now
+	if in.State == memory.StateDeleted {
+		return 0
 	}
-	score := 0.35*in.Importance +
-		0.25*in.Confidence +
-		0.20*confirmationFactor(in) +
-		0.10*reinforcementFactor(in.EffectiveReinforcement) +
-		0.10*recencyFactor(updatedAt, now) -
-		decayPenalty(in.Tier)
+
+	salience := computeSalience(in)
+	product := salience *
+		encodingDepthFactor(in.EncodingDepth) *
+		consolidationFactor(in.State) *
+		confidenceFactor(in.Confidence) *
+		RelationFactor(in.Relations) *
+		lifecycleFactor(in.Tier, in.State)
+
+	score := product +
+		in.Access.BaseActivationNorm +
+		explicitBoost(in) -
+		in.Access.NegativePenalty -
+		stalenessPenalty(in, now) -
+		ConflictPenalty(in.Relations)
+
+	if in.Relations.IsSuperseded || in.State == memory.StateArchived {
+		score -= 0.25
+	}
+	if in.StaleCodeRefCount > 0 {
+		score -= math.Min(0.2, 0.05*float64(in.StaleCodeRefCount))
+	}
+
 	return clamp(score, 0, 1)
 }
 
-// ComputeTier 根据保留分数和元数据计算记忆的 tier 级别。
-// 升级规则：
-//   - pinned 记忆：保持当前 tier 不变
-//   - temporary 记忆：未过期则保持 temporary（由 cleanup_temporary 模式处理过期）
-//   - score > 0.85 + user_confirmed + stable + 非 checkpoint → durable（最高级别）
-//   - score > 0.85 + user_confirmed + stable + checkpoint → long_term（checkpoint 不升 durable）
-//   - score >= 0.60 → long_term
-//   - score >= 0.30 → short_term
-//   - score < 0.30 → short_term（兜底，不降为 temporary）
+// ComputeTier 根据 retention_score 与强化信号计算 tier（架构 §8.2–§8.3）。
 func ComputeTier(in Input) string {
 	now := in.Now
 	if now.IsZero() {
@@ -54,21 +51,32 @@ func ComputeTier(in Input) string {
 	if in.Pinned {
 		return in.Tier
 	}
-	if in.Tier == memory.TierTemporary && !in.ValidUntil.IsZero() && in.ValidUntil.After(now) {
-		return memory.TierTemporary
+	if in.SourceType == "user_declared" && in.UserConfirmed && in.State == memory.StateStable {
+		return memory.TierDurable
 	}
-	if in.Tier == memory.TierTemporary && in.ValidUntil.IsZero() {
-		return memory.TierTemporary
+	if in.Tier == memory.TierTemporary {
+		if !in.ValidUntil.IsZero() && in.ValidUntil.After(now) {
+			return memory.TierTemporary
+		}
+		if in.ValidUntil.IsZero() {
+			return memory.TierTemporary
+		}
 	}
+
 	score := in.RetentionScore
 	if score == 0 {
 		score = ComputeScore(in)
 	}
+
 	switch {
 	case score > 0.85 && in.UserConfirmed && in.State == memory.StateStable && in.MemoryType != memory.TypeReviewCheckpoint:
 		return memory.TierDurable
 	case score > 0.85 && in.UserConfirmed && in.State == memory.StateStable && in.MemoryType == memory.TypeReviewCheckpoint:
 		return memory.TierLongTerm
+	case in.EffectiveReinforcement >= 5 && score >= 0.60 && in.State == memory.StateStable:
+		return memory.TierLongTerm
+	case in.EffectiveReinforcement >= 3 && score >= 0.45 && in.State == memory.StateStable:
+		return memory.TierReinforcedShort
 	case score >= 0.60:
 		return memory.TierLongTerm
 	case score >= 0.30:
@@ -78,74 +86,190 @@ func ComputeTier(in Input) string {
 	}
 }
 
-// confirmationFactor 计算用户确认 + 状态因子。
-// 分数规则：
-//   - user_confirmed + stable = 1.0（最高确认度）
-//   - stable = 0.8（系统确认）
-//   - pending_review = 0.4（待审核）
-//   - provisional + temporary = 0.1（临时记忆的临时状态，几乎无确认度）
-//   - provisional = 0.3（临时状态）
-func confirmationFactor(in Input) float64 {
-	if in.UserConfirmed && in.State == memory.StateStable {
-		return 1.0
+func computeSalience(in Input) float64 {
+	return clamp(
+		0.35*typeWeight(in.MemoryType)+
+			0.25*in.Importance+
+			0.20*sourceWeight(in.SourceType)+
+			0.20*scopeWeight(in.Scope),
+		0.1, 1.0,
+	)
+}
+
+func typeWeight(memoryType string) float64 {
+	switch memoryType {
+	case memory.TypeDecision, memory.TypeConstraint:
+		return 0.95
+	case memory.TypeFailure:
+		return 0.90
+	case memory.TypeProcedure, memory.TypePreference:
+		return 0.85
+	case memory.TypeProjectFact:
+		return 0.75
+	case "skill":
+		return 0.70
+	case "common_knowledge":
+		return 0.65
+	case memory.TypeSessionSummary:
+		return 0.50
+	case "temporary_state":
+		return 0.30
+	default:
+		return 0.65
 	}
-	switch in.State {
-	case memory.StateStable:
-		return 0.8
-	case memory.StatePendingReview:
-		return 0.4
+}
+
+func sourceWeight(sourceType string) float64 {
+	switch sourceType {
+	case "user_declared", "user_confirmed":
+		return 1.0
+	case "multi_session_consolidation", "task_result":
+		return 0.85
+	case "agent_summary", "manual_review":
+		return 0.70
+	case "session_summary":
+		return 0.65
+	case "tool_output", "file_edit_summary":
+		return 0.55
+	case "import":
+		return 0.50
+	case "auto_log":
+		return 0.35
+	default:
+		return 0.55
+	}
+}
+
+func scopeWeight(scope string) float64 {
+	switch scope {
+	case memory.ScopeProjectLocal:
+		return 0.90
+	case memory.ScopeUserGlobal:
+		return 0.85
+	case memory.ScopeRepoLocal:
+		return 0.80
+	case "global_common":
+		return 0.70
+	case memory.ScopeSession:
+		return 0.35
+	default:
+		return 0.70
+	}
+}
+
+func encodingDepthFactor(depth int) float64 {
+	if depth < 0 {
+		depth = 0
+	}
+	if depth > 4 {
+		depth = 4
+	}
+	return 0.6 + 0.1*float64(depth)
+}
+
+func consolidationFactor(state string) float64 {
+	switch state {
 	case memory.StateProvisional:
-		if in.Tier == memory.TierTemporary {
-			return 0.1
-		}
-		return 0.3
-	default:
-		if in.Tier == memory.TierTemporary {
-			return 0.1
-		}
-		return 0.3
-	}
-}
-
-// reinforcementFactor 计算强化因子。
-// 将有效强化次数归一化到 [0,1]：effective / 5，上限 1.0。
-// 强化次数越多，记忆越稳固。
-func reinforcementFactor(effective float64) float64 {
-	if effective <= 0 {
+		return 0.70
+	case memory.StatePendingReview:
+		return 0.80
+	case memory.StateStable:
+		return 1.00
+	case memory.StateArchived:
+		return 0.45
+	case memory.StateDeleted:
 		return 0
-	}
-	return math.Min(1.0, effective/5)
-}
-
-func recencyFactor(updatedAt, now time.Time) float64 {
-	age := now.Sub(updatedAt)
-	switch {
-	case age <= 7*24*time.Hour:
-		return 1.0
-	case age <= 30*24*time.Hour:
-		return 0.6
-	case age <= 90*24*time.Hour:
-		return 0.3
 	default:
-		return 0.1
+		return 0.70
 	}
 }
 
-// decayPenalty 根据 tier 返回衰减惩罚。
-// tier 越低惩罚越大：temporary(0.40) > short_term(0.20) > long_term(0.05) > durable(0.00)。
-// 设计意图：低 tier 记忆需要更高的 importance/confidence 才能获得高保留分数。
-func decayPenalty(tier string) float64 {
+func confidenceFactor(confidence float64) float64 {
+	return clamp(confidence, 0.2, 1.0)
+}
+
+func lifecycleFactor(tier, state string) float64 {
+	if state == memory.StateArchived {
+		return 0.50
+	}
 	switch tier {
 	case memory.TierTemporary:
 		return 0.40
 	case memory.TierShortTerm:
-		return 0.20
+		return 0.65
+	case memory.TierReinforcedShort:
+		return 0.80
 	case memory.TierLongTerm:
-		return 0.05
+		return 1.00
 	case memory.TierDurable:
-		return 0.00
+		return 1.20
+	case memory.TierArchived:
+		return 0.50
 	default:
-		return 0.20
+		return 0.65
+	}
+}
+
+func explicitBoost(in Input) float64 {
+	boost := 0.0
+	if in.Pinned {
+		boost += 0.30
+	}
+	if in.SourceType == "user_declared" {
+		boost += 0.25
+	}
+	if in.UserConfirmed {
+		boost += 0.20
+	}
+	if in.Tier == memory.TierDurable && in.UserConfirmed {
+		boost += 0.30
+	}
+	return math.Min(0.4, boost)
+}
+
+func stalenessPenalty(in Input, now time.Time) float64 {
+	if !in.ValidUntil.IsZero() && in.ValidUntil.Before(now) {
+		return 0.4
+	}
+	if in.Relations.IsSuperseded {
+		return 1.0
+	}
+	if in.SupersedesID != "" {
+		return 0
+	}
+	reference := in.UpdatedAt
+	if !in.LastValidatedAt.IsZero() {
+		return 0
+	}
+	if !in.LastAccessedAt.IsZero() {
+		reference = in.LastAccessedAt
+	}
+	if reference.IsZero() {
+		reference = in.CreatedAt
+	}
+	ttlDays := defaultTTLDays(in.MemoryType, in.TemporaryTTLDays)
+	ageDays := ageInDays(now, reference)
+	if ttlDays > 0 && ageDays > float64(ttlDays)*0.8 {
+		return 0.2
+	}
+	return 0
+}
+
+func defaultTTLDays(memoryType string, temporaryTTL int) int {
+	if temporaryTTL <= 0 {
+		temporaryTTL = 5
+	}
+	switch memoryType {
+	case memory.TypeReviewCheckpoint:
+		return 365
+	case memory.TypeSessionSummary:
+		return 90
+	case memory.TypeDecision, memory.TypeConstraint, memory.TypeFailure:
+		return 365
+	case "temporary_state":
+		return temporaryTTL
+	default:
+		return 180
 	}
 }
 
@@ -159,23 +283,47 @@ func clamp(value, minValue, maxValue float64) float64 {
 	return value
 }
 
-func recordInput(record MemoryRecord, now time.Time, score float64) Input {
+func recordInput(record MemoryRecord, access AccessFeedbackSummary, relations RelationSignals, staleCodeRefs int, temporaryTTL int, now time.Time) Input {
 	validUntil := time.Time{}
 	if record.HasValidUntil {
 		validUntil = record.ValidUntil
+	}
+	lastValidated := time.Time{}
+	if record.HasLastValidatedAt {
+		lastValidated = record.LastValidatedAt
+	}
+	lastAccessed := time.Time{}
+	if record.HasLastAccessedAt {
+		lastAccessed = record.LastAccessedAt
+	}
+	effective := access.EffectiveReinforcement
+	if effective == 0 {
+		effective = record.EffectiveReinforcement
 	}
 	return Input{
 		State:                  record.State,
 		Tier:                   record.Tier,
 		MemoryType:             record.MemoryType,
+		Scope:                  record.Scope,
+		SourceType:             record.SourceType,
 		Confidence:             record.Confidence,
 		Importance:             record.Importance,
+		SourceQuality:          record.SourceQuality,
+		EncodingDepth:          record.EncodingDepth,
+		DecayRate:              record.DecayRate,
 		UserConfirmed:          record.UserConfirmed,
 		Pinned:                 record.Pinned,
-		EffectiveReinforcement: record.EffectiveReinforcement,
-		RetentionScore:         score,
+		SupersedesID:           record.SupersedesID,
+		EffectiveReinforcement: effective,
+		Access:                 access,
+		Relations:              relations,
 		ValidUntil:             validUntil,
+		LastValidatedAt:        lastValidated,
+		LastAccessedAt:         lastAccessed,
 		UpdatedAt:              record.UpdatedAt,
+		CreatedAt:              record.CreatedAt,
 		Now:                    now,
+		StaleCodeRefCount:      staleCodeRefs,
+		TemporaryTTLDays:       temporaryTTL,
 	}
 }

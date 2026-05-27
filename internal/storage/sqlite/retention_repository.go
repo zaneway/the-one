@@ -133,10 +133,16 @@ func (s *Store) UpdateRetentionFields(ctx context.Context, memoryID string, upda
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	lastReinforced := sql.NullString{}
+	if update.HasLastReinforcedAt && !update.LastReinforcedAt.IsZero() {
+		lastReinforced = sql.NullString{String: update.LastReinforcedAt.Format(time.RFC3339Nano), Valid: true}
+	}
 	result, err := s.db.ExecContext(ctx, `update memory_item
-		set retention_score = ?, tier = ?, updated_at = ?
+		set retention_score = ?, tier = ?, effective_reinforcement = ?,
+		    reinforcement_count = ?, last_reinforced_at = ?, updated_at = ?
 		where id = ? and state not in (?, ?)`,
-		update.RetentionScore, update.Tier, now.Format(time.RFC3339Nano),
+		update.RetentionScore, update.Tier, update.EffectiveReinforcement, update.ReinforcementCount,
+		lastReinforced, now.Format(time.RFC3339Nano),
 		memoryID, memory.StateDeleted, memory.StateArchived,
 	)
 	if err != nil {
@@ -153,25 +159,40 @@ func (s *Store) UpdateRetentionFields(ctx context.Context, memoryID string, upda
 }
 
 func baseRetentionMemorySelect() string {
-	return `select id, coalesce(workspace_id, ''), coalesce(project_id, ''), state, tier, memory_type,
-		confidence, importance, user_confirmed, pinned, effective_reinforcement, retention_score,
-		valid_until, created_at, updated_at
+	return `select id, coalesce(workspace_id, ''), coalesce(project_id, ''), coalesce(scope, ''),
+		coalesce(source_type, ''), state, tier, memory_type, confidence, importance,
+		coalesce(source_quality, 0.7), coalesce(encoding_depth, 2), coalesce(decay_rate, 0.8),
+		user_confirmed, pinned, coalesce(supersedes_id, ''), effective_reinforcement, retention_score,
+		valid_until, last_validated_at, last_accessed_at, created_at, updated_at
 		from memory_item`
 }
 
 func scanRetentionMemory(row rowScanner) (retention.MemoryRecord, error) {
 	var record retention.MemoryRecord
-	var validUntil sql.NullString
+	var validUntil, lastValidated, lastAccessed sql.NullString
 	var createdAt, updatedAt string
-	err := row.Scan(&record.ID, &record.WorkspaceID, &record.ProjectID, &record.State, &record.Tier,
-		&record.MemoryType, &record.Confidence, &record.Importance, &record.UserConfirmed, &record.Pinned,
-		&record.EffectiveReinforcement, &record.RetentionScore, &validUntil, &createdAt, &updatedAt)
+	err := row.Scan(
+		&record.ID, &record.WorkspaceID, &record.ProjectID, &record.Scope, &record.SourceType,
+		&record.State, &record.Tier, &record.MemoryType, &record.Confidence, &record.Importance,
+		&record.SourceQuality, &record.EncodingDepth, &record.DecayRate,
+		&record.UserConfirmed, &record.Pinned, &record.SupersedesID,
+		&record.EffectiveReinforcement, &record.RetentionScore,
+		&validUntil, &lastValidated, &lastAccessed, &createdAt, &updatedAt,
+	)
 	if err != nil {
 		return retention.MemoryRecord{}, err
 	}
 	if validUntil.Valid && validUntil.String != "" {
 		record.HasValidUntil = true
 		record.ValidUntil = parseTime(validUntil.String)
+	}
+	if lastValidated.Valid && lastValidated.String != "" {
+		record.HasLastValidatedAt = true
+		record.LastValidatedAt = parseTime(lastValidated.String)
+	}
+	if lastAccessed.Valid && lastAccessed.String != "" {
+		record.HasLastAccessedAt = true
+		record.LastAccessedAt = parseTime(lastAccessed.String)
 	}
 	record.CreatedAt = parseTime(createdAt)
 	record.UpdatedAt = parseTime(updatedAt)

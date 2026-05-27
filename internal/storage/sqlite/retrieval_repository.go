@@ -10,6 +10,7 @@ import (
 
 	"github.com/zaneway/theone/internal/idgen"
 	"github.com/zaneway/theone/internal/memory"
+	"github.com/zaneway/theone/internal/retention"
 	"github.com/zaneway/theone/internal/retrieval"
 )
 
@@ -182,7 +183,7 @@ func (s *Store) WriteMemoryAccessLogs(ctx context.Context, records []retrieval.A
 			record.ID = id
 		}
 		if record.EventWeight == 0 {
-			record.EventWeight = accessLogEventWeight(record.EventType)
+			record.EventWeight = retention.AccessLogEventWeight(record.EventType)
 		}
 		if record.SourceQuality == 0 {
 			record.SourceQuality = 0.7
@@ -241,8 +242,8 @@ func (s *Store) WriteMemoryAccessLogs(ctx context.Context, records []retrieval.A
 // ListMemoryAccessLogs 按 trace 或 memory 查询 access log 诊断记录。
 // RetrievalTraceID 和 MemoryID 至少提供一个，避免对高增长日志表做无条件扫描。
 func (s *Store) ListMemoryAccessLogs(ctx context.Context, query retrieval.AccessLogQuery) ([]retrieval.AccessLogRecord, error) {
-	if strings.TrimSpace(query.RetrievalTraceID) == "" && strings.TrimSpace(query.MemoryID) == "" {
-		return nil, fmt.Errorf("VALIDATION_FAILED: retrieval_trace_id or memory_id is required")
+	if strings.TrimSpace(query.RetrievalTraceID) == "" && strings.TrimSpace(query.MemoryID) == "" && strings.TrimSpace(query.TaskID) == "" {
+		return nil, fmt.Errorf("VALIDATION_FAILED: retrieval_trace_id, memory_id or task_id is required")
 	}
 	sqlText := `select id, memory_id, coalesce(session_id, ''), coalesce(task_id, ''),
 		coalesce(retrieval_trace_id, ''), event_type, event_weight, coalesce(source_type, ''),
@@ -258,6 +259,10 @@ func (s *Store) ListMemoryAccessLogs(ctx context.Context, query retrieval.Access
 	if query.MemoryID != "" {
 		sqlText += " and memory_id = ?"
 		args = append(args, query.MemoryID)
+	}
+	if query.TaskID != "" {
+		sqlText += " and task_id = ?"
+		args = append(args, query.TaskID)
 	}
 	if query.EventType != "" {
 		sqlText += " and event_type = ?"
@@ -402,41 +407,4 @@ func compactRetrievalText(value string, maxRunes int) string {
 		return value
 	}
 	return string(runes[:maxRunes])
-}
-
-// accessLogEventWeight 返回不同访问事件类型的权重。
-// 权重用于 P4 retention score 重算中的 reinforcement 因子计算。
-//
-// 正向事件（记忆被有效使用）：
-//   - retrieved (0.2)：被检索返回（最低正向）
-//   - injected (0.5)：被注入上下文
-//   - cited_by_agent (1.0)：被 Agent 引用
-//   - task_success (1.5)：关联任务成功
-//   - user_confirmed (2.0)：用户确认（最高正向）
-//
-// 负向事件（记忆价值存疑）：
-//   - ignored (-0.5)：被忽略
-//   - task_failure (-1.5)：关联任务失败
-//   - user_rejected (-3.0)：用户拒绝（最高负向）
-func accessLogEventWeight(eventType string) float64 {
-	switch eventType {
-	case "retrieved":
-		return 0.2
-	case "injected":
-		return 0.5
-	case "cited_by_agent":
-		return 1.0
-	case "user_confirmed":
-		return 2.0
-	case "task_success":
-		return 1.5
-	case "ignored":
-		return -0.5
-	case "task_failure":
-		return -1.5
-	case "user_rejected":
-		return -3.0
-	default:
-		return 0.2
-	}
 }

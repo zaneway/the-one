@@ -72,7 +72,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		retrieval.WithReviewCheckpointRepository(store),
 		retrieval.WithLogger(logger),
 	)
-	memoryService := memory.NewService(cfg, store, memory.WithRetrievalOrchestrator(retrievalOrchestrator))
+	memoryService := memory.NewService(cfg, store,
+		memory.WithRetrievalOrchestrator(retrievalOrchestrator),
+		memory.WithAccessFeedbackWriter(store),
+	)
 	tools.RegisterMemoryTools(registry, memoryService, logger)
 	// Step 6: 注册 P3 自动化工具（memory.jobs.* / memory.candidates.* / memory.automation.status）
 	// automationService 依赖 store 和 rule-based provider（从事件中提取证据的规则引擎）

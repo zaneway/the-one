@@ -403,6 +403,59 @@ func (s *Store) WriteMemoryRelation(ctx context.Context, relation memory.MemoryR
 	return storageErr(err)
 }
 
+// ArchiveMemoryForSupersedes 将被新纠正记忆取代的旧记忆归档。
+func (s *Store) ArchiveMemoryForSupersedes(ctx context.Context, memoryID string, now time.Time) error {
+	if memoryID == "" {
+		return fmt.Errorf("VALIDATION_FAILED: memory id is required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	result, err := s.db.ExecContext(ctx, `update memory_item
+		set state = ?, tier = ?, updated_at = ?
+		where id = ? and state not in (?, ?)`,
+		memory.StateArchived, memory.TierArchived, now.Format(time.RFC3339Nano),
+		memoryID, memory.StateDeleted, memory.StateArchived,
+	)
+	if err != nil {
+		return storageErr(err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return storageErr(err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("MEMORY_NOT_FOUND: %s", memoryID)
+	}
+	return nil
+}
+
+// UpdateMemorySupersedesID 记录新记忆取代的旧记忆 ID。
+func (s *Store) UpdateMemorySupersedesID(ctx context.Context, memoryID, supersedesID string, now time.Time) error {
+	if memoryID == "" || supersedesID == "" {
+		return fmt.Errorf("VALIDATION_FAILED: memory id and supersedes id are required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	result, err := s.db.ExecContext(ctx, `update memory_item
+		set supersedes_id = ?, updated_at = ?
+		where id = ? and state not in (?, ?)`,
+		supersedesID, now.Format(time.RFC3339Nano), memoryID, memory.StateDeleted, memory.StateArchived,
+	)
+	if err != nil {
+		return storageErr(err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return storageErr(err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("MEMORY_NOT_FOUND: %s", memoryID)
+	}
+	return nil
+}
+
 func baseEvidenceSelect() string {
 	return `select id, coalesce(raw_event_id, ''), source_type, interpreted_statement,
 		coalesce(keywords_json, ''), coalesce(salient_spans_json, ''),

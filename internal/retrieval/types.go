@@ -545,6 +545,9 @@ type AccessLogQuery struct {
 	// MemoryID 记忆 ID。
 	MemoryID string
 
+	// TaskID 任务 ID，用于 task_success 等按任务聚合反馈。
+	TaskID string
+
 	// EventType access log 事件类型，可选过滤条件。
 	EventType string
 

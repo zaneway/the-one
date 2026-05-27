@@ -66,6 +66,11 @@ type JobEnqueuer interface {
 	EnqueueRawEvent(ctx context.Context, event RawEvent) error
 }
 
+// TaskResultRecorder 在 task.result 成功时写入 task_success 访问反馈（可选，由 automation 实现）。
+type TaskResultRecorder interface {
+	RecordTaskSuccessFeedback(ctx context.Context, taskID, sessionID string) error
+}
+
 // Service 捕获服务结构体
 // 编排 P2 observe 写入链路
 // 设计原则：capture 只落 raw_event；P3 通过可选 enqueuer 触发后续 async_job。
@@ -191,6 +196,7 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 	if err := s.repo.InsertRawEvent(ctx, event); err != nil {
 		return ObserveResponse{}, err
 	}
+	diagnostics := make([]string, 0, 2)
 	// Step 11: 更新 session 质量统计（accepted 计数+1，更新 capture_level 和 capabilities）
 	if hasSession {
 		if err := s.updateQuality(ctx, req, false); err != nil {
@@ -202,6 +208,13 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		status := terminalTaskStatus(req)
 		if _, err := s.repo.EndTask(ctx, task.ID, status, taskOutcome(req), occurredAt); err != nil {
 			return ObserveResponse{}, err
+		}
+		if status == StatusSucceeded && hasSession {
+			if recorder, ok := s.enqueuer.(TaskResultRecorder); ok {
+				if err := recorder.RecordTaskSuccessFeedback(ctx, task.ID, session.ID); err != nil {
+					diagnostics = append(diagnostics, "task_success_feedback_failed")
+				}
+			}
 		}
 	}
 	if hasSession && req.EventType == EventSessionEnd {
@@ -220,7 +233,6 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		}
 	}
 	// Step 13: 可选通知 P3 自动处理入队——enqueuer 不为空时将 raw_event 推入异步处理管道
-	diagnostics := make([]string, 0, 1)
 	if s.enqueuer != nil {
 		if err := s.enqueuer.EnqueueRawEvent(ctx, event); err != nil {
 			// 入队失败不阻塞主流程，记录诊断信息返回给调用方

@@ -259,7 +259,7 @@ memory:
 | `README.md` | 构建、Codex/Claude 接入（Cursor 细节以本文为准） |
 | `doc/P0 工程初始化与本地启动说明.md` | 配置项与环境变量 |
 | `doc/P1 手动记忆接口与验收说明.md` | remember/search/context |
-| `doc/MCP 官方 SDK 接入与多 Agent 兼容改造方案.md` | SDK 改造背景 |
+| `doc/MCP 官方 SDK 接入与多 Agent 兼容改造方案.md` | SDK 改造背景与 Phase 1 实现状态 |
 | `.cursor/rules/theone-memory-observe.mdc` | observe 调用规则全文 |
 
 ---

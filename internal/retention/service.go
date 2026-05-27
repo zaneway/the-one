@@ -14,6 +14,9 @@ type Repository interface {
 	ListExpiredTemporaryMemories(ctx context.Context, req ListRequest) ([]MemoryRecord, error)
 	ArchiveTemporaryMemory(ctx context.Context, memoryID string, now time.Time) error
 	ListMemoriesForScoreRecalc(ctx context.Context, req ListRequest) ([]MemoryRecord, error)
+	ListAccessEvents(ctx context.Context, memoryIDs []string) (map[string][]AccessFeedbackEvent, error)
+	AggregateRelationSignals(ctx context.Context, memoryIDs []string) (map[string]RelationSignals, error)
+	CountStaleCodeRefs(ctx context.Context, memoryIDs []string) (map[string]int, error)
 	UpdateRetentionFields(ctx context.Context, memoryID string, update ScoreUpdate) error
 }
 
@@ -102,9 +105,31 @@ func (s *Service) runRecomputeScores(ctx context.Context, req RunRequest) (RunRe
 		Items:       make([]ActionItem, 0, len(records)),
 		Diagnostics: diagnostics,
 	}
+	memoryIDs := make([]string, 0, len(records))
 	for _, record := range records {
-		score := ComputeScore(recordInput(record, now, 0))
-		tier := ComputeTier(recordInput(record, now, score))
+		memoryIDs = append(memoryIDs, record.ID)
+	}
+	eventsByMemory, err := s.repo.ListAccessEvents(ctx, memoryIDs)
+	if err != nil {
+		return RunResponse{}, err
+	}
+	relationsByMemory, err := s.repo.AggregateRelationSignals(ctx, memoryIDs)
+	if err != nil {
+		return RunResponse{}, err
+	}
+	staleRefsByMemory, err := s.repo.CountStaleCodeRefs(ctx, memoryIDs)
+	if err != nil {
+		return RunResponse{}, err
+	}
+	ttlDays := s.cfg.Retention.TemporaryTTLDays
+	for _, record := range records {
+		access := ComputeAccessSignals(eventsByMemory[record.ID], record.DecayRate, now)
+		relations := relationsByMemory[record.ID]
+		staleRefs := staleRefsByMemory[record.ID]
+		input := recordInput(record, access, relations, staleRefs, ttlDays, now)
+		score := ComputeScore(input)
+		input.RetentionScore = score
+		tier := ComputeTier(input)
 		reason := ReasonScoreRecomputed
 		if score < 0.30 {
 			reason = ReasonArchiveCandidate
@@ -120,11 +145,18 @@ func (s *Service) runRecomputeScores(ctx context.Context, req RunRequest) (RunRe
 		if req.DryRun || record.Pinned {
 			continue
 		}
-		if err := s.repo.UpdateRetentionFields(ctx, record.ID, ScoreUpdate{
-			RetentionScore: score,
-			Tier:           tier,
-			UpdatedAt:      now,
-		}); err != nil {
+		update := ScoreUpdate{
+			RetentionScore:         score,
+			Tier:                   tier,
+			EffectiveReinforcement: access.EffectiveReinforcement,
+			ReinforcementCount:     access.ReinforcementCount,
+			UpdatedAt:              now,
+		}
+		if !access.LastReinforcedAt.IsZero() {
+			update.LastReinforcedAt = access.LastReinforcedAt
+			update.HasLastReinforcedAt = true
+		}
+		if err := s.repo.UpdateRetentionFields(ctx, record.ID, update); err != nil {
 			return resp, err
 		}
 		resp.Processed++

@@ -42,36 +42,83 @@ type RunResponse struct {
 	Diagnostics []string     `json:"diagnostics,omitempty"`
 }
 
+// AccessFeedbackSummary 由 access log 聚合得到的访问与强化信号。
+type AccessFeedbackSummary struct {
+	EffectiveReinforcement float64
+	ReinforcementCount     float64
+	LastReinforcedAt       time.Time
+	BaseActivation         float64
+	BaseActivationNorm     float64
+	NegativePenalty        float64
+}
+
+// RelationSignals 记忆关系图上的计数信号，用于 relation_factor 与 conflict_penalty。
+type RelationSignals struct {
+	SupportingCount         int
+	ContradictingCount      int
+	LinkedLongTermCount     int
+	UnresolvedConflictCount int
+	IsSuperseded            bool
+}
+
+// Input 是架构 §8.2 Retention Score 的完整计算输入。
 type Input struct {
-	State                  string
-	Tier                   string
-	MemoryType             string
-	Confidence             float64
-	Importance             float64
-	UserConfirmed          bool
-	Pinned                 bool
+	State         string
+	Tier          string
+	MemoryType    string
+	Scope         string
+	SourceType    string
+	Confidence    float64
+	Importance    float64
+	SourceQuality float64
+	EncodingDepth int
+	DecayRate     float64
+
+	UserConfirmed bool
+	Pinned        bool
+	SupersedesID  string
+
 	EffectiveReinforcement float64
 	RetentionScore         float64
-	ValidUntil             time.Time
-	UpdatedAt              time.Time
-	Now                    time.Time
+	Access                 AccessFeedbackSummary
+	Relations              RelationSignals
+
+	ValidUntil      time.Time
+	LastValidatedAt time.Time
+	LastAccessedAt  time.Time
+	UpdatedAt       time.Time
+	CreatedAt       time.Time
+	Now             time.Time
+
+	StaleCodeRefCount int
+	TemporaryTTLDays  int
 }
 
 type MemoryRecord struct {
 	ID                     string
 	WorkspaceID            string
 	ProjectID              string
+	Scope                  string
+	SourceType             string
 	State                  string
 	Tier                   string
 	MemoryType             string
 	Confidence             float64
 	Importance             float64
+	SourceQuality          float64
+	EncodingDepth          int
+	DecayRate              float64
 	UserConfirmed          bool
 	Pinned                 bool
+	SupersedesID           string
 	EffectiveReinforcement float64
 	RetentionScore         float64
 	ValidUntil             time.Time
 	HasValidUntil          bool
+	LastValidatedAt        time.Time
+	HasLastValidatedAt     bool
+	LastAccessedAt         time.Time
+	HasLastAccessedAt      bool
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 }
@@ -85,7 +132,11 @@ type ListRequest struct {
 }
 
 type ScoreUpdate struct {
-	RetentionScore float64
-	Tier           string
-	UpdatedAt      time.Time
+	RetentionScore         float64
+	Tier                   string
+	EffectiveReinforcement float64
+	ReinforcementCount     float64
+	LastReinforcedAt       time.Time
+	HasLastReinforcedAt    bool
+	UpdatedAt              time.Time
 }

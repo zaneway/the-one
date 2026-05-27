@@ -132,6 +132,10 @@ const (
 	// 适用于重复失败、会话摘要和未确认但短期有用的候选
 	TierShortTerm = "short_term"
 
+	// TierReinforcedShort 强化短期层级
+	// effective_reinforcement 达到阈值后的中间 tier，默认保留约 90 天
+	TierReinforcedShort = "reinforced_short"
+
 	// TierLongTerm 长期层级
 	// 保留365天，适用于重要决策、失败经验等
 	TierLongTerm = "long_term"
