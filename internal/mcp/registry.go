@@ -23,25 +23,68 @@ func (e *Error) Error() string {
 
 type Handler func(ctx context.Context, params json.RawMessage) (any, *Error)
 
+// ToolSpec 描述一个可暴露给 MCP Host 的工具。
+// Registry 仍然是内部调用边界；ToolSpec 只增加标准 MCP tools/list 所需的元数据。
+type ToolSpec struct {
+	Name            string
+	Title           string
+	Description     string
+	InputSchema     json.RawMessage
+	OutputSchema    json.RawMessage
+	ReadOnlyHint    bool
+	DestructiveHint *bool
+	IdempotentHint  bool
+	OpenWorldHint   *bool
+	Handler         Handler
+}
+
 // Registry 是 P0 的工具注册中心。P1 的 remember/search/context/review 会复用此入口。
 type Registry struct {
 	handlers map[string]Handler
+	tools    map[string]ToolSpec
+	order    []string
 	logger   *slog.Logger
 }
 
 func NewRegistry(logger *slog.Logger) *Registry {
 	return &Registry{
 		handlers: make(map[string]Handler),
+		tools:    make(map[string]ToolSpec),
 		logger:   logger,
 	}
 }
 
 // Register 注册一个工具处理器。重复注册说明模块装配错误，直接 panic 便于启动期暴露。
 func (r *Registry) Register(name string, handler Handler) {
+	r.RegisterTool(ToolSpec{
+		Name:        name,
+		InputSchema: RawObjectSchema(),
+		Handler:     handler,
+	})
+}
+
+// RegisterTool 注册一个带 MCP 元数据的工具处理器。
+// InputSchema 必须是 JSON Schema object；为空时退化为任意 object，避免 tools/list 暴露非法 schema。
+func (r *Registry) RegisterTool(spec ToolSpec) {
+	name := spec.Name
 	if _, exists := r.handlers[name]; exists {
 		panic("duplicate mcp tool: " + name)
 	}
-	r.handlers[name] = handler
+	if len(spec.InputSchema) == 0 {
+		spec.InputSchema = RawObjectSchema()
+	}
+	r.handlers[name] = spec.Handler
+	r.tools[name] = spec
+	r.order = append(r.order, name)
+}
+
+// Tools 返回按注册顺序排列的工具元数据快照，供官方 MCP SDK 注册 tools/list。
+func (r *Registry) Tools() []ToolSpec {
+	out := make([]ToolSpec, 0, len(r.order))
+	for _, name := range r.order {
+		out = append(out, r.tools[name])
+	}
+	return out
 }
 
 // Call 调用工具并记录基础耗时日志。

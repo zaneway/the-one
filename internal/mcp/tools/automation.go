@@ -13,13 +13,13 @@ import (
 // RegisterAutomationTools 注册 P3 自动记忆诊断工具到 MCP 注册表。
 func RegisterAutomationTools(registry *mcp.Registry, service *automation.Service, logger *slog.Logger) {
 	handler := &AutomationHandler{service: service, logger: logger}
-	registry.Register("memory.jobs.list", handler.ListJobs)
-	registry.Register("memory.jobs.get", handler.GetJob)
-	registry.Register("memory.candidates.list", handler.ListCandidates)
-	registry.Register("memory.candidates.get", handler.GetCandidate)
-	registry.Register("memory.automation.status", handler.Status)
-	registry.Register("memory.jobs.reconcile", handler.Reconcile)
-	registry.Register("memory.retention.run", handler.RunRetention)
+	registry.RegisterTool(automationListJobsSpec(handler.ListJobs))
+	registry.RegisterTool(automationGetJobSpec(handler.GetJob))
+	registry.RegisterTool(automationListCandidatesSpec(handler.ListCandidates))
+	registry.RegisterTool(automationGetCandidateSpec(handler.GetCandidate))
+	registry.RegisterTool(automationStatusSpec(handler.Status))
+	registry.RegisterTool(automationReconcileSpec(handler.Reconcile))
+	registry.RegisterTool(retentionRunSpec(handler.RunRetention))
 }
 
 type AutomationHandler struct {

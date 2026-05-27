@@ -23,11 +23,11 @@ import (
 // - 工具注册是 MCP 服务启动时的一次性操作
 func RegisterCaptureTools(registry *mcp.Registry, service *capture.Service, logger *slog.Logger) {
 	handler := &CaptureHandler{service: service, logger: logger}
-	registry.Register("memory.observe", handler.Observe)
-	registry.Register("memory.capture.sessions", handler.ListSessions)
-	registry.Register("memory.capture.tasks", handler.ListTasks)
-	registry.Register("memory.capture.events", handler.ListEvents)
-	registry.Register("memory.capture.quality", handler.Quality)
+	registry.RegisterTool(captureObserveSpec(handler.Observe))
+	registry.RegisterTool(captureSessionsSpec(handler.ListSessions))
+	registry.RegisterTool(captureTasksSpec(handler.ListTasks))
+	registry.RegisterTool(captureEventsSpec(handler.ListEvents))
+	registry.RegisterTool(captureQualitySpec(handler.Quality))
 }
 
 // CaptureHandler P2 事件捕获工具的 MCP 处理器

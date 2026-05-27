@@ -44,13 +44,13 @@ func NewService(version string, cfg config.Config, store Store) *Service {
 
 // RegisterTools 注册 P0 诊断工具。后续 P1 工具应复用同一个 Registry。
 func RegisterTools(registry *mcp.Registry, service *Service) {
-	registry.Register("memory.health", service.HealthTool)
-	registry.Register("memory.status", service.StatusTool)
-	registry.Register("memory.retrieval.traces", service.RetrievalTracesTool)
-	registry.Register("memory.retrieval.access_logs", service.RetrievalAccessLogsTool)
-	registry.Register("memory.code_refs", service.CodeRefsTool)
-	registry.Register("memory.docindex.snapshots", service.DocSnapshotsTool)
-	registry.Register("memory.docindex.diff", service.DocDiffTool)
+	registry.RegisterTool(healthSpec(service.HealthTool))
+	registry.RegisterTool(statusSpec(service.StatusTool))
+	registry.RegisterTool(retrievalTracesSpec(service.RetrievalTracesTool))
+	registry.RegisterTool(retrievalAccessLogsSpec(service.RetrievalAccessLogsTool))
+	registry.RegisterTool(codeRefsSpec(service.CodeRefsTool))
+	registry.RegisterTool(docSnapshotsSpec(service.DocSnapshotsTool))
+	registry.RegisterTool(docDiffSpec(service.DocDiffTool))
 }
 
 // HealthResponse 是 memory.health 的响应结构。

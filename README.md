@@ -91,6 +91,116 @@ make run-health DATA_DIR=/tmp/theone
 make run-status DATA_DIR=/tmp/theone
 ```
 
+### Agent 接入
+
+The One 当前作为本地 `stdio` MCP server 运行，适合被 Codex、Cursor、Claude Code 这类 Agent 以子进程方式拉起。接入前建议先完成编译：
+
+```bash
+make build
+```
+
+#### Codex
+
+在 `~/.codex/config.toml` 中增加：
+
+```toml
+[mcp_servers.theone]
+command = "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/bin/theone"
+args = [
+  "serve",
+  "--config",
+  "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/theone.yaml"
+]
+cwd = "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one"
+startup_timeout_sec = 20
+tool_timeout_sec = 120
+enabled = true
+required = false
+```
+
+如果希望显式指定数据目录，可把 `args` 改成：
+
+```toml
+args = [
+  "serve",
+  "--config",
+  "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/theone.yaml",
+  "--data-dir",
+  "/Users/zaneway/.theone"
+]
+```
+
+#### Cursor
+
+推荐在项目根目录创建 `.cursor/mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "theone": {
+      "command": "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/bin/theone",
+      "args": [
+        "serve",
+        "--config",
+        "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/theone.yaml"
+      ],
+      "env": {}
+    }
+  }
+}
+```
+
+如果希望所有项目都能复用，也可以放到全局 `~/.cursor/mcp.json`。项目级配置优先级高于全局配置。
+
+#### Claude Code
+
+Claude Code 推荐直接通过 CLI 注册本地 stdio MCP server：
+
+```bash
+claude mcp add --transport stdio theone -- \
+  /Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/bin/theone \
+  serve \
+  --config /Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/theone.yaml
+```
+
+如果需要显式指定数据目录：
+
+```bash
+claude mcp add --transport stdio theone -- \
+  /Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/bin/theone \
+  serve \
+  --config /Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/theone.yaml \
+  --data-dir /Users/zaneway/.theone
+```
+
+如果你希望把配置跟项目一起管理，也可以在项目根目录维护 `.mcp.json`，典型内容如下：
+
+```json
+{
+  "mcpServers": {
+    "theone": {
+      "type": "stdio",
+      "command": "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/bin/theone",
+      "args": [
+        "serve",
+        "--config",
+        "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/theone.yaml"
+      ],
+      "env": {}
+    }
+  }
+}
+```
+
+#### 验证接入是否成功
+
+任一 Agent 接好后，都可以优先验证以下几点：
+
+- 能看到 `theone` 暴露的 MCP tools。
+- 能成功调用 `memory.health` 或 `memory.status`。
+- 本地生成或更新 `~/.theone/theone.pid`。
+- 日志文件 `~/.theone/logs/theone.log` 中出现启动记录。
+
 ### 验收
 
 ```bash

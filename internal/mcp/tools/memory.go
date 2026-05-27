@@ -22,10 +22,10 @@ import (
 // - 工具注册是 MCP 服务启动时的一次性操作
 func RegisterMemoryTools(registry *mcp.Registry, service *memory.Service, logger *slog.Logger) {
 	handler := &MemoryHandler{service: service, logger: logger}
-	registry.Register("memory.remember", handler.Remember)
-	registry.Register("memory.search", handler.Search)
-	registry.Register("memory.context", handler.Context)
-	registry.Register("memory.review", handler.Review)
+	registry.RegisterTool(memoryRememberSpec(handler.Remember))
+	registry.RegisterTool(memorySearchSpec(handler.Search))
+	registry.RegisterTool(memoryContextSpec(handler.Context))
+	registry.RegisterTool(memoryReviewSpec(handler.Review))
 }
 
 // MemoryHandler P1 手动记忆工具的 MCP 处理器

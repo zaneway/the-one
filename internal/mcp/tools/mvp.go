@@ -19,7 +19,7 @@ type MVPService interface {
 
 // RegisterMVPTools 注册 P5 MVP 验收模型和报告工具。
 func RegisterMVPTools(registry *mcp.Registry, service MVPService, logger *slog.Logger) {
-	registry.Register("memory.mvp.run.start", func(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
+	registry.RegisterTool(mvpStartRunSpec(func(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 		var req mvp.StartRunRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, validationError("invalid mvp run.start params")
@@ -30,8 +30,8 @@ func RegisterMVPTools(registry *mcp.Registry, service MVPService, logger *slog.L
 			return nil, toMCPError(err)
 		}
 		return resp, nil
-	})
-	registry.Register("memory.mvp.task.record", func(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
+	}))
+	registry.RegisterTool(mvpRecordTaskSpec(func(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 		var req mvp.RecordTaskRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, validationError("invalid mvp task.record params")
@@ -42,8 +42,8 @@ func RegisterMVPTools(registry *mcp.Registry, service MVPService, logger *slog.L
 			return nil, toMCPError(err)
 		}
 		return resp, nil
-	})
-	registry.Register("memory.mvp.capability.record", func(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
+	}))
+	registry.RegisterTool(mvpRecordCapabilitySpec(func(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 		var req mvp.RecordCapabilityRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, validationError("invalid mvp capability.record params")
@@ -54,8 +54,8 @@ func RegisterMVPTools(registry *mcp.Registry, service MVPService, logger *slog.L
 			return nil, toMCPError(err)
 		}
 		return resp, nil
-	})
-	registry.Register("memory.mvp.metrics.compute", func(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
+	}))
+	registry.RegisterTool(mvpComputeMetricsSpec(func(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 		var req mvp.ComputeMetricsRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, validationError("invalid mvp metrics.compute params")
@@ -66,8 +66,8 @@ func RegisterMVPTools(registry *mcp.Registry, service MVPService, logger *slog.L
 			return nil, toMCPError(err)
 		}
 		return resp, nil
-	})
-	registry.Register("memory.mvp.report", func(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
+	}))
+	registry.RegisterTool(mvpReportSpec(func(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 		var req mvp.ReportRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, validationError("invalid mvp report params")
@@ -78,5 +78,5 @@ func RegisterMVPTools(registry *mcp.Registry, service MVPService, logger *slog.L
 			return nil, toMCPError(err)
 		}
 		return resp, nil
-	})
+	}))
 }
