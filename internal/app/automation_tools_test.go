@@ -32,7 +32,7 @@ func TestAppRegistersAutomationDiagnosticsTools(t *testing.T) {
 		ProjectID:      "project_a",
 		AgentType:      "cursor",
 		Actor:          capture.ActorUser,
-		ContentSummary: "以后推进 P3-C4 时先补 MCP 诊断测试。",
+		ContentSummary: "以后推进 automation 时先补 MCP 诊断测试。",
 		ContentHash:    "sha256:p3-c4-diagnostics",
 	})
 	if toolErr != nil {
@@ -80,7 +80,7 @@ func TestAppRegistersAutomationDiagnosticsTools(t *testing.T) {
 		Scope:                 memory.ScopeProjectLocal,
 		WorkspaceID:           "ws",
 		ProjectID:             "project_a",
-		Content:               "推进 P3-C4 时先补 MCP 诊断测试。",
+		Content:               "推进 automation 时先补 MCP 诊断测试。",
 		CandidateReasonJSON:   `["user_declaration"]`,
 		AdmissionReasonJSON:   `["explicit_user_preference"]`,
 		SourceEvidenceIDsJSON: `["ev_tool_diag"]`,

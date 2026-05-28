@@ -4,7 +4,7 @@ import "time"
 
 // ============================================================================
 // 事件类型（Event Type）常量定义
-// 定义了P2阶段支持的所有事件类型
+// 定义了支持的所有事件类型
 // ============================================================================
 const (
 	// EventSessionStart 会话开始事件
@@ -235,7 +235,7 @@ type TaskInput struct {
 }
 
 // ObserveRequest memory.observe 请求结构体
-// P2 阶段的服务层 DTO，只承载最小化后的事件事实
+// 服务层 DTO，只承载最小化后的事件事实
 // 设计原则：不保存完整会话、完整工具输出、完整diff或完整源码
 type ObserveRequest struct {
 	// SessionID 会话ID
@@ -332,7 +332,7 @@ type ObserveRequest struct {
 }
 
 // ObserveResponse memory.observe 响应结构体
-// P2 阶段的统一响应结构，所有路径都应带 request_id 便于日志关联
+// 统一响应结构，所有路径都应带 request_id 便于日志关联
 type ObserveResponse struct {
 	// RequestID 请求ID
 	// 用于日志关联和问题追踪
@@ -353,7 +353,7 @@ type ObserveResponse struct {
 	Accepted bool `json:"accepted"`
 
 	// Pipeline 处理管道
-	// P2阶段固定为"raw_event_only"
+	// 固定为"raw_event_only"
 	Pipeline string `json:"pipeline"`
 
 	// Deduped 是否去重
@@ -370,7 +370,7 @@ type ObserveResponse struct {
 }
 
 // AgentSession Agent会话结构体
-// P2 agent_session 表的领域对象，记录一次Agent工作会话
+// agent_session 表的领域对象，记录一次 Agent 工作会话
 // 后续 repository 会直接复用此结构
 type AgentSession struct {
 	// ID 会话ID
@@ -428,7 +428,7 @@ type AgentSession struct {
 }
 
 // AgentTask Agent任务结构体
-// P2 agent_task 表的领域对象，在session内表达任务边界
+// agent_task 表的领域对象，在 session 内表达任务边界
 // 设计约束：task_summary/outcome_summary 只能保存摘要
 type AgentTask struct {
 	// ID 任务ID
@@ -436,7 +436,7 @@ type AgentTask struct {
 	ID string `json:"task_id"`
 
 	// SessionID 会话ID
-	// 可空，用于未来导入或批处理；P2 Agent自动捕获应尽量绑定session
+	// 可空，用于未来导入或批处理；Agent 自动捕获应尽量绑定 session
 	SessionID string `json:"session_id,omitempty"`
 
 	// WorkspaceID 工作空间ID
@@ -474,7 +474,7 @@ type AgentTask struct {
 }
 
 // RawEvent 原始事件结构体
-// P2 raw_event 表的领域对象，表示 append-only 事件事实
+// raw_event 表的领域对象，表示 append-only 事件事实
 // 设计原则：不代表长期记忆，只保存最小化后的事件事实
 type RawEvent struct {
 	// ID 事件ID

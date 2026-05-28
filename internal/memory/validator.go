@@ -43,7 +43,7 @@ func NormalizeRemember(cfg config.MemoryConfig, req *RememberRequest) error {
 	return ValidateScope(req.Scope, req.WorkspaceID, req.UserID, req.ProjectID, req.RepoID, req.SessionID)
 }
 
-// ValidateScope 执行 P1 scope validator
+// ValidateScope 执行 scope validator
 // 校验规则：
 // - user_global: 必须有user_id，不能有project_id或repo_id
 // - project_local: 必须有workspace_id和project_id

@@ -179,7 +179,7 @@ type EvidenceInput struct {
 }
 
 // ReviewCheckpointInput 设计复查检查点输入结构体
-// 用于 P1 手动写入复查检查点，记录设计复查的结构化结论
+// 用于手动写入复查检查点，记录设计复查的结构化结论
 // 设计约束：不允许保存完整文档正文，只保存路径、章节、hash、摘要和结论
 type ReviewCheckpointInput struct {
 	// CheckpointType 检查点类型
@@ -391,7 +391,7 @@ type SearchRequest struct {
 	IncludeEvidence bool `json:"include_evidence"`
 
 	// IncludeCodeRefs 是否包含代码引用
-	// 默认false；P4-C3 后 code_task intent 即使未显式开启也可返回相关 code_ref
+	// 默认 false；code_task intent 即使未显式开启也可返回相关 code_ref
 	IncludeCodeRefs bool `json:"include_code_refs"`
 }
 
@@ -429,20 +429,20 @@ type SearchResult struct {
 	// 可选，当IncludeEvidence=true时返回
 	EvidenceRefs []string `json:"evidence_refs,omitempty"`
 
-	// ScoreBreakdown P4 检索分数拆解
-	// 可选，P4 Retrieval Orchestrator 接入后返回，用于解释最终排序来源
+	// ScoreBreakdown 检索分数拆解
+	// 可选，Retrieval Orchestrator 接入后返回，用于解释最终排序来源
 	ScoreBreakdown *ScoreBreakdown `json:"score_breakdown,omitempty"`
 
-	// WhyIncluded P4 注入原因
+	// WhyIncluded 注入原因
 	// 可选，解释该记忆为什么被召回或注入上下文
 	WhyIncluded []string `json:"why_included,omitempty"`
 
-	// CodeRefs P4 代码引用
+	// CodeRefs 代码引用
 	// 可选，只返回文件路径、symbol、hash和解析状态，不返回源码
 	CodeRefs []CodeRef `json:"code_refs,omitempty"`
 }
 
-// ScoreBreakdown P4 检索分数拆解。
+// ScoreBreakdown 检索分数拆解。
 // 设计约束：字段是可解释排序的稳定 API，后续算法可调整权重但不应改变字段语义。
 type ScoreBreakdown struct {
 	// BM25 FTS/BM25 召回分
@@ -482,7 +482,7 @@ type ScoreBreakdown struct {
 	Final float64 `json:"final"`
 }
 
-// CodeRef P4 代码引用响应模型。
+// CodeRef 代码引用响应模型。
 // 设计约束：只保存和返回定位、hash、摘要和解析状态，不保存源码正文或调用关系事实。
 type CodeRef struct {
 	// ID code_ref 记录 ID
@@ -581,11 +581,11 @@ type SearchDiagnostics struct {
 	// 当某些检索能力不可用时的降级方式
 	Fallback string `json:"fallback"`
 
-	// RetrievalMode P4 检索模式
-	// 可选，P4 Retrieval Orchestrator 接入后返回，如 fts_relation/code_aware
+	// RetrievalMode 检索模式
+	// 可选，Retrieval Orchestrator 接入后返回，如 fts_relation/code_aware
 	RetrievalMode string `json:"retrieval_mode,omitempty"`
 
-	// RetrievalIntent P4 检索意图
+	// RetrievalIntent 检索意图
 	// 可选，表示本次请求被识别为通用检索、代码任务、架构复查等
 	RetrievalIntent string `json:"retrieval_intent,omitempty"`
 
@@ -604,7 +604,7 @@ type SearchDiagnostics struct {
 	// UsedDocIndex 是否使用 Doc Index
 	UsedDocIndex bool `json:"used_doc_index"`
 
-	// FallbackReasons P4 降级原因列表
+	// FallbackReasons 降级原因列表
 	// 可选，用于区分 vector_disabled、code_index_unavailable 等多种降级原因
 	FallbackReasons []string `json:"fallback_reason,omitempty"`
 }
@@ -612,7 +612,7 @@ type SearchDiagnostics struct {
 // SearchResponse memory.search 响应结构体
 type SearchResponse struct {
 	// RetrievalTraceID 检索追踪ID
-	// P4 在线检索会同时填充顶层字段和 diagnostics.retrieval_trace_id，便于调用方直接关联 access log。
+	// 在线检索会同时填充顶层字段和 diagnostics.retrieval_trace_id，便于调用方直接关联 access log。
 	RetrievalTraceID string `json:"retrieval_trace_id,omitempty"`
 
 	// Results 搜索结果列表
@@ -699,7 +699,7 @@ type ContextMemory struct {
 	// 例如：["task_match", "failure_memory", "high_retention_score"]
 	WhyIncluded []string `json:"why_included"`
 
-	// ScoreBreakdown P4 检索分数拆解
+	// ScoreBreakdown 检索分数拆解
 	// 可选，用于解释该记忆为什么被注入上下文
 	ScoreBreakdown *ScoreBreakdown `json:"score_breakdown,omitempty"`
 
@@ -715,7 +715,7 @@ type ContextMemory struct {
 	SessionOnly bool `json:"session_only,omitempty"`
 }
 
-// ReviewStrategy P4 设计复查策略。
+// ReviewStrategy 设计复查策略。
 // 用于告诉调用方本次复查应关注哪些文档或章节，避免重复展开已经确认的历史结论。
 type ReviewStrategy struct {
 	// Mode 复查模式，如 full_document/changed_sections/checkpoint_only
@@ -734,13 +734,13 @@ type ReviewStrategy struct {
 	IgnoredItemsPolicy string `json:"ignored_items_policy,omitempty"`
 }
 
-// ContextDiagnostics P4 context 构造诊断。
+// ContextDiagnostics context 构造诊断。
 // 记录预算分配、降级原因和检索模式，不包含完整 prompt 或源码。
 type ContextDiagnostics struct {
-	// RetrievalIntent P4 检索意图
+	// RetrievalIntent 检索意图
 	RetrievalIntent string `json:"retrieval_intent,omitempty"`
 
-	// RetrievalMode P4 检索模式
+	// RetrievalMode 检索模式
 	RetrievalMode string `json:"retrieval_mode,omitempty"`
 
 	// UsedDocIndex 是否使用 Doc Index 辅助构造复查策略
@@ -769,8 +769,8 @@ type ContextResponse struct {
 	// LatencyMS 构造延迟（毫秒）
 	LatencyMS int64 `json:"latency_ms"`
 
-	// Diagnostics P4 context 构造诊断
-	// 可选，P4 Retrieval Orchestrator 接入后返回
+	// Diagnostics context 构造诊断
+	// 可选，Retrieval Orchestrator 接入后返回
 	Diagnostics *ContextDiagnostics `json:"diagnostics,omitempty"`
 }
 
@@ -838,7 +838,7 @@ type ReviewResponse struct {
 }
 
 // MemoryItem 记忆项结构体
-// P1 服务层使用的记忆聚合结构，包含记忆的所有元数据和内容
+// 服务层使用的记忆聚合结构，包含记忆的所有元数据和内容
 type MemoryItem struct {
 	// ID 记忆ID
 	// 全局唯一标识
@@ -978,7 +978,7 @@ type Evidence struct {
 	ID string
 
 	// RawEventID 原始事件ID
-	// P3 自动证据必须绑定 raw_event，P1 手动证据可为空
+	// 自动证据必须绑定 raw_event，手动证据可为空
 	RawEventID string
 
 	// SourceType 来源类型

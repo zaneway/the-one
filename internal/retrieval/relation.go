@@ -22,7 +22,7 @@ const (
 	RelationDirectionIncoming = "incoming"
 )
 
-// RelationExpansionQuery 描述 P4-C2 relation expansion 的查询边界。
+// RelationExpansionQuery 描述 relation expansion 的查询边界。
 // 设计约束：只允许从已召回的 seed memory 做 depth=1 扩展，避免在线检索退化为图遍历。
 type RelationExpansionQuery struct {
 	// SeedMemoryIDs FTS/vector 已召回的种子 memory_id。
@@ -46,7 +46,7 @@ type RelationExpansionQuery struct {
 	// IncludeArchived 是否允许返回 archived 记忆。
 	IncludeArchived bool
 
-	// RelationTypes 允许参与在线检索的关系类型；为空时使用 P4 默认强关系集合。
+	// RelationTypes 允许参与在线检索的关系类型；为空时使用默认强关系集合。
 	RelationTypes []string
 
 	// Limit 单次 relation expansion 最大边数。
@@ -72,7 +72,7 @@ type RelationExpansion struct {
 	RelatedMemory memory.MemoryItem
 }
 
-// DefaultRelationTypes 返回 P4-C2 在线检索默认参与排序的关系类型。
+// DefaultRelationTypes 返回在线检索默认参与排序的关系类型。
 func DefaultRelationTypes() []string {
 	return []string{RelationTypeSupersedes, RelationTypeSupersededBy, RelationTypeSupports, RelationTypeContradicts}
 }

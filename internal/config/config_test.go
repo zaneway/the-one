@@ -50,10 +50,10 @@ func TestLoadDefaults(t *testing.T) {
 	if !cfg.Retrieval.EnableTrace || !cfg.Retrieval.EnableAccessLog || !cfg.Retrieval.EnableRelationExpansion ||
 		!cfg.Retrieval.EnableCodeRefResolution || !cfg.Retrieval.EnableDocIndex ||
 		cfg.Retrieval.MaxRelationExpansion != 20 || cfg.Retrieval.MaxCandidatesBeforeRerank != 80 {
-		t.Fatalf("retrieval P4 defaults = %+v, want enabled bounded retrieval", cfg.Retrieval)
+		t.Fatalf("retrieval retrieval defaults = %+v, want enabled bounded retrieval", cfg.Retrieval)
 	}
 	if cfg.Embedding.QueryCacheSize != 256 || cfg.Embedding.OnlineQueryEmbeddingEnabled {
-		t.Fatalf("embedding P4 defaults = %+v, want cache=256 and online disabled", cfg.Embedding)
+		t.Fatalf("embedding retrieval defaults = %+v, want cache=256 and online disabled", cfg.Embedding)
 	}
 	if cfg.VectorIndex.Backend != "none" || cfg.VectorIndex.SQLiteVecEnabled != "auto" {
 		t.Fatalf("vector index defaults = %+v, want none/auto", cfg.VectorIndex)

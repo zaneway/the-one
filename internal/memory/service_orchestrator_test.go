@@ -19,7 +19,7 @@ func (s *stubRetrievalOrchestrator) Search(context.Context, SearchRequest) (Sear
 			MemoryID:       "mem_p4",
 			MemoryType:     TypeDecision,
 			Scope:          ScopeProjectLocal,
-			Content:        "P4 orchestrator search result",
+			Content:        "retrieval orchestrator search result",
 			Score:          0.91,
 			ScoreBreakdown: &ScoreBreakdown{Final: 0.91},
 			WhyIncluded:    []string{"task_match"},
@@ -37,18 +37,18 @@ func (s *stubRetrievalOrchestrator) Context(context.Context, ContextRequest) (Co
 	s.contextCalled = true
 	return ContextResponse{
 		ContextPack: ContextPack{
-			Summary: "P4 orchestrator context",
+			Summary: "retrieval orchestrator context",
 			Memories: []ContextMemory{{
 				MemoryID:       "mem_p4",
 				Type:           TypeDecision,
-				Compressed:     "P4 orchestrator context",
+				Compressed:     "retrieval orchestrator context",
 				WhyIncluded:    []string{"task_match"},
 				ScoreBreakdown: &ScoreBreakdown{Final: 0.88},
 			}},
 			CodeRefs: []CodeRef{},
 		},
 		UsedMemoryIDs:    []string{"mem_p4"},
-		RetrievalTraceID: "rt_p4_ctx",
+		RetrievalTraceID: "rt_retrieval_ctx",
 		Diagnostics: &ContextDiagnostics{
 			RetrievalIntent: "general_search",
 			RetrievalMode:   "fts_relation",
@@ -83,7 +83,7 @@ func TestServiceDelegatesContextToRetrievalOrchestrator(t *testing.T) {
 	if !orchestrator.contextCalled {
 		t.Fatal("Context() did not delegate to retrieval orchestrator")
 	}
-	if resp.RetrievalTraceID != "rt_p4_ctx" || len(resp.ContextPack.Memories) != 1 || resp.Diagnostics == nil {
+	if resp.RetrievalTraceID != "rt_retrieval_ctx" || len(resp.ContextPack.Memories) != 1 || resp.Diagnostics == nil {
 		t.Fatalf("Context() response = %+v, want orchestrator response", resp)
 	}
 }

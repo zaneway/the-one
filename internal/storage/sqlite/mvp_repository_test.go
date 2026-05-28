@@ -17,7 +17,7 @@ func TestP5AMVPRunRepositoryCreateUpdateList(t *testing.T) {
 	defer store.Close()
 
 	run, err := store.CreateRun(ctx, mvp.AcceptanceRun{
-		Name:        "P5-A synthetic acceptance",
+		Name:        "MVP synthetic acceptance",
 		WorkspaceID: "ws_p5",
 		ProjectID:   "proj_p5",
 		RepoID:      "repo_p5",
@@ -72,8 +72,8 @@ func TestP5BRetrievalLatencyLookup(t *testing.T) {
 		id      string
 		latency int
 	}{
-		{id: "rt_p5_1", latency: 20},
-		{id: "rt_p5_2", latency: 80},
+		{id: "rt_mvp_1", latency: 20},
+		{id: "rt_mvp_2", latency: 80},
 	} {
 		if _, err := store.db.ExecContext(ctx, `insert into retrieval_trace(
 			id, workspace_id, latency_ms, status, created_at
@@ -81,7 +81,7 @@ func TestP5BRetrievalLatencyLookup(t *testing.T) {
 			t.Fatalf("insert retrieval_trace %s: %v", item.id, err)
 		}
 	}
-	latencies, err := store.ListRetrievalLatenciesByTraceIDs(ctx, []string{"rt_p5_1", "rt_p5_2", "rt_p5_1", ""})
+	latencies, err := store.ListRetrievalLatenciesByTraceIDs(ctx, []string{"rt_mvp_1", "rt_mvp_2", "rt_mvp_1", ""})
 	if err != nil {
 		t.Fatalf("ListRetrievalLatenciesByTraceIDs() error = %v", err)
 	}
@@ -303,7 +303,7 @@ func openP5ATestStore(t *testing.T) *Store {
 func seedP5ARun(t *testing.T, ctx context.Context, store *Store) mvp.AcceptanceRun {
 	t.Helper()
 	run, err := store.CreateRun(ctx, mvp.AcceptanceRun{
-		Name:        "P5-A seed",
+		Name:        "MVP seed",
 		Mode:        mvp.RunModeSynthetic,
 		WorkspaceID: "ws_p5",
 		ProjectID:   "proj_p5",

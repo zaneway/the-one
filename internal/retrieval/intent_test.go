@@ -8,7 +8,7 @@ func TestDetectIntent(t *testing.T) {
 		text string
 		want RetrievalIntent
 	}{
-		{name: "architecture review", text: "继续复查 P4 详细设计是否有逻辑缺失", want: IntentArchitectureReview},
+		{name: "architecture review", text: "继续复查 retrieval 详细设计是否有逻辑缺失", want: IntentArchitectureReview},
 		{name: "task continuation", text: "继续上次 auth token 任务", want: IntentTaskContinuation},
 		{name: "failure recall", text: "这个报错为什么又出现了", want: IntentFailureRecall},
 		{name: "preference", text: "我的偏好以后先分析架构边界", want: IntentUserPreference},

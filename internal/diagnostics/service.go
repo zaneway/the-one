@@ -24,7 +24,7 @@ type Store interface {
 	ListDocSnapshots(ctx context.Context, query docindex.SnapshotQuery) ([]docindex.DocumentSnapshot, error)
 }
 
-// Service 聚合 P0 health/status 所需的运行时状态。
+// Service 聚合 health/status 所需的运行时状态。
 type Service struct {
 	version   string
 	cfg       config.Config
@@ -32,7 +32,7 @@ type Service struct {
 	startedAt time.Time
 }
 
-// NewService 创建 P0 诊断服务。该服务只暴露非敏感配置摘要和存储能力。
+// NewService 创建诊断服务。该服务只暴露非敏感配置摘要和存储能力。
 func NewService(version string, cfg config.Config, store Store) *Service {
 	return &Service{
 		version:   version,
@@ -42,7 +42,7 @@ func NewService(version string, cfg config.Config, store Store) *Service {
 	}
 }
 
-// RegisterTools 注册 P0 诊断工具。后续 P1 工具应复用同一个 Registry。
+// RegisterTools 注册诊断工具。其他工具应复用同一个 Registry。
 func RegisterTools(registry *mcp.Registry, service *Service) {
 	registry.RegisterTool(healthSpec(service.HealthTool))
 	registry.RegisterTool(statusSpec(service.StatusTool))
@@ -122,14 +122,14 @@ type StatusStorage struct {
 	FallbackRetrieval []string `json:"fallback_retrieval"`
 }
 
-// StatusCodeIndex 描述 P4 Code Index 当前能力。
+// StatusCodeIndex 描述 Code Index 当前能力。
 type StatusCodeIndex struct {
 	Provider     string                 `json:"provider"`
 	Enabled      bool                   `json:"enabled"`
 	Capabilities codeindex.Capabilities `json:"capabilities"`
 }
 
-// StatusEmbedding 描述 P4 embedding provider 和在线降级配置。
+// StatusEmbedding 描述 embedding provider 和在线降级配置。
 type StatusEmbedding struct {
 	Provider                    string `json:"provider"`
 	Model                       string `json:"model,omitempty"`
@@ -137,7 +137,7 @@ type StatusEmbedding struct {
 	OnlineQueryEmbeddingEnabled bool   `json:"online_query_embedding_enabled"`
 }
 
-// StatusVectorIndex 描述 P4 vector index 后端和 SQLite 能力。
+// StatusVectorIndex 描述 vector index 后端和 SQLite 能力。
 type StatusVectorIndex struct {
 	Backend          string `json:"backend"`
 	SQLiteVecEnabled string `json:"sqlite_vec_enabled"`

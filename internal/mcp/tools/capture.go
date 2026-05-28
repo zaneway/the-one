@@ -11,7 +11,7 @@ import (
 	"github.com/zaneway/theone/internal/mcp"
 )
 
-// RegisterCaptureTools 注册 P2 事件捕获和捕获诊断工具到 MCP 注册表
+// RegisterCaptureTools 注册事件捕获和捕获诊断工具到 MCP 注册表
 // 注册的工具：
 // - memory.observe：捕获 Agent 事件
 // - memory.capture.sessions：查询会话列表
@@ -30,7 +30,7 @@ func RegisterCaptureTools(registry *mcp.Registry, service *capture.Service, logg
 	registry.RegisterTool(captureQualitySpec(handler.Quality))
 }
 
-// CaptureHandler P2 事件捕获工具的 MCP 处理器
+// CaptureHandler 事件捕获工具的 MCP 处理器
 // 职责：将 MCP JSON 参数适配到 capture service DTO，并处理错误转换
 // 设计说明：
 // - 持有 capture.Service 实例，委托业务逻辑给 service 层
@@ -85,6 +85,7 @@ func (h *CaptureHandler) Observe(ctx context.Context, raw json.RawMessage) (any,
 // - 支持按 agent_type、workspace_id 等条件过滤
 // - 默认限制返回50条记录
 func (h *CaptureHandler) ListSessions(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
+	startedAt := time.Now()
 	var req capture.ListSessionsRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, captureMCPError(validationError("invalid capture sessions params"))
@@ -93,7 +94,16 @@ func (h *CaptureHandler) ListSessions(ctx context.Context, raw json.RawMessage) 
 	if err != nil {
 		return nil, captureMCPError(toMCPError(err))
 	}
-	h.logger.Info("capture sessions listed", "result_count", len(resp.Sessions))
+	h.logger.Info("capture sessions listed",
+		"input_agent_type", req.AgentType,
+		"input_workspace_id", req.WorkspaceID,
+		"input_project_id", req.ProjectID,
+		"input_repo_id", req.RepoID,
+		"input_status", req.Status,
+		"input_limit", req.Limit,
+		"output_result_count", len(resp.Sessions),
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+	)
 	return resp, nil
 }
 
@@ -109,6 +119,7 @@ func (h *CaptureHandler) ListSessions(ctx context.Context, raw json.RawMessage) 
 // - 支持按 session_id、status 等条件过滤
 // - 默认限制返回50条记录
 func (h *CaptureHandler) ListTasks(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
+	startedAt := time.Now()
 	var req capture.ListTasksRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, captureMCPError(validationError("invalid capture tasks params"))
@@ -117,7 +128,16 @@ func (h *CaptureHandler) ListTasks(ctx context.Context, raw json.RawMessage) (an
 	if err != nil {
 		return nil, captureMCPError(toMCPError(err))
 	}
-	h.logger.Info("capture tasks listed", "result_count", len(resp.Tasks))
+	h.logger.Info("capture tasks listed",
+		"input_session_id", req.SessionID,
+		"input_workspace_id", req.WorkspaceID,
+		"input_project_id", req.ProjectID,
+		"input_repo_id", req.RepoID,
+		"input_status", req.Status,
+		"input_limit", req.Limit,
+		"output_result_count", len(resp.Tasks),
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+	)
 	return resp, nil
 }
 
@@ -134,6 +154,7 @@ func (h *CaptureHandler) ListTasks(ctx context.Context, raw json.RawMessage) (an
 // - 支持按 session_id、event_type、source_channel 等条件过滤
 // - 默认限制返回50条记录
 func (h *CaptureHandler) ListEvents(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
+	startedAt := time.Now()
 	var req capture.ListEventsRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, captureMCPError(validationError("invalid capture events params"))
@@ -142,7 +163,16 @@ func (h *CaptureHandler) ListEvents(ctx context.Context, raw json.RawMessage) (a
 	if err != nil {
 		return nil, captureMCPError(toMCPError(err))
 	}
-	h.logger.Info("capture events listed", "result_count", len(resp.Events))
+	h.logger.Info("capture events listed",
+		"input_session_id", req.SessionID,
+		"input_task_id", req.TaskID,
+		"input_agent_type", req.AgentType,
+		"input_source_channel", req.SourceChannel,
+		"input_event_type", req.EventType,
+		"input_limit", req.Limit,
+		"output_result_count", len(resp.Events),
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+	)
 	return resp, nil
 }
 
@@ -158,6 +188,7 @@ func (h *CaptureHandler) ListEvents(ctx context.Context, raw json.RawMessage) (a
 // - capture_level 表示会话的捕获等级（Level1-Level4）
 // - 用于评估 Adapter 的捕获能力和质量
 func (h *CaptureHandler) Quality(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
+	startedAt := time.Now()
 	var req capture.QualityRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, captureMCPError(validationError("invalid capture quality params"))
@@ -166,7 +197,12 @@ func (h *CaptureHandler) Quality(ctx context.Context, raw json.RawMessage) (any,
 	if err != nil {
 		return nil, captureMCPError(toMCPError(err))
 	}
-	h.logger.Info("capture quality loaded", "session_id", resp.Report.SessionID, "capture_level", resp.Report.CaptureLevel)
+	h.logger.Info("capture quality loaded",
+		"input_session_id", req.SessionID,
+		"output_session_id", resp.Report.SessionID,
+		"output_capture_level", resp.Report.CaptureLevel,
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+	)
 	return resp, nil
 }
 

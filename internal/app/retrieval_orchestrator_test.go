@@ -12,7 +12,7 @@ import (
 	"github.com/zaneway/theone/internal/retrieval"
 )
 
-func TestAppMemorySearchUsesP4RetrievalOrchestrator(t *testing.T) {
+func TestAppMemorySearchUsesRetrievalRetrievalOrchestrator(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
@@ -23,16 +23,16 @@ func TestAppMemorySearchUsesP4RetrievalOrchestrator(t *testing.T) {
 	defer app.Close()
 
 	rawRemember, toolErr := app.CallTool(ctx, "memory.remember", memory.RememberRequest{
-		Content:     "P4-C1 阶段需要让 memory.search 走 Retrieval Orchestrator，并写入 retrieval trace 和 access log。",
-		Title:       "P4-C1 检索编排接入",
+		Content:     "retrieval 流程需要让 memory.search 走 Retrieval Orchestrator，并写入 retrieval trace 和 access log。",
+		Title:       "retrieval 检索编排接入",
 		MemoryType:  memory.TypeDecision,
 		Scope:       memory.ScopeProjectLocal,
 		WorkspaceID: "ws",
 		ProjectID:   "project_a",
 		SourceType:  "manual_review",
-		Keywords:    []string{"P4-C1", "Retrieval", "trace", "access log"},
+		Keywords:    []string{"retrieval", "Retrieval", "trace", "access log"},
 		Evidence: memory.EvidenceInput{
-			InterpretedStatement: "P4-C1 验证 memory.search 已接入检索编排和访问日志。",
+			InterpretedStatement: "retrieval 验证 memory.search 已接入检索编排和访问日志。",
 		},
 	})
 	if toolErr != nil {
@@ -58,10 +58,10 @@ func TestAppMemorySearchUsesP4RetrievalOrchestrator(t *testing.T) {
 		t.Fatalf("search response = %#v, want memory.SearchResponse", rawSearch)
 	}
 	if len(searchResp.Results) != 1 || searchResp.Results[0].ScoreBreakdown == nil {
-		t.Fatalf("search response missing P4 score breakdown: %#v", searchResp)
+		t.Fatalf("search response missing retrieval score breakdown: %#v", searchResp)
 	}
 	if searchResp.Diagnostics.RetrievalTraceID == "" || searchResp.Diagnostics.RetrievalMode != string(retrieval.ModeFTSMetadata) {
-		t.Fatalf("search diagnostics missing P4 fields: %+v", searchResp.Diagnostics)
+		t.Fatalf("search diagnostics missing retrieval fields: %+v", searchResp.Diagnostics)
 	}
 
 	traces, err := app.store.ListRetrievalTraces(ctx, retrieval.TraceQuery{WorkspaceID: "ws", Limit: 5})

@@ -13,7 +13,7 @@ import (
 const pipelineRawEventOnly = "raw_event_only"
 
 // Repository 捕获仓库接口
-// 定义 P2-C1 observe service 依赖的持久化能力
+// 定义 observe service 依赖的持久化能力
 type Repository interface {
 	// UpsertSession 创建或更新会话
 	// session.start事件时调用，创建新的agent_session
@@ -60,7 +60,7 @@ type Repository interface {
 	GetCaptureQuality(ctx context.Context, sessionID string) (CaptureQualityReport, error)
 }
 
-// JobEnqueuer 是 P3 自动记忆链路对 capture service 暴露的最小入队接口。
+// JobEnqueuer 是自动记忆链路对 capture service 暴露的最小入队接口。
 // capture 只负责在 raw_event 成功写入后通知自动处理层，不直接执行 evidence/candidate 逻辑。
 type JobEnqueuer interface {
 	EnqueueRawEvent(ctx context.Context, event RawEvent) error
@@ -72,12 +72,12 @@ type TaskResultRecorder interface {
 }
 
 // Service 捕获服务结构体
-// 编排 P2 observe 写入链路
-// 设计原则：capture 只落 raw_event；P3 通过可选 enqueuer 触发后续 async_job。
+// 编排 observe 写入链路
+// 设计原则：capture 只落 raw_event；通过可选 enqueuer 触发后续 async_job。
 type Service struct {
 	cfg      config.Config // 配置信息
 	repo     Repository    // 仓库接口，负责持久化
-	enqueuer JobEnqueuer   // P3 自动处理入队器；为空时保持 P2 raw_event-only 行为
+	enqueuer JobEnqueuer   // 自动处理入队器；为空时保持 raw_event-only 行为
 }
 
 // NewService 创建 capture service
@@ -87,12 +87,12 @@ func NewService(cfg config.Config, repo Repository) *Service {
 }
 
 // NewServiceWithAutomation 创建带自动处理入队能力的 capture service。
-// 该构造函数用于 P3-C3；P2 调用方继续使用 NewService 即可保持原行为。
+// 该构造函数用于自动入队场景；调用方继续使用 NewService 即可保持原行为。
 func NewServiceWithAutomation(cfg config.Config, repo Repository, enqueuer JobEnqueuer) *Service {
 	return &Service{cfg: cfg, repo: repo, enqueuer: enqueuer}
 }
 
-// Observe 执行 P2 memory.observe 的最小闭环。
+// Observe 执行 memory.observe 的最小闭环。
 // 完整处理链路：
 //  1. 生成请求 ID（用于日志关联）
 //  2. 归一化：去空白、校验 event_type/source_channel/actor 合法性、设置默认值
@@ -106,9 +106,9 @@ func NewServiceWithAutomation(cfg config.Config, repo Repository, enqueuer JobEn
 //  10. 构建并写入 raw_event（append-only 事实层）
 //  11. 更新 session 质量统计（accepted/deduped 计数）
 //  12. 生命周期处理：task.result -> EndTask，session.End -> EndTask + EndSession
-//  13. 可选：通知 P3 自动处理入队（enqueuer 不为空时）
+//  13. 可选：通知自动处理入队（enqueuer 不为空时）
 //
-// 设计约束：P2 只落 raw_event，不自动生成长期记忆（pipeline=raw_event_only）。
+// 设计约束：只落 raw_event，不自动生成长期记忆（pipeline=raw_event_only）。
 func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveResponse, error) {
 	// Step 1: 生成请求 ID，用于日志关联和问题追踪
 	requestID, err := idgen.New("req")
@@ -232,7 +232,7 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 			return ObserveResponse{}, err
 		}
 	}
-	// Step 13: 可选通知 P3 自动处理入队——enqueuer 不为空时将 raw_event 推入异步处理管道
+	// Step 13: 可选通知自动处理入队——enqueuer 不为空时将 raw_event 推入异步处理管道
 	if s.enqueuer != nil {
 		if err := s.enqueuer.EnqueueRawEvent(ctx, event); err != nil {
 			// 入队失败不阻塞主流程，记录诊断信息返回给调用方
@@ -253,7 +253,7 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 }
 
 // ListSessions 返回符合过滤条件的 capture sessions
-// 用于 P2-C2 捕获诊断，查看会话列表和捕获质量
+// 用于捕获诊断，查看会话列表和捕获质量
 func (s *Service) ListSessions(ctx context.Context, req ListSessionsRequest) (ListSessionsResponse, error) {
 	if req.Limit <= 0 {
 		req.Limit = 50

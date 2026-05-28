@@ -28,7 +28,7 @@ func TestServiceObserveSessionStartCreatesRawEventAndDefaultTask(t *testing.T) {
 			ToolOutputCapture: true,
 			MCPObserve:        true,
 		},
-		Session: &SessionInput{GoalSummary: "实现 P2-C1"},
+		Session: &SessionInput{GoalSummary: "实现 capture"},
 	})
 	if err != nil {
 		t.Fatalf("Observe() error = %v", err)
@@ -127,7 +127,7 @@ func TestServiceObserveEnqueuesAutomationForNewRawEventOnly(t *testing.T) {
 		WorkspaceID:    "ws",
 		AgentType:      "cursor",
 		Actor:          ActorUser,
-		ContentSummary: "以后推进 P3 时先写测试。",
+		ContentSummary: "以后推进 automation 时先写测试。",
 		ContentHash:    "sha256:p3-c3",
 		CaptureCapabilities: CaptureCapabilities{
 			SessionLifecycle: true,
@@ -161,7 +161,7 @@ func TestServiceObserveKeepsRawEventWhenAutomationEnqueueFails(t *testing.T) {
 		WorkspaceID:    "ws",
 		AgentType:      "cursor",
 		Actor:          ActorUser,
-		ContentSummary: "以后推进 P3 时先写测试。",
+		ContentSummary: "以后推进 automation 时先写测试。",
 		ContentHash:    "sha256:p3-c3-enqueue-failed",
 		CaptureCapabilities: CaptureCapabilities{
 			MCPObserve: true,

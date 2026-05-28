@@ -7,7 +7,7 @@ import (
 
 const level4CapabilityCount = 6
 
-// TokenSavings 计算 P5 token savings 指标。
+// TokenSavings 计算 token savings 指标。
 // 边界条件：baseline <= 0 时无法形成有效分母，返回 passed=false 的样本，避免制造虚假的节省率。
 func TokenSavings(runID, scenarioID string, baselineTokens, candidateTokens float64, threshold float64) MetricSample {
 	value := 0.0
@@ -102,7 +102,7 @@ func EventCaptureCompleteness(captured, expected float64) float64 {
 	return captured / expected
 }
 
-// CompareThreshold 执行 P5 指标阈值判断。
+// CompareThreshold 执行指标阈值判断。
 func CompareThreshold(value float64, operator string, threshold float64) bool {
 	switch operator {
 	case ThresholdGreaterOrEqual:

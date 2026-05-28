@@ -134,7 +134,7 @@ func ApplyAcceptedEvent(quality CaptureQuality, req ObserveRequest, deduped bool
 
 // ApplyContentBoundaryRejection 记录内容边界拒绝次数
 // 设计说明：
-// - P2 拒绝事件不写 raw_event，但需要记录拒绝次数用于质量监控
+// - 拒绝事件不写 raw_event，但需要记录拒绝次数用于质量监控
 // - 拒绝原因通常是内容超过长度限制或包含禁止的原始内容字段
 // - 拒绝次数可用于评估 Adapter 的内容最小化策略是否有效
 // - 高拒绝次数可能表明 Adapter 需要优化内容提取逻辑

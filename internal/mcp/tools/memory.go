@@ -11,7 +11,7 @@ import (
 	"github.com/zaneway/theone/internal/memory"
 )
 
-// RegisterMemoryTools 注册 P1 手动记忆工具到 MCP 注册表
+// RegisterMemoryTools 注册手动记忆工具到 MCP 注册表
 // 注册的工具：
 // - memory.remember：写入或更新记忆
 // - memory.search：检索相关记忆
@@ -28,7 +28,7 @@ func RegisterMemoryTools(registry *mcp.Registry, service *memory.Service, logger
 	registry.RegisterTool(memoryReviewSpec(handler.Review))
 }
 
-// MemoryHandler P1 手动记忆工具的 MCP 处理器
+// MemoryHandler 手动记忆工具的 MCP 处理器
 // 职责：将 MCP JSON 参数适配到 memory service DTO，并处理错误转换
 // 设计说明：
 // - 持有 memory.Service 实例，委托业务逻辑给 service 层
@@ -81,6 +81,7 @@ func (h *MemoryHandler) Remember(ctx context.Context, raw json.RawMessage) (any,
 // - result_count 用于监控检索效果
 // - 耗时来自 Diagnostics.LatencyMS，包含检索和排序的总时间
 func (h *MemoryHandler) Search(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
+	startedAt := time.Now()
 	var req memory.SearchRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, validationError("invalid search params")
@@ -90,9 +91,12 @@ func (h *MemoryHandler) Search(ctx context.Context, raw json.RawMessage) (any, *
 		return nil, toMCPError(err)
 	}
 	h.logger.Info("search completed",
-		"query_hash", hashForLog(req.Query),
-		"result_count", len(resp.Results),
-		"duration_ms", resp.Diagnostics.LatencyMS,
+		"input_query_hash", hashForLog(req.Query),
+		"input_limit", req.Limit,
+		"input_scope", req.Scope,
+		"output_result_count", len(resp.Results),
+		"output_latency_ms", resp.Diagnostics.LatencyMS,
+		"duration_ms", time.Since(startedAt).Milliseconds(),
 	)
 	return resp, nil
 }
@@ -109,6 +113,7 @@ func (h *MemoryHandler) Search(ctx context.Context, raw json.RawMessage) (any, *
 // - token_budget 表示请求的 token 预算，用于评估资源使用
 // - 耗时来自响应的 LatencyMS 字段
 func (h *MemoryHandler) Context(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
+	startedAt := time.Now()
 	var req memory.ContextRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, validationError("invalid context params")
@@ -118,9 +123,15 @@ func (h *MemoryHandler) Context(ctx context.Context, raw json.RawMessage) (any, 
 		return nil, toMCPError(err)
 	}
 	h.logger.Info("context completed",
-		"used_memory_count", len(resp.UsedMemoryIDs),
-		"token_budget", req.TokenBudget,
-		"duration_ms", resp.LatencyMS,
+		"input_task_hash", hashForLog(req.Task),
+		"input_token_budget", req.TokenBudget,
+		"input_workspace_id", req.WorkspaceID,
+		"input_project_id", req.ProjectID,
+		"input_repo_id", req.RepoID,
+		"input_session_id", req.SessionID,
+		"output_used_memory_count", len(resp.UsedMemoryIDs),
+		"output_latency_ms", resp.LatencyMS,
+		"duration_ms", time.Since(startedAt).Milliseconds(),
 	)
 	return resp, nil
 }
@@ -137,6 +148,7 @@ func (h *MemoryHandler) Context(ctx context.Context, raw json.RawMessage) (any, 
 // - state 表示审查后的记忆状态
 // - Review 是记忆生命周期管理的关键环节
 func (h *MemoryHandler) Review(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
+	startedAt := time.Now()
 	var req memory.ReviewRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, validationError("invalid review params")
@@ -146,9 +158,11 @@ func (h *MemoryHandler) Review(ctx context.Context, raw json.RawMessage) (any, *
 		return nil, toMCPError(err)
 	}
 	h.logger.Info("review completed",
-		"memory_id", resp.MemoryID,
-		"action", req.Action,
-		"state", resp.State,
+		"input_memory_id", req.MemoryID,
+		"input_action", req.Action,
+		"output_memory_id", resp.MemoryID,
+		"output_state", resp.State,
+		"duration_ms", time.Since(startedAt).Milliseconds(),
 	)
 	return resp, nil
 }

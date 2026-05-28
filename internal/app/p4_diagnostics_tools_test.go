@@ -31,7 +31,7 @@ func TestAppRegistersP4DiagnosticsTools(t *testing.T) {
 		WorkspaceID:    "ws_diag",
 		ProjectID:      "project_diag",
 		RepoID:         "repo_diag",
-		Query:          "P4 diagnostics trace query summary",
+		Query:          "retrieval diagnostics trace query summary",
 		Intent:         retrieval.IntentArchitectureReview,
 		Mode:           retrieval.ModeCheckpointAware,
 		UsedFTS:        true,
@@ -54,7 +54,7 @@ func TestAppRegistersP4DiagnosticsTools(t *testing.T) {
 		TaskID:           "task_diag",
 		RetrievalTraceID: trace.ID,
 		EventType:        "injected",
-		Query:            "P4 diagnostics trace query summary",
+		Query:            "retrieval diagnostics trace query summary",
 		Rank:             1,
 		Score:            0.91,
 		ScoreBreakdown:   memory.ScoreBreakdown{Final: 0.91},
@@ -195,7 +195,7 @@ func TestAppStatusReportsP4Capabilities(t *testing.T) {
 		t.Fatalf("vector status = %+v, want disabled vector index", status.Vector)
 	}
 	if status.Config["codeindex_provider"] != "local_basic" || status.Config["vector_index_backend"] != "none" {
-		t.Fatalf("status config = %+v, want P4 config summary", status.Config)
+		t.Fatalf("status config = %+v, want retrieval config summary", status.Config)
 	}
 }
 

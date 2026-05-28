@@ -25,7 +25,7 @@ create table if not exists schema_migration (
   checksum text
 );`
 
-// Store 封装 P0 SQLite 连接、能力探测和 migration 状态。
+// Store 封装 SQLite 连接、能力探测和 migration 状态。
 type Store struct {
 	db           *sql.DB
 	path         string
@@ -99,7 +99,7 @@ func (s *Store) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Status 返回 P0 诊断状态。该方法不暴露敏感配置。
+// Status 返回诊断状态。该方法不暴露敏感配置。
 func (s *Store) Status() Status {
 	return Status{
 		Backend:      "sqlite",
@@ -135,7 +135,7 @@ func (s *Store) applyPragmas(ctx context.Context, busyTimeoutMS int) error {
 }
 
 // detectCapabilities 探测 SQLite 后端可用能力。
-// FTS5 是 P1 检索的必要能力，不可用时降级为 metadata + LIKE 查询。
+// FTS5 是检索的必要能力，不可用时降级为 metadata + LIKE 查询。
 // sqlite-vec 是可选的向量索引增强，当前默认不启用。
 // FallbackRetrieval 列表决定了检索降级路径。
 func (s *Store) detectCapabilities(ctx context.Context) Capabilities {

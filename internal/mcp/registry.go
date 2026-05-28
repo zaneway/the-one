@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Error 是所有工具统一返回的错误结构，字段与 P0/P1 详细设计保持一致。
+// Error 是所有工具统一返回的错误结构。
 type Error struct {
 	RequestID    string `json:"request_id,omitempty"`
 	ErrorCode    string `json:"error_code"`
@@ -38,7 +38,7 @@ type ToolSpec struct {
 	Handler         Handler
 }
 
-// Registry 是 P0 的工具注册中心。P1 的 remember/search/context/review 会复用此入口。
+// Registry 是工具注册中心。remember/search/context/review 会复用此入口。
 type Registry struct {
 	handlers map[string]Handler
 	tools    map[string]ToolSpec

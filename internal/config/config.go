@@ -11,7 +11,7 @@ import (
 )
 
 // Config theone 主配置结构体
-// theone 的最小配置模型，P0 保持默认可启动
+// theone 的最小配置模型，保持默认可启动
 // 设计原则：embedding 和 retention 默认关闭，保证无外部依赖也能启动
 type Config struct {
 	// Storage 存储配置
@@ -27,15 +27,15 @@ type Config struct {
 	Logging LoggingConfig `yaml:"logging" json:"logging"`
 
 	// Memory 记忆配置
-	// P0/P1 默认身份和工作区，内容边界限制
+	// 默认身份和工作区，内容边界限制
 	Memory MemoryConfig `yaml:"memory" json:"memory"`
 
 	// Capture 捕获配置
-	// P2 observe 事件捕获的内容边界和默认值
+	// observe 事件捕获的内容边界和默认值
 	Capture CaptureConfig `yaml:"capture" json:"capture"`
 
 	// Retrieval 检索配置
-	// 在线检索默认值，P1检索实现会使用这些限制
+	// 在线检索默认值，检索实现会使用这些限制
 	Retrieval RetrievalConfig `yaml:"retrieval" json:"retrieval"`
 
 	// Embedding 嵌入配置
@@ -43,15 +43,15 @@ type Config struct {
 	Embedding EmbeddingConfig `yaml:"embedding" json:"embedding"`
 
 	// CodeIndex 代码索引配置
-	// P4 默认 local_basic，只做本地文件/符号轻量解析，不依赖外部服务
+	// 默认 local_basic，只做本地文件/符号轻量解析，不依赖外部服务
 	CodeIndex CodeIndexConfig `yaml:"codeindex" json:"codeindex"`
 
 	// DocIndex 文档索引配置
-	// P4 默认启用 Markdown snapshot，只保存路径、hash、标题和摘要，不保存完整正文
+	// 默认启用 Markdown snapshot，只保存路径、hash、标题和摘要，不保存完整正文
 	DocIndex DocIndexConfig `yaml:"docindex" json:"docindex"`
 
 	// VectorIndex 向量索引配置
-	// P4 默认 none，向量能力作为可选增强，不影响 FTS + metadata + relation 基础路径
+	// 默认 none，向量能力作为可选增强，不影响 FTS + metadata + relation 基础路径
 	VectorIndex VectorIndexConfig `yaml:"vector_index" json:"vector_index"`
 
 	// AccessLog 访问反馈日志配置
@@ -59,20 +59,20 @@ type Config struct {
 	AccessLog AccessLogConfig `yaml:"access_log" json:"access_log"`
 
 	// Retention 保留配置
-	// retention job 默认策略，P0不启动后台retention job
+	// retention job 默认策略，默认不启动后台 retention job
 	Retention RetentionConfig `yaml:"retention" json:"retention"`
 
 	// Processor 处理器配置
-	// P3 自动 evidence/candidate 抽取 Provider 和内容上限
+	// 自动 evidence/candidate 抽取 Provider 和内容上限
 	Processor ProcessorConfig `yaml:"processor" json:"processor"`
 
 	// Automation 自动处理配置
-	// P3 本地异步 worker 的轮询、批量和重试策略
+	// 本地异步 worker 的轮询、批量和重试策略
 	Automation AutomationConfig `yaml:"automation" json:"automation"`
 }
 
 // StorageConfig 存储配置结构体
-// 描述 P0 SQLite 后端配置
+// 描述 SQLite 后端配置
 type StorageConfig struct {
 	// Backend 存储后端
 	// 当前只支持sqlite
@@ -93,7 +93,7 @@ type StorageConfig struct {
 }
 
 // ServerConfig 服务配置结构体
-// 描述 P0 服务入口配置
+// 描述服务入口配置
 type ServerConfig struct {
 	// MCPAddr MCP服务地址
 	// 当前只支持stdio，通过标准输入输出与Agent通信
@@ -118,7 +118,7 @@ type LoggingConfig struct {
 }
 
 // MemoryConfig 记忆配置结构体
-// 保存 P0/P1 默认身份和工作区，后续 scope validator 会复用这些默认值
+// 保存默认身份和工作区，后续 scope validator 会复用这些默认值
 type MemoryConfig struct {
 	// DefaultUserID 默认用户ID
 	// 用于user_global作用域的默认值，一期是本地个人工具
@@ -146,7 +146,7 @@ type MemoryConfig struct {
 }
 
 // CaptureConfig 捕获配置结构体
-// 保存 P2 observe 事件捕获的内容边界和默认值
+// 保存 observe 事件捕获的内容边界和默认值
 type CaptureConfig struct {
 	// RequireSessionForAgentEvents Agent事件是否要求session
 	// 默认true，Agent自动捕获事件必须绑定session
@@ -186,7 +186,7 @@ type CaptureConfig struct {
 }
 
 // RetrievalConfig 检索配置结构体
-// 保存在线检索默认值，P0 只暴露 status，P1 检索实现会使用这些限制
+// 保存在线检索默认值，status/检索实现会使用这些限制
 type RetrievalConfig struct {
 	// DefaultLimit 默认结果数量限制
 	// memory.search的默认limit，默认10
@@ -260,7 +260,7 @@ type CodeIndexConfig struct {
 }
 
 // VectorIndexConfig 向量索引配置结构体。
-// backend=none 是 P4 默认路径；sqlite_vec 只在后续可选增强中启用。
+// backend=none 是默认路径；sqlite_vec 只在后续可选增强中启用。
 type VectorIndexConfig struct {
 	// Backend 向量索引后端，可选 none、blob、sqlite_vec。
 	Backend string `yaml:"backend" json:"backend"`
@@ -279,7 +279,7 @@ type AccessLogConfig struct {
 	// RetentionDaysInjected injected 明细保留天数，默认 180。
 	RetentionDaysInjected int `yaml:"retention_days_injected" json:"retention_days_injected"`
 
-	// AggregateBeforeCleanup 清理前是否要求聚合，默认 true；当前 P4 仅保留配置语义。
+	// AggregateBeforeCleanup 清理前是否要求聚合，默认 true；当前仅保留配置语义。
 	AggregateBeforeCleanup bool `yaml:"aggregate_before_cleanup" json:"aggregate_before_cleanup"`
 }
 
@@ -303,10 +303,10 @@ type DocIndexConfig struct {
 }
 
 // RetentionConfig 保留配置结构体
-// 描述 retention job 默认策略，P0 不启动后台 retention job
+// 描述 retention job 默认策略，默认不启动后台 retention job
 type RetentionConfig struct {
 	// JobEnabled 是否启用保留任务
-	// 默认false，P0不启动后台retention job
+	// 默认 false，不启动后台 retention job
 	JobEnabled bool `yaml:"job_enabled" json:"job_enabled"`
 
 	// TemporaryTTLDays 临时记忆生存天数
@@ -374,7 +374,7 @@ type Overrides struct {
 	LogLevel string
 }
 
-// Default 返回 P0 可直接启动的默认配置
+// Default 返回可直接启动的默认配置
 // 默认数据库路径位于 $HOME/.theone/memory.db
 // 设计原则：默认配置能直接启动，避免用户先理解完整系统才能使用
 func Default() Config {

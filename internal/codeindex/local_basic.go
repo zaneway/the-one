@@ -15,7 +15,7 @@ import (
 
 const defaultMaxFileSizeKB = 512
 
-// LocalBasicAdapter 是 P4-C3 默认本地轻量 Code Index 实现。
+// LocalBasicAdapter 是默认本地轻量 Code Index 实现。
 // 它只读取单个 repo-relative 文件，计算文件 hash，并用字符串扫描做 best-effort 符号定位。
 type LocalBasicAdapter struct {
 	cfg     config.CodeIndexConfig

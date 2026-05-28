@@ -22,11 +22,11 @@ func TestP5CSyntheticMVPAcceptance(t *testing.T) {
 	defer app.Close()
 
 	rawRun, toolErr := app.CallTool(ctx, "memory.mvp.run.start", mvp.StartRunRequest{
-		Name:          "P5-C synthetic MVP acceptance",
+		Name:          "MVP synthetic MVP acceptance",
 		Mode:          mvp.RunModeSynthetic,
-		WorkspaceID:   "ws_p5_synthetic",
-		ProjectID:     "proj_p5_synthetic",
-		RepoID:        "repo_p5_synthetic",
+		WorkspaceID:   "ws_mvp_synthetic",
+		ProjectID:     "proj_mvp_synthetic",
+		RepoID:        "repo_mvp_synthetic",
 		BaselineType:  mvp.BaselineSummaryOnly,
 		CandidateType: mvp.CandidateHybridMemory,
 	})
@@ -50,9 +50,9 @@ func TestP5CSyntheticMVPAcceptance(t *testing.T) {
 		traceID := mvp.SyntheticTraceID(i)
 		if _, err := app.store.CreateRetrievalTrace(ctx, retrieval.TraceRecord{
 			ID:          traceID,
-			WorkspaceID: "ws_p5_synthetic",
-			ProjectID:   "proj_p5_synthetic",
-			RepoID:      "repo_p5_synthetic",
+			WorkspaceID: "ws_mvp_synthetic",
+			ProjectID:   "proj_mvp_synthetic",
+			RepoID:      "repo_mvp_synthetic",
 			LatencyMS:   fixture.LatencyMS,
 			Status:      retrieval.TraceCompleted,
 			UsedFTS:     true,
@@ -109,7 +109,7 @@ func TestP5CSyntheticMVPAcceptance(t *testing.T) {
 		t.Fatalf("memory.mvp.report error = %v", toolErr)
 	}
 	report := rawReport.(mvp.ReportResponse)
-	if report.Report == "" || !strings.Contains(report.Report, "P5 MVP Acceptance Report") ||
+	if report.Report == "" || !strings.Contains(report.Report, "MVP Acceptance Report") ||
 		!strings.Contains(report.Report, "engine_mvp_passed: `true`") {
 		t.Fatalf("report = %q, want markdown summary", report.Report)
 	}

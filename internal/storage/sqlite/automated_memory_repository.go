@@ -11,7 +11,7 @@ import (
 	"github.com/zaneway/theone/internal/memory"
 )
 
-// FindDuplicateEvidence 按 P3 evidence 幂等键查找已有证据。
+// FindDuplicateEvidence 按 evidence 幂等键查找已有证据。
 // 去重规则：raw_event_id + source_type + interpreted_statement 三元组唯一。
 // 设计说明：同一事件可能被多次处理（worker 重试），幂等写入避免重复 evidence。
 func (s *Store) FindDuplicateEvidence(ctx context.Context, key automation.EvidenceDraftKey) (memory.Evidence, bool, error) {
@@ -112,7 +112,7 @@ func (s *Store) FindRelatedMemory(ctx context.Context, req automation.RelatedMem
 	return scanMemoryRows(rows)
 }
 
-// WriteAutomatedMemory 写入 P3 自动生成的记忆。
+// WriteAutomatedMemory 写入自动生成的记忆。
 // 与手动 Remember 的区别：
 //   - 必须关联至少一个 evidence（自动化记忆必须有证据链）
 //   - 自动设置默认值（confidence=0.7, importance=0.5, encoding_depth=2, decay_rate=0.8）
@@ -369,7 +369,7 @@ func (s *Store) ResolveCorrectionTargetMemory(ctx context.Context, req automatio
 
 // WriteMemoryRelation 写入记忆关系边（supports/contradicts/supersedes/superseded_by）。
 // 幂等性：同一 (source_id, target_id, relation_type) 三元组只写入一次。
-// 设计说明：P3 最小关系边集，后续 P4 可扩展 relation expansion。
+// 设计说明：最小关系边集，后续可扩展 relation expansion。
 func (s *Store) WriteMemoryRelation(ctx context.Context, relation memory.MemoryRelation) error {
 	if relation.ID == "" || relation.SourceID == "" || relation.TargetID == "" || relation.RelationType == "" {
 		return fmt.Errorf("VALIDATION_FAILED: relation id, source_id, target_id and relation_type are required")

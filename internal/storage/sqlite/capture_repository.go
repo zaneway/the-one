@@ -134,7 +134,7 @@ func (s *Store) EndTask(ctx context.Context, taskID string, status string, outco
 	return s.getTask(ctx, taskID)
 }
 
-// GetDefaultTask 读取 session 下的 default task。P2-B2 暂按固定摘要识别，C1 负责创建策略。
+// GetDefaultTask 读取 session 下的 default task。暂按固定摘要识别，创建策略由上层负责。
 func (s *Store) GetDefaultTask(ctx context.Context, sessionID string) (capture.AgentTask, bool, error) {
 	row := s.db.QueryRowContext(ctx, baseTaskSelect()+` where coalesce(session_id, '') = ? and task_summary = ?
 		order by created_at asc limit 1`, sessionID, "default task")
@@ -148,7 +148,7 @@ func (s *Store) GetDefaultTask(ctx context.Context, sessionID string) (capture.A
 	return task, true, nil
 }
 
-// FindDuplicateEvent 按 P2 幂等规则查询已有 raw_event。
+// FindDuplicateEvent 按幂等规则查询已有 raw_event。
 func (s *Store) FindDuplicateEvent(ctx context.Context, dedup capture.EventDedupKey) (capture.RawEvent, bool, error) {
 	if dedup.ContentHash == "" || dedup.EventType == "" {
 		return capture.RawEvent{}, false, fmt.Errorf("VALIDATION_FAILED: content_hash and event_type are required")
@@ -342,7 +342,7 @@ func (s *Store) GetCaptureQuality(ctx context.Context, sessionID string) (captur
 	return report, nil
 }
 
-// GetRawEvent 按 raw_event id 读取事件事实，供 P3 automation worker 使用。
+// GetRawEvent 按 raw_event id 读取事件事实，供 automation worker 使用。
 func (s *Store) GetRawEvent(ctx context.Context, rawEventID string) (capture.RawEvent, error) {
 	event, err := scanEvent(s.db.QueryRowContext(ctx, baseEventSelect()+" where id = ?", rawEventID))
 	if err == sql.ErrNoRows {
@@ -398,7 +398,7 @@ func (s *Store) ListOrphanRawEvents(ctx context.Context, req automation.OrphanRa
 	return scanEventRows(rows)
 }
 
-// ListRelatedEvents 读取同 session/task 的近邻事件，用于 P3 Provider 抽取上下文。
+// ListRelatedEvents 读取同 session/task 的近邻事件，用于 Provider 抽取上下文。
 func (s *Store) ListRelatedEvents(ctx context.Context, req automation.RelatedEventsRequest) ([]capture.RawEvent, error) {
 	query := baseEventSelect() + " where 1 = 1"
 	args := make([]any, 0)

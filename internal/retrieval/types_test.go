@@ -48,7 +48,7 @@ func TestFromMemorySearchRequestCopiesFields(t *testing.T) {
 
 func TestFromMemoryContextRequestCopiesFields(t *testing.T) {
 	req := memory.ContextRequest{
-		Task:                   "继续 P4 检索设计复查",
+		Task:                   "继续 retrieval 检索设计复查",
 		WorkspaceID:            "ws",
 		ProjectID:              "project",
 		RepoID:                 "repo",

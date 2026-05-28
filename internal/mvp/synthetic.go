@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// SyntheticScenarioFixture 是 P5-C synthetic 验收的标准任务样本。
+// SyntheticScenarioFixture 是 synthetic 验收的标准任务样本。
 // 该 fixture 只包含结构化计数、比例和摘要，不包含完整对话、完整工具输出或完整 diff。
 type SyntheticScenarioFixture struct {
 	ScenarioID string
@@ -26,8 +26,8 @@ func (f SyntheticScenarioFixture) ObservedJSON() ([]byte, error) {
 	return json.Marshal(f.Observed)
 }
 
-// SyntheticScenarioFixtures 返回 P5-C synthetic Engine MVP 的 10 个标准 scenario 样本。
-// 设计说明：P5-C 的目标是验证验收链路可执行，不模拟真实 Agent 能力；真实 Agent certification 归 P5-D。
+// SyntheticScenarioFixtures 返回 synthetic Engine MVP 的 10 个标准 scenario 样本。
+// 设计说明：目标是验证验收链路可执行，不模拟真实 Agent 能力；真实 Agent certification 由认证流程处理。
 func SyntheticScenarioFixtures() []SyntheticScenarioFixture {
 	return []SyntheticScenarioFixture{
 		{

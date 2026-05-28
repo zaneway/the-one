@@ -13,7 +13,7 @@ import (
 	"github.com/zaneway/theone/internal/memory"
 )
 
-// FindDuplicate 按 P1 幂等键查找同 scope/type/content 的现有记忆。
+// FindDuplicate 按幂等键查找同 scope/type/content 的现有记忆。
 func (s *Store) FindDuplicate(ctx context.Context, item memory.MemoryItem) (memory.MemoryItem, bool, error) {
 	query := baseMemorySelect() + ` where scope = ?
 		and memory_type = ?
@@ -51,9 +51,9 @@ func (s *Store) FindDuplicate(ctx context.Context, item memory.MemoryItem) (memo
 
 // Remember 在一个短事务内写入 memory、evidence、link、FTS 和可选 review_checkpoint。
 func (s *Store) Remember(ctx context.Context, item memory.MemoryItem, evidence memory.Evidence, checkpoint *memory.ReviewCheckpoint) error {
-	// FTS5 是 P1 记忆写入的硬依赖，不可用时直接拒绝
+	// FTS5 是记忆写入的硬依赖，不可用时直接拒绝
 	if !s.capabilities.FTS5 {
-		return fmt.Errorf("FTS_UNAVAILABLE: sqlite fts5 is required for P1 remember")
+		return fmt.Errorf("FTS_UNAVAILABLE: sqlite fts5 is required for remember")
 	}
 	// 事务保证：memory_item + evidence + link + FTS + checkpoint 原子写入
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -95,7 +95,7 @@ func (s *Store) Remember(ctx context.Context, item memory.MemoryItem, evidence m
 	return storageErr(tx.Commit())
 }
 
-// GetReviewCheckpoint 按 memory_id 读取 P1 手动复查 checkpoint 的结构化上下文。
+// GetReviewCheckpoint 按 memory_id 读取手动复查 checkpoint 的结构化上下文。
 func (s *Store) GetReviewCheckpoint(ctx context.Context, memoryID string) (memory.ReviewCheckpoint, bool, error) {
 	row := s.db.QueryRowContext(ctx, `select id, memory_id, coalesce(workspace_id, ''), coalesce(project_id, ''),
 		coalesce(repo_id, ''), coalesce(session_id, ''), coalesce(task_id, ''), checkpoint_type,
@@ -126,13 +126,13 @@ func (s *Store) GetReviewCheckpoint(ctx context.Context, memoryID string) (memor
 	return checkpoint, true, nil
 }
 
-// Search 执行 P1 FTS + metadata 查询和简化排序。
+// Search 执行 FTS + metadata 查询和简化排序。
 // 检索策略：先尝试 FTS5 全文检索，无结果时降级为 LIKE 模糊匹配。
 // 排序公式：0.55*bm25 + 0.20*scope + 0.15*confidence + 0.10*importance
 // 过滤规则：排除 deleted 状态，默认排除 archived；按 scope 隔离（project_local/repo_local/session 必须匹配对应 ID）。
 func (s *Store) Search(ctx context.Context, req memory.SearchRequest) ([]memory.SearchResult, memory.SearchDiagnostics, error) {
 	if !s.capabilities.FTS5 {
-		return nil, memory.SearchDiagnostics{Fallback: "metadata"}, fmt.Errorf("FTS_UNAVAILABLE: sqlite fts5 is required for P1 search")
+		return nil, memory.SearchDiagnostics{Fallback: "metadata"}, fmt.Errorf("FTS_UNAVAILABLE: sqlite fts5 is required for search")
 	}
 	limit := req.Limit
 	if limit <= 0 {
@@ -296,9 +296,9 @@ func (s *Store) Delete(ctx context.Context, memoryID, reviewer, feedback string)
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, err
 	}
-	// P4 删除一致性：清理依赖该 memory 的关系、代码引用和 embedding。
-	// access log 默认作为最小统计保留，不包含 memory content；敏感删除的脱敏入口由 P4 诊断/清理能力单独承载。
-	if err := deleteP4MemoryArtifacts(ctx, tx, memoryID); err != nil {
+	// 删除一致性：清理依赖该 memory 的关系、代码引用和 embedding。
+	// access log 默认作为最小统计保留，不包含 memory content；敏感删除的脱敏入口由诊断/清理能力单独承载。
+	if err := deleteMemoryArtifacts(ctx, tx, memoryID); err != nil {
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, err
 	}
@@ -521,7 +521,7 @@ type rankedMemory struct {
 }
 
 // rankSearchResults 对检索结果执行二次排序和裁剪。
-// 排序公式（P1）：0.55*bm25 + 0.20*scope + 0.15*confidence + 0.10*importance
+// 排序公式：0.55*bm25 + 0.20*scope + 0.15*confidence + 0.10*importance
 // BM25 归一化：将 FTS5 返回的负 BM25 分数转换为 0-1 范围（1/(1+|rank|)）。
 // 惩罚：archived 状态的记忆额外扣 0.4 分。
 // 可选：加载 evidence_refs 用于检索结果的可解释性。
@@ -531,7 +531,7 @@ func (s *Store) rankSearchResults(ctx context.Context, raw []rankedMemory, req m
 		// BM25 归一化：FTS5 返回负值（越小越相关），转换为 0-1 范围
 		// 公式：1/(1+|rank|)，rank 越大（绝对值）-> bm25Norm 越小 -> 相关性越低
 		bm25Norm := 1.0 / (1.0 + math.Abs(item.Rank))
-		// 综合评分公式（P1）：0.55*BM25 + 0.20*scope权重 + 0.15*置信度 + 0.10*重要度
+		// 综合评分公式：0.55*BM25 + 0.20*scope权重 + 0.15*置信度 + 0.10*重要度
 		score := 0.55*bm25Norm + 0.20*scopeWeight(item.Scope) + 0.15*item.Confidence + 0.10*item.Importance
 		// archived 状态惩罚：已归档记忆扣 0.4 分，降低其在检索结果中的排名
 		if item.State == memory.StateArchived {
@@ -692,7 +692,7 @@ func deleteFTS(ctx context.Context, tx *sql.Tx, memoryID string) error {
 	return storageErr(err)
 }
 
-func deleteP4MemoryArtifacts(ctx context.Context, tx *sql.Tx, memoryID string) error {
+func deleteMemoryArtifacts(ctx context.Context, tx *sql.Tx, memoryID string) error {
 	statements := []string{
 		"delete from memory_relation where source_id = ? or target_id = ?",
 		"delete from code_ref where memory_id = ?",

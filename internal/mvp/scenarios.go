@@ -1,6 +1,6 @@
 package mvp
 
-// Scenario 定义 P5 MVP 验收任务的稳定结构化元数据。
+// Scenario 定义 MVP 验收任务的稳定结构化元数据。
 type Scenario struct {
 	ID          string
 	Name        string
@@ -16,8 +16,8 @@ type MetricThreshold struct {
 	Unit       string
 }
 
-// ScenarioRegistry 返回 P5 十个 MVP scenario。
-// 设计约束：这里仅定义验收元数据，P5-C 才负责事件 fixture 和执行编排。
+// ScenarioRegistry 返回十个 MVP scenario。
+// 设计约束：这里仅定义验收元数据，事件 fixture 和执行编排由其他模块负责。
 func ScenarioRegistry() []Scenario {
 	return []Scenario{
 		{

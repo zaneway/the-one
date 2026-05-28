@@ -284,7 +284,7 @@ func mvpStartRunSpec(handler mcp.Handler) mcp.ToolSpec {
 	return mcp.ToolSpec{
 		Name:        "memory.mvp.run.start",
 		Title:       "Start MVP run",
-		Description: "Start a P5 MVP acceptance run for synthetic, real_agent, or mixed validation.",
+		Description: "Start an MVP acceptance run for synthetic, real_agent, or mixed validation.",
 		InputSchema: mcp.ObjectSchema([]string{"name", "workspace_id"}, map[string]any{
 			"name":           mcp.StringProp("Run name."),
 			"mode":           mcp.EnumStringProp("Run mode.", "synthetic", "real_agent", "mixed"),
@@ -307,7 +307,7 @@ func mvpRecordTaskSpec(handler mcp.Handler) mcp.ToolSpec {
 	return mcp.ToolSpec{
 		Name:        "memory.mvp.task.record",
 		Title:       "Record MVP task",
-		Description: "Record one P5 MVP scenario task result.",
+		Description: "Record one MVP scenario task result.",
 		InputSchema: mcp.ObjectSchema([]string{"run_id", "scenario_id", "agent_type", "task_success"}, map[string]any{
 			"run_id":             mcp.StringProp("MVP run id."),
 			"scenario_id":        mcp.StringProp("Scenario id."),
@@ -365,7 +365,7 @@ func mvpComputeMetricsSpec(handler mcp.Handler) mcp.ToolSpec {
 	return mcp.ToolSpec{
 		Name:        "memory.mvp.metrics.compute",
 		Title:       "Compute MVP metrics",
-		Description: "Compute or recompute P5 MVP metrics for a run.",
+		Description: "Compute or recompute MVP metrics for a run.",
 		InputSchema: mcp.ObjectSchema([]string{"run_id"}, map[string]any{
 			"run_id":    mcp.StringProp("MVP run id."),
 			"recompute": mcp.BooleanProp("Whether to recompute existing metrics."),
@@ -380,7 +380,7 @@ func mvpComputeMetricsSpec(handler mcp.Handler) mcp.ToolSpec {
 }
 
 func mvpReportSpec(handler mcp.Handler) mcp.ToolSpec {
-	return diagnosticListSpec("memory.mvp.report", "Generate MVP report", "Generate a P5 MVP report for a run.", handler, map[string]any{
+	return diagnosticListSpec("memory.mvp.report", "Generate MVP report", "Generate an MVP report for a run.", handler, map[string]any{
 		"run_id":           mcp.StringProp("MVP run id."),
 		"format":           mcp.EnumStringProp("Report format.", "markdown", "json"),
 		"include_failures": mcp.BooleanProp("Whether failure details should be included."),

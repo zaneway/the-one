@@ -7,7 +7,7 @@ import (
 	"github.com/zaneway/theone/internal/config"
 )
 
-// MinimizationInput P1 内容边界检查的输入结构体
+// MinimizationInput 内容边界检查的输入结构体
 // 封装需要进行最小化校验的所有字段，用于 CheckMinimizedContent 函数
 // 设计目的：将需要校验的字段集中管理，便于扩展和维护
 type MinimizationInput struct {
@@ -18,7 +18,7 @@ type MinimizationInput struct {
 	ReviewCheckpointJSONs []string // 审查检查点的 JSON 序列化列表，用于 review_checkpoint 类型记忆
 }
 
-// CheckMinimizedContent 执行 P1 内容最小化硬边界检查
+// CheckMinimizedContent 执行内容最小化硬边界检查
 // 校验规则：
 // 1. content 字符数不超过 max_content_chars（默认4000）
 // 2. evidence.interpreted_statement 字符数不超过 max_evidence_chars（默认1200）
@@ -26,7 +26,7 @@ type MinimizationInput struct {
 // 4. salient_spans 数组长度不超过 max_salient_span_count（默认10）
 // 5. review_checkpoint JSON 中禁止包含 full_text 字段
 // 设计说明：
-// - P1 不做复杂脱敏和自动摘要，超界直接拒绝写入
+// - 不做复杂脱敏和自动摘要，超界直接拒绝写入
 // - 使用 rune 长度而非字节长度，正确处理中文等多字节字符
 // - review_checkpoint 禁止 full_text 是为了避免存储完整代码或文档内容
 // - 错误码 CONTENT_TOO_LARGE 用于客户端识别并调整内容大小

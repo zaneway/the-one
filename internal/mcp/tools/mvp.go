@@ -17,7 +17,7 @@ type MVPService interface {
 	Report(ctx context.Context, req mvp.ReportRequest) (mvp.ReportResponse, error)
 }
 
-// RegisterMVPTools 注册 P5 MVP 验收模型和报告工具。
+// RegisterMVPTools 注册 MVP 验收模型和报告工具。
 func RegisterMVPTools(registry *mcp.Registry, service MVPService, logger *slog.Logger) {
 	registry.RegisterTool(mvpStartRunSpec(func(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 		var req mvp.StartRunRequest

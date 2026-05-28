@@ -11,13 +11,13 @@ import (
 
 const maxMVPJSONSummaryRunes = 4096
 
-// Service 提供 P5 MVP 验收模型的应用层入口。
-// P5-A 只负责 run/task 记录和基础模型，不在这里聚合 P2/P4 诊断或生成报告。
+// Service 提供 MVP 验收模型的应用层入口。
+// 该服务只负责 run/task 记录和基础模型，不在这里聚合诊断或生成报告。
 type Service struct {
 	repo Repository
 }
 
-// NewService 创建 P5 MVP service。
+// NewService 创建 MVP service。
 func NewService(repo Repository) *Service {
 	return &Service{repo: repo}
 }
@@ -85,7 +85,7 @@ type RecordCapabilityResponse struct {
 	Accepted           bool    `json:"accepted"`
 }
 
-// StartRun 创建一次 P5 验收 run。
+// StartRun 创建一次验收 run。
 func (s *Service) StartRun(ctx context.Context, req StartRunRequest) (StartRunResponse, error) {
 	if s == nil || s.repo == nil {
 		return StartRunResponse{}, fmt.Errorf("MVP_SERVICE_UNAVAILABLE: repository is nil")
@@ -157,7 +157,7 @@ func (s *Service) RecordTask(ctx context.Context, req RecordTaskRequest) (Record
 	return RecordTaskResponse{TaskResultID: task.ID, Accepted: true}, nil
 }
 
-// RecordCapability 记录 P5-D 单个 Agent 的捕获能力快照。
+// RecordCapability 记录单个 Agent 的捕获能力快照。
 func (s *Service) RecordCapability(ctx context.Context, req RecordCapabilityRequest) (RecordCapabilityResponse, error) {
 	if s == nil || s.repo == nil {
 		return RecordCapabilityResponse{}, fmt.Errorf("MVP_SERVICE_UNAVAILABLE: repository is nil")
@@ -210,7 +210,7 @@ func (s *Service) RecordCapability(ctx context.Context, req RecordCapabilityRequ
 	}, nil
 }
 
-// ComputeMetrics 聚合 P5 run 下的 task、trace 和 capability，生成可持久化指标样本。
+// ComputeMetrics 聚合 run 下的 task、trace 和 capability，生成可持久化指标样本。
 func (s *Service) ComputeMetrics(ctx context.Context, req ComputeMetricsRequest) (ComputeMetricsResponse, error) {
 	if s == nil || s.repo == nil {
 		return ComputeMetricsResponse{}, fmt.Errorf("MVP_SERVICE_UNAVAILABLE: repository is nil")
@@ -264,7 +264,7 @@ func (s *Service) ComputeMetrics(ctx context.Context, req ComputeMetricsRequest)
 	}, nil
 }
 
-// Report 生成 P5-B 内存报告。文件写入由后续 P5-C 脚本或 CLI 负责，避免服务层写入任意路径。
+// Report 生成内存报告。文件写入由脚本或 CLI 负责，避免服务层写入任意路径。
 func (s *Service) Report(ctx context.Context, req ReportRequest) (ReportResponse, error) {
 	if s == nil || s.repo == nil {
 		return ReportResponse{}, fmt.Errorf("MVP_SERVICE_UNAVAILABLE: repository is nil")
@@ -588,7 +588,7 @@ func metricSourceJSON(sourceType, sourceID string) string {
 
 func renderMarkdownReport(run AcceptanceRun, summary MetricsSummary, metrics []MetricSample, capabilities []AgentCapability, tasks []AcceptanceTask, includeFailures bool) string {
 	var buf bytes.Buffer
-	buf.WriteString("# P5 MVP Acceptance Report\n\n")
+	buf.WriteString("# MVP Acceptance Report\n\n")
 	buf.WriteString(fmt.Sprintf("- run_id: `%s`\n", run.ID))
 	buf.WriteString(fmt.Sprintf("- status: `%s`\n", run.Status))
 	buf.WriteString(fmt.Sprintf("- mode: `%s`\n", run.Mode))

@@ -66,12 +66,12 @@ const (
 	AgentCursor     = "cursor"
 )
 
-// RequiredCertificationAgents 返回 P5-D 必须单独认证的 Agent 集合。
+// RequiredCertificationAgents 返回必须单独认证的 Agent 集合。
 func RequiredCertificationAgents() []string {
 	return []string{AgentCodex, AgentClaudeCode, AgentCursor}
 }
 
-// IsCertificationAgent 校验 agent_type 是否属于 P5-D 认证范围。
+// IsCertificationAgent 校验 agent_type 是否属于认证范围。
 func IsCertificationAgent(agentType string) bool {
 	for _, item := range RequiredCertificationAgents() {
 		if agentType == item {
@@ -81,7 +81,7 @@ func IsCertificationAgent(agentType string) bool {
 	return false
 }
 
-// IsTaskStatus 校验 P5 task 结果状态，空值表示由存储层按 task_success 推导。
+// IsTaskStatus 校验 task 结果状态，空值表示由存储层按 task_success 推导。
 func IsTaskStatus(status string) bool {
 	switch status {
 	case "", TaskStatusRunning, TaskStatusPassed, TaskStatusFailed, TaskStatusSkipped:
@@ -91,7 +91,7 @@ func IsTaskStatus(status string) bool {
 	}
 }
 
-// AcceptanceRun 表示一次 P5 MVP 验收。该结构只保存验收摘要和关联标识，不保存完整对话或工具输出。
+// AcceptanceRun 表示一次 MVP 验收。该结构只保存验收摘要和关联标识，不保存完整对话或工具输出。
 type AcceptanceRun struct {
 	ID            string
 	Name          string
@@ -132,7 +132,7 @@ type AcceptanceTask struct {
 	UpdatedAt        time.Time
 }
 
-// MetricSample 是 P5 指标计算后的持久化样本。
+// MetricSample 是指标计算后的持久化样本。
 type MetricSample struct {
 	ID                string
 	RunID             string
@@ -151,7 +151,7 @@ type MetricSample struct {
 	CreatedAt         time.Time
 }
 
-// AgentCapability 保存某个 Agent 在一次 P5 验收中的真实捕获能力快照。
+// AgentCapability 保存某个 Agent 在一次验收中的真实捕获能力快照。
 type AgentCapability struct {
 	ID                     string
 	RunID                  string
@@ -201,7 +201,7 @@ type CapabilityQuery struct {
 	Limit     int
 }
 
-// Repository 定义 P5-A 验收模型需要的持久化能力。
+// Repository 定义验收模型需要的持久化能力。
 type Repository interface {
 	CreateRun(ctx context.Context, run AcceptanceRun) (AcceptanceRun, error)
 	GetRun(ctx context.Context, runID string) (AcceptanceRun, error)

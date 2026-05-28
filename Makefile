@@ -1,4 +1,4 @@
-.PHONY: build test test-p1-sqlite test-p2-capture test-p3-sqlite test-p4-retrieval test-p5-mvp run-health run-status
+.PHONY: build test test-p1-sqlite test-p2-capture test-p2-envelope test-p3-sqlite test-p4-retrieval test-p5-mvp run-health run-status
 
 DATA_DIR ?= /tmp/theone-p0
 GO_TAGS ?= sqlite_fts5
@@ -15,6 +15,9 @@ test-p1-sqlite:
 
 test-p2-capture:
 	scripts/acceptance/p2_capture.sh
+
+test-p2-envelope:
+	scripts/acceptance/p2_envelope.sh
 
 test-p3-sqlite:
 	scripts/acceptance/p3_sqlite.sh

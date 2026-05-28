@@ -12,7 +12,7 @@ import (
 
 const defaultRelationExpansionLimit = 20
 
-// ListRelationExpansions 查询 P4-C2 depth=1 关系扩展边。
+// ListRelationExpansions 查询 depth=1 关系扩展边。
 // 设计约束：必须提供 seed memory；只读取持久化强关系边，不在线构建新关系，不做多跳图遍历。
 func (s *Store) ListRelationExpansions(ctx context.Context, query retrieval.RelationExpansionQuery) ([]retrieval.RelationExpansion, error) {
 	seedIDs := compactUniqueStrings(query.SeedMemoryIDs)

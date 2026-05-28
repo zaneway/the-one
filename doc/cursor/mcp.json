@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "theone": {
+      "command": "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/bin/theone",
+      "args": [
+        "serve",
+        "-config",
+        "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/theone.yaml",
+        "-data-dir",
+        "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/.theone-data"
+      ],
+      "env": {
+        "THEONE_DISABLE_PID": "1",
+        "THEONE_LOG_PATH": "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/.theone-data/logs/theone.log"
+      }
+    }
+  }
+}

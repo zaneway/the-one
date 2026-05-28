@@ -14,7 +14,7 @@ import (
 	"github.com/zaneway/theone/internal/retrieval"
 )
 
-// TestAppCrossPhaseObserveToSearchAndContext 验证 P2 observe 事件可经 P3 worker 写入 P1，并被 P4 search/context 召回。
+// TestAppCrossPhaseObserveToSearchAndContext 验证 capture observe 事件可经 automation worker 写入 memory，并被 retrieval search/context 召回。
 func TestAppCrossPhaseObserveToSearchAndContext(t *testing.T) {
 	ctx := context.Background()
 	app := newP4IntegrationApp(t, ctx)
@@ -26,12 +26,12 @@ func TestAppCrossPhaseObserveToSearchAndContext(t *testing.T) {
 	rawObserved, toolErr := app.CallTool(ctx, "memory.observe", capture.ObserveRequest{
 		EventType:      capture.EventUserDeclaration,
 		SourceChannel:  capture.SourceChannelMCPTool,
-		WorkspaceID:    "ws_cross_phase",
+		WorkspaceID:    "ws_cross_feature",
 		ProjectID:      "project_chain",
 		AgentType:      "codex",
 		Actor:          capture.ActorUser,
-		ContentSummary: "项目要求 P4 联动验收必须覆盖 memory.observe、automation worker、admission、memory.search 和 memory.context 的端到端链路。",
-		Keywords:       []string{"P4", "联动", "memory.observe", "worker", "admission", "memory.search", "memory.context"},
+		ContentSummary: "项目要求 retrieval 联动验收必须覆盖 memory.observe、automation worker、admission、memory.search 和 memory.context 的端到端链路。",
+		Keywords:       []string{"retrieval", "联动", "memory.observe", "worker", "admission", "memory.search", "memory.context"},
 		ContentHash:    "sha256:cross-phase-observe-search-context",
 	})
 	if toolErr != nil {
@@ -58,12 +58,12 @@ func TestAppCrossPhaseObserveToSearchAndContext(t *testing.T) {
 		t.Fatalf("Get(resulting memory) error = %v", err)
 	}
 	if written.MemoryType != memory.TypeRequirement || written.Scope != memory.ScopeProjectLocal {
-		t.Fatalf("written memory = %+v, want project requirement from P3 admission", written)
+		t.Fatalf("written memory = %+v, want project requirement from automation admission", written)
 	}
 
 	rawSearch, toolErr := app.CallTool(ctx, "memory.search", memory.SearchRequest{
-		Query:           "P4 联动 observe worker admission context",
-		WorkspaceID:     "ws_cross_phase",
+		Query:           "retrieval 联动 observe worker admission context",
+		WorkspaceID:     "ws_cross_feature",
 		ProjectID:       "project_chain",
 		Scope:           []string{memory.ScopeProjectLocal},
 		MemoryTypes:     []string{memory.TypeRequirement},
@@ -75,10 +75,10 @@ func TestAppCrossPhaseObserveToSearchAndContext(t *testing.T) {
 	}
 	searchResp := rawSearch.(memory.SearchResponse)
 	if !searchResultsContain(searchResp.Results, written.ID) || searchResp.Diagnostics.RetrievalTraceID == "" {
-		t.Fatalf("search response = %+v, want P4 trace and automated memory %s", searchResp, written.ID)
+		t.Fatalf("search response = %+v, want retrieval trace and automated memory %s", searchResp, written.ID)
 	}
 	if searchResp.Results[0].ScoreBreakdown == nil || len(searchResp.Results[0].EvidenceRefs) == 0 {
-		t.Fatalf("search result = %+v, want P4 score breakdown and P3 evidence refs", searchResp.Results[0])
+		t.Fatalf("search result = %+v, want retrieval score breakdown and automation evidence refs", searchResp.Results[0])
 	}
 	retrievedLogs, err := app.store.ListMemoryAccessLogs(ctx, retrieval.AccessLogQuery{
 		RetrievalTraceID: searchResp.Diagnostics.RetrievalTraceID,
@@ -89,12 +89,12 @@ func TestAppCrossPhaseObserveToSearchAndContext(t *testing.T) {
 		t.Fatalf("ListMemoryAccessLogs(retrieved) error = %v", err)
 	}
 	if len(retrievedLogs) == 0 {
-		t.Fatalf("retrieved access logs = %+v, want P4 retrieval log", retrievedLogs)
+		t.Fatalf("retrieved access logs = %+v, want retrieval retrieval log", retrievedLogs)
 	}
 
 	rawContext, toolErr := app.CallTool(ctx, "memory.context", memory.ContextRequest{
-		Task:                   "执行 P4 联动验收，检查 observe worker admission search context 是否端到端贯通",
-		WorkspaceID:            "ws_cross_phase",
+		Task:                   "执行 retrieval 联动验收，检查 observe worker admission search context 是否端到端贯通",
+		WorkspaceID:            "ws_cross_feature",
 		ProjectID:              "project_chain",
 		TokenBudget:            600,
 		IncludeEvidenceSummary: true,
@@ -104,7 +104,7 @@ func TestAppCrossPhaseObserveToSearchAndContext(t *testing.T) {
 	}
 	contextResp := rawContext.(memory.ContextResponse)
 	if !stringSliceContains(contextResp.UsedMemoryIDs, written.ID) || contextResp.Diagnostics == nil {
-		t.Fatalf("context response = %+v, want automated memory %s and P4 diagnostics", contextResp, written.ID)
+		t.Fatalf("context response = %+v, want automated memory %s and retrieval diagnostics", contextResp, written.ID)
 	}
 	injectedLogs, err := app.store.ListMemoryAccessLogs(ctx, retrieval.AccessLogQuery{
 		RetrievalTraceID: contextResp.RetrievalTraceID,
@@ -115,11 +115,11 @@ func TestAppCrossPhaseObserveToSearchAndContext(t *testing.T) {
 		t.Fatalf("ListMemoryAccessLogs(injected) error = %v", err)
 	}
 	if len(injectedLogs) == 0 {
-		t.Fatalf("injected access logs = %+v, want P4 context injection log", injectedLogs)
+		t.Fatalf("injected access logs = %+v, want retrieval context injection log", injectedLogs)
 	}
 }
 
-// TestAppCrossPhaseUserCorrectionOverwritesAndSearches 验证用户纠正事件会原地覆盖旧记忆并同步 P4 检索索引。
+// TestAppCrossPhaseUserCorrectionOverwritesAndSearches 验证用户纠正事件会原地覆盖旧记忆并同步 retrieval 检索索引。
 func TestAppCrossPhaseUserCorrectionOverwritesAndSearches(t *testing.T) {
 	ctx := context.Background()
 	app := newP4IntegrationApp(t, ctx)
@@ -133,7 +133,7 @@ func TestAppCrossPhaseUserCorrectionOverwritesAndSearches(t *testing.T) {
 		Title:       "链路数据库事实",
 		MemoryType:  memory.TypeProjectFact,
 		Scope:       memory.ScopeProjectLocal,
-		WorkspaceID: "ws_cross_phase_correction",
+		WorkspaceID: "ws_cross_feature_correction",
 		ProjectID:   "project_chain",
 		SourceType:  "manual_review",
 		Keywords:    []string{"数据库", "MySQL"},
@@ -141,7 +141,7 @@ func TestAppCrossPhaseUserCorrectionOverwritesAndSearches(t *testing.T) {
 	rawObserved, toolErr := app.CallTool(ctx, "memory.observe", capture.ObserveRequest{
 		EventType:      capture.EventUserCorrection,
 		SourceChannel:  capture.SourceChannelMCPTool,
-		WorkspaceID:    "ws_cross_phase_correction",
+		WorkspaceID:    "ws_cross_feature_correction",
 		ProjectID:      "project_chain",
 		AgentType:      "codex",
 		Actor:          capture.ActorUser,
@@ -180,7 +180,7 @@ func TestAppCrossPhaseUserCorrectionOverwritesAndSearches(t *testing.T) {
 
 	rawSearch, toolErr := app.CallTool(ctx, "memory.search", memory.SearchRequest{
 		Query:       "PostgreSQL",
-		WorkspaceID: "ws_cross_phase_correction",
+		WorkspaceID: "ws_cross_feature_correction",
 		ProjectID:   "project_chain",
 		Scope:       []string{memory.ScopeProjectLocal},
 		MemoryTypes: []string{memory.TypeProjectFact},
@@ -191,12 +191,12 @@ func TestAppCrossPhaseUserCorrectionOverwritesAndSearches(t *testing.T) {
 	}
 	searchResp := rawSearch.(memory.SearchResponse)
 	if !searchResultsContain(searchResp.Results, oldID) || searchResp.Diagnostics.RetrievalTraceID == "" {
-		t.Fatalf("search response = %+v, want corrected memory %s through P4", searchResp, oldID)
+		t.Fatalf("search response = %+v, want corrected memory %s through retrieval", searchResp, oldID)
 	}
 
 	rawOldSearch, toolErr := app.CallTool(ctx, "memory.search", memory.SearchRequest{
 		Query:       "MySQL",
-		WorkspaceID: "ws_cross_phase_correction",
+		WorkspaceID: "ws_cross_feature_correction",
 		ProjectID:   "project_chain",
 		Scope:       []string{memory.ScopeProjectLocal},
 		MemoryTypes: []string{memory.TypeProjectFact},
@@ -211,7 +211,7 @@ func TestAppCrossPhaseUserCorrectionOverwritesAndSearches(t *testing.T) {
 	}
 }
 
-// TestAppCrossPhaseReviewCheckpointObservedAndRetrievable 验证 P3 自动生成的 review checkpoint 可被 P4 检索。
+// TestAppCrossPhaseReviewCheckpointObservedAndRetrievable 验证 automation 自动生成的 review checkpoint 可被 retrieval 检索。
 func TestAppCrossPhaseReviewCheckpointObservedAndRetrievable(t *testing.T) {
 	ctx := context.Background()
 	app := newP4IntegrationApp(t, ctx)
@@ -223,17 +223,17 @@ func TestAppCrossPhaseReviewCheckpointObservedAndRetrievable(t *testing.T) {
 	rawObserved, toolErr := app.CallTool(ctx, "memory.observe", capture.ObserveRequest{
 		EventType:      capture.EventTaskResult,
 		SourceChannel:  capture.SourceChannelMCPTool,
-		WorkspaceID:    "ws_cross_phase_checkpoint",
+		WorkspaceID:    "ws_cross_feature_checkpoint",
 		ProjectID:      "project_chain",
 		AgentType:      "codex",
 		Actor:          capture.ActorAgent,
-		ContentSummary: "P4 详细设计复查完成，已确认 P1、P2、P3、P4 联动验收需要保留 checkpoint。",
-		Keywords:       []string{"P4", "详细设计", "复查", "checkpoint", "联动验收"},
+		ContentSummary: "retrieval 详细设计复查完成，已确认 memory、capture、automation、retrieval 联动验收需要保留 checkpoint。",
+		Keywords:       []string{"retrieval", "详细设计", "复查", "checkpoint", "联动验收"},
 		SourceRefs: []capture.SourceRef{{
 			"checkpoint_type": "implementation_design_review",
-			"review_intent":   []string{"cross_phase_linkage", "acceptance_regression"},
-			"target_docs":     []map[string]any{{"path": "doc/The One 长期记忆系统 P4 详细设计.md", "content_hash": "sha256:p4-design"}},
-			"target_hashes":   []map[string]any{{"path": "doc/The One 长期记忆系统 P4 详细设计.md", "content_hash": "sha256:p4-design"}},
+			"review_intent":   []string{"cross_feature_linkage", "acceptance_regression"},
+			"target_docs":     []map[string]any{{"path": "doc/The One 长期记忆系统 retrieval 详细设计.md", "content_hash": "sha256:p4-design"}},
+			"target_hashes":   []map[string]any{{"path": "doc/The One 长期记忆系统 retrieval 详细设计.md", "content_hash": "sha256:p4-design"}},
 			"conclusion":      "supplemented",
 		}},
 		ContentHash: "sha256:cross-phase-review-checkpoint",
@@ -264,8 +264,8 @@ func TestAppCrossPhaseReviewCheckpointObservedAndRetrievable(t *testing.T) {
 	}
 
 	rawSearch, toolErr := app.CallTool(ctx, "memory.search", memory.SearchRequest{
-		Query:       "P4 详细设计 checkpoint 联动验收",
-		WorkspaceID: "ws_cross_phase_checkpoint",
+		Query:       "retrieval 详细设计 checkpoint 联动验收",
+		WorkspaceID: "ws_cross_feature_checkpoint",
 		ProjectID:   "project_chain",
 		Scope:       []string{memory.ScopeProjectLocal},
 		MemoryTypes: []string{memory.TypeReviewCheckpoint},
@@ -276,7 +276,7 @@ func TestAppCrossPhaseReviewCheckpointObservedAndRetrievable(t *testing.T) {
 	}
 	searchResp := rawSearch.(memory.SearchResponse)
 	if !searchResultsContain(searchResp.Results, candidates[0].ResultingMemoryID) || searchResp.Diagnostics.RetrievalTraceID == "" {
-		t.Fatalf("checkpoint search response = %+v, want P4 retrieval of observed checkpoint", searchResp)
+		t.Fatalf("checkpoint search response = %+v, want retrieval retrieval of observed checkpoint", searchResp)
 	}
 }
 

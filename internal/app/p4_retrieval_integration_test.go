@@ -25,7 +25,7 @@ func TestAppP4RetrievalGoldenSet(t *testing.T) {
 		Title:       "认证链路不引入 Kafka",
 		MemoryType:  memory.TypeDecision,
 		Scope:       memory.ScopeProjectLocal,
-		WorkspaceID: "ws_p4_e2",
+		WorkspaceID: "ws_retrieval_e2",
 		ProjectID:   "project_a",
 		SourceType:  "manual_review",
 		Keywords:    []string{"Kafka", "认证", "同步校验"},
@@ -35,7 +35,7 @@ func TestAppP4RetrievalGoldenSet(t *testing.T) {
 		Title:       "token expiry boundary error",
 		MemoryType:  memory.TypeFailure,
 		Scope:       memory.ScopeProjectLocal,
-		WorkspaceID: "ws_p4_e2",
+		WorkspaceID: "ws_retrieval_e2",
 		ProjectID:   "project_a",
 		SourceType:  "manual_review",
 		Keywords:    []string{"token", "expiry", "boundary", "error"},
@@ -45,30 +45,30 @@ func TestAppP4RetrievalGoldenSet(t *testing.T) {
 		Title:       "其他项目 Kafka 决策",
 		MemoryType:  memory.TypeDecision,
 		Scope:       memory.ScopeProjectLocal,
-		WorkspaceID: "ws_p4_e2",
+		WorkspaceID: "ws_retrieval_e2",
 		ProjectID:   "project_b",
 		SourceType:  "manual_review",
 		Keywords:    []string{"Kafka", "订单"},
 	})
 	oldID := rememberP4IntegrationMemory(t, ctx, app, memory.RememberRequest{
-		Content:     "旧结论：P4 retrieval 只需要顺序裁剪 context。",
+		Content:     "旧结论：retrieval retrieval 只需要顺序裁剪 context。",
 		Title:       "旧 context 结论",
 		MemoryType:  memory.TypeDecision,
 		Scope:       memory.ScopeProjectLocal,
-		WorkspaceID: "ws_p4_e2",
+		WorkspaceID: "ws_retrieval_e2",
 		ProjectID:   "project_a",
 		SourceType:  "manual_review",
-		Keywords:    []string{"P4", "retrieval", "context", "顺序裁剪"},
+		Keywords:    []string{"retrieval", "retrieval", "context", "顺序裁剪"},
 	})
 	newID := rememberP4IntegrationMemory(t, ctx, app, memory.RememberRequest{
-		Content:     "新结论：P4 retrieval context 必须使用多 bucket budget builder，替代顺序裁剪。",
+		Content:     "新结论：retrieval retrieval context 必须使用多 bucket budget builder，替代顺序裁剪。",
 		Title:       "新 context budget 结论",
 		MemoryType:  memory.TypeDecision,
 		Scope:       memory.ScopeProjectLocal,
-		WorkspaceID: "ws_p4_e2",
+		WorkspaceID: "ws_retrieval_e2",
 		ProjectID:   "project_a",
 		SourceType:  "manual_review",
-		Keywords:    []string{"P4", "retrieval", "context", "bucket", "budget"},
+		Keywords:    []string{"retrieval", "retrieval", "context", "bucket", "budget"},
 	})
 	if err := app.store.WriteMemoryRelation(ctx, memory.MemoryRelation{
 		ID:           "rel_new_supersedes_old",
@@ -88,13 +88,13 @@ func TestAppP4RetrievalGoldenSet(t *testing.T) {
 	}{
 		{name: "decision", query: "为什么认证链路没有使用 Kafka？", wantIDs: []string{decisionID}, forbidIDs: []string{otherProjectID}},
 		{name: "failure", query: "token expiry boundary error 为什么又出现？", wantIDs: []string{failureID}},
-		{name: "supersedes", query: "P4 retrieval context 顺序裁剪还是 bucket budget？", wantIDs: []string{newID}, forbidIDs: []string{oldID}},
+		{name: "supersedes", query: "retrieval retrieval context 顺序裁剪还是 bucket budget？", wantIDs: []string{newID}, forbidIDs: []string{oldID}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, toolErr := app.CallTool(ctx, "memory.search", memory.SearchRequest{
 				Query:       tc.query,
-				WorkspaceID: "ws_p4_e2",
+				WorkspaceID: "ws_retrieval_e2",
 				ProjectID:   "project_a",
 				Scope:       []string{memory.ScopeProjectLocal},
 				Limit:       10,
@@ -145,7 +145,7 @@ func ValidateToken(token string) bool {
 		Title:       "ValidateToken code ref",
 		MemoryType:  memory.TypeProcedure,
 		Scope:       memory.ScopeRepoLocal,
-		WorkspaceID: "ws_p4_e2_ctx",
+		WorkspaceID: "ws_retrieval_e2_ctx",
 		RepoID:      repoRoot,
 		SourceType:  "manual_review",
 		Keywords:    []string{"ValidateToken", "service.go", "token"},
@@ -165,7 +165,7 @@ func ValidateToken(token string) bool {
 		Title:       "design.md checkpoint",
 		MemoryType:  memory.TypeReviewCheckpoint,
 		Scope:       memory.ScopeRepoLocal,
-		WorkspaceID: "ws_p4_e2_ctx",
+		WorkspaceID: "ws_retrieval_e2_ctx",
 		RepoID:      repoRoot,
 		SourceType:  "manual_review",
 		Keywords:    []string{"架构评审", "design.md", "checkpoint"},
@@ -179,7 +179,7 @@ func ValidateToken(token string) bool {
 	})
 	if _, err := app.store.WriteDocSnapshot(ctx, docindex.DocumentSnapshot{
 		ID:          "doc_e2_previous",
-		WorkspaceID: "ws_p4_e2_ctx",
+		WorkspaceID: "ws_retrieval_e2_ctx",
 		RepoID:      repoRoot,
 		Path:        "design.md",
 		ContentHash: "sha256:previous",
@@ -194,7 +194,7 @@ func ValidateToken(token string) bool {
 
 	raw, toolErr := app.CallTool(ctx, "memory.context", memory.ContextRequest{
 		Task:            "架构评审 design.md 并检查 service.go ValidateToken 的代码引用",
-		WorkspaceID:     "ws_p4_e2_ctx",
+		WorkspaceID:     "ws_retrieval_e2_ctx",
 		RepoID:          repoRoot,
 		TokenBudget:     600,
 		IncludeCodeRefs: true,

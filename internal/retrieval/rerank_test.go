@@ -82,7 +82,7 @@ func TestScoreCandidateIntentBoostsReviewCheckpoint(t *testing.T) {
 			ID:         "mem_checkpoint",
 			Scope:      memory.ScopeProjectLocal,
 			MemoryType: memory.TypeReviewCheckpoint,
-			Content:    "上次 P4 复查确认 relation 只使用 P3 四类关系。",
+			Content:    "上次 retrieval 复查确认 relation 只使用 automation 四类关系。",
 			State:      memory.StateStable,
 			Tier:       memory.TierLongTerm,
 			UpdatedAt:  now,
@@ -90,7 +90,7 @@ func TestScoreCandidateIntentBoostsReviewCheckpoint(t *testing.T) {
 	}
 
 	score := ScoreCandidate(&checkpoint, RerankOptions{
-		Task:        "复查 P4 详细设计是否还有逻辑缺失",
+		Task:        "复查 retrieval 详细设计是否还有逻辑缺失",
 		Scopes:      []string{memory.ScopeProjectLocal},
 		Intent:      IntentArchitectureReview,
 		TokenBudget: 1000,

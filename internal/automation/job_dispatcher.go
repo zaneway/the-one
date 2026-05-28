@@ -63,6 +63,6 @@ func (h p3JobHandler) RunJob(ctx context.Context, job AsyncJob) (map[string]any,
 	case JobTypeComputeAdmission:
 		return h.service.runComputeAdmission(ctx, job)
 	default:
-		return nil, fmt.Errorf("PROVIDER_NOT_FOUND: unsupported P3 job_type %q", job.JobType)
+		return nil, fmt.Errorf("PROVIDER_NOT_FOUND: unsupported job_type %q", job.JobType)
 	}
 }

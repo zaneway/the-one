@@ -32,7 +32,7 @@ func TestAppRegistersCaptureTools(t *testing.T) {
 			SessionLifecycle: true,
 			MCPObserve:       true,
 		},
-		Session: &capture.SessionInput{GoalSummary: "验证 P2-C3"},
+		Session: &capture.SessionInput{GoalSummary: "验证 capture"},
 	})
 	if toolErr != nil {
 		t.Fatalf("memory.observe error = %v", toolErr)

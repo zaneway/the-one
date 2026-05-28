@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": ".cursor/hooks/theone-session-start.sh",
+        "timeout": 8,
+        "failClosed": false
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": ".cursor/hooks/theone-before-submit-prompt.sh",
+        "timeout": 8,
+        "failClosed": false
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "command": ".cursor/hooks/theone-observe-turn.sh",
+        "timeout": 8,
+        "failClosed": false
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": ".cursor/hooks/theone-observe-file-edit.sh",
+        "timeout": 8,
+        "failClosed": false
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": ".cursor/hooks/theone-observe-tool-result.sh",
+        "timeout": 8,
+        "failClosed": false
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": ".cursor/hooks/theone-session-end.sh",
+        "timeout": 8,
+        "failClosed": false
+      }
+    ],
+    "stop": [
+      {
+        "command": ".cursor/hooks/theone-session-end.sh",
+        "timeout": 8,
+        "failClosed": false
+      }
+    ]
+  }
+}

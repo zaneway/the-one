@@ -22,7 +22,7 @@ const (
 	defaultMaxRetries         = 3
 )
 
-// Repository 定义 P3-C1 automation service 依赖的异步任务、事件、证据和自动写入能力。
+// Repository 定义 automation service 依赖的异步任务、事件、证据和自动写入能力。
 type Repository interface {
 	EnqueueJob(ctx context.Context, job AsyncJob) (AsyncJob, bool, error)
 	ClaimJobs(ctx context.Context, now time.Time, limit int) ([]AsyncJob, error)
@@ -66,7 +66,7 @@ type Repository interface {
 	UpdateRetentionFields(ctx context.Context, memoryID string, update retention.ScoreUpdate) error
 }
 
-// Service 编排 P3 自动记忆 job 链路。
+// Service 编排自动记忆 job 链路。
 // Provider 只负责生成 draft/candidate，最终写入和 Admission 均在该服务中统一执行。
 type Service struct {
 	cfg        config.Config
@@ -76,7 +76,7 @@ type Service struct {
 	dispatcher JobDispatcher
 }
 
-// NewService 创建自动记忆服务。provider 为空时使用 rule_based，保证 P3 默认本地可运行。
+// NewService 创建自动记忆服务。provider 为空时使用 rule_based，保证默认本地可运行。
 func NewService(cfg config.Config, repo Repository, provider processor.Provider) *Service {
 	if provider == nil {
 		defaultProvider := processor.NewRuleBasedProvider()
@@ -90,13 +90,13 @@ func NewService(cfg config.Config, repo Repository, provider processor.Provider)
 	}
 	service.dispatcher = NewJobDispatcher(
 		p3JobHandler{service: service},
-		newP4JobHandler(cfg, repo),
+		newExtendedJobHandler(cfg, repo),
 	)
 	return service
 }
 
 // EnqueueRawEvent 为 raw_event 创建 evidence 抽取任务。
-// P3 入口：capture service 在 raw_event 写入成功后调用此方法，触发自动记忆处理管道。
+// capture service 在 raw_event 写入成功后调用此方法，触发自动记忆处理管道。
 func (s *Service) EnqueueRawEvent(ctx context.Context, rawEvent capture.RawEvent) error {
 	if rawEvent.ID == "" {
 		return fmt.Errorf("VALIDATION_FAILED: raw_event id is required")
@@ -135,7 +135,7 @@ func (s *Service) RunJob(ctx context.Context, job AsyncJob) error {
 	return s.repo.MarkJobSucceeded(ctx, job.ID, payloadJSON, now)
 }
 
-// runExtractEvidence 执行 P3 管道第一步：从 raw_event 抽取 evidence。
+// runExtractEvidence 执行管道第一步：从 raw_event 抽取 evidence。
 // 处理流程：
 //  1. 加载原始事件及其关联的 session 和 task
 //  2. 加载同 session/task 的近邻事件（最多 20 条），用于上下文理解
@@ -187,7 +187,7 @@ func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[str
 	return map[string]any{"evidence_count": written}, nil
 }
 
-// runGenerateMemoryCandidate 执行 P3 管道第二步：从 evidence 生成候选记忆。
+// runGenerateMemoryCandidate 执行管道第二步：从 evidence 生成候选记忆。
 // 处理流程：
 //  1. 加载 evidence 及其关联的 raw_event
 //  2. 查找同 scope 的相关已有记忆（用于冲突检测和去重）
@@ -250,7 +250,7 @@ func (s *Service) runGenerateMemoryCandidate(ctx context.Context, job AsyncJob) 
 	return map[string]any{"candidate_count": written}, nil
 }
 
-// runComputeAdmission 执行 P3 管道第三步：对候选记忆执行准入控制。
+// runComputeAdmission 执行管道第三步：对候选记忆执行准入控制。
 // 处理流程：
 //  1. 加载 candidate 记录和关联的 evidence
 //  2. 查找同 scope 的相关已有记忆（用于冲突检测）

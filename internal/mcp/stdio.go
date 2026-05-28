@@ -29,7 +29,7 @@ type StdioServer struct {
 	out      io.Writer
 }
 
-// NewStdioServer 创建 P0 stdio JSON 工具服务。后续可替换为正式 MCP SDK 适配层。
+// NewStdioServer 创建 stdio JSON 工具服务。后续可替换为正式 MCP SDK 适配层。
 func NewStdioServer(registry *Registry, logger *slog.Logger) *StdioServer {
 	return &StdioServer{
 		registry: registry,

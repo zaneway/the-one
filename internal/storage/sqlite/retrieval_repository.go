@@ -21,7 +21,7 @@ const (
 	maxAccessTextRunes         = 512
 )
 
-// CreateRetrievalTrace 创建一次 P4 检索追踪记录。
+// CreateRetrievalTrace 创建一次检索追踪记录。
 // 边界条件：query/task 会被裁剪为短摘要；调用方不得依赖 trace 保存完整 prompt、源码或工具输出。
 func (s *Store) CreateRetrievalTrace(ctx context.Context, record retrieval.TraceRecord) (retrieval.TraceRecord, error) {
 	if record.ID == "" {

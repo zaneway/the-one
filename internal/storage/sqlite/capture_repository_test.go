@@ -36,7 +36,7 @@ func TestCaptureRepositorySessionTaskEventFlow(t *testing.T) {
 		CaptureLevel:            3,
 		CaptureCapabilitiesJSON: `{"tool_call_capture":true,"tool_output_capture":true}`,
 		CaptureQualityJSON:      `{"captured_event_count":0}`,
-		GoalSummary:             "实现 P2-B2",
+		GoalSummary:             "实现 capture",
 		Status:                  capture.StatusActive,
 	})
 	if err != nil {

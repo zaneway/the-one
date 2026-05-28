@@ -7,13 +7,13 @@ import (
 	"github.com/zaneway/theone/internal/memory"
 )
 
-// Orchestrator 定义 P4 检索编排器内部接口。
+// Orchestrator 定义检索编排器内部接口。
 // 设计边界：编排器只负责召回、扩展、排序、上下文构造和 trace/access log，不写入新的长期记忆。
 type Orchestrator interface {
-	// Search 执行 P4 memory.search 检索流程，返回包含 trace、诊断和可解释分数的结果。
+	// Search 执行 memory.search 检索流程，返回包含 trace、诊断和可解释分数的结果。
 	Search(ctx context.Context, req SearchRequest) (*SearchResult, error)
 
-	// BuildContext 执行 P4 memory.context 上下文构造流程，返回预算分配、注入记忆和诊断信息。
+	// BuildContext 执行 memory.context 上下文构造流程，返回预算分配、注入记忆和诊断信息。
 	BuildContext(ctx context.Context, req ContextRequest) (*ContextResult, error)
 }
 
@@ -80,8 +80,8 @@ const (
 	TraceDegraded TraceStatus = "degraded"
 )
 
-// SearchRequest 是 P4 Orchestrator 内部 search DTO。
-// 与 memory.SearchRequest 分离，是为了允许 P4 携带 intent/mode/trace 等内部字段，同时保持 MCP API 向后兼容。
+// SearchRequest 是 Orchestrator 内部 search DTO。
+// 与 memory.SearchRequest 分离，是为了允许携带 intent/mode/trace 等内部字段，同时保持 MCP API 向后兼容。
 type SearchRequest struct {
 	// RequestID 请求 ID；可选，用于和上游调用链关联。
 	RequestID string
@@ -104,7 +104,7 @@ type SearchRequest struct {
 	// SessionID 会话 ID。
 	SessionID string
 
-	// TaskID 任务 ID；P4 access log 可用。
+	// TaskID 任务 ID；access log 可用。
 	TaskID string
 
 	// Scopes scope 过滤列表。
@@ -132,7 +132,7 @@ type SearchRequest struct {
 	ModeHint RetrievalMode
 }
 
-// ContextRequest 是 P4 Orchestrator 内部 context DTO。
+// ContextRequest 是 Orchestrator 内部 context DTO。
 type ContextRequest struct {
 	// RequestID 请求 ID；可选，用于和上游调用链关联。
 	RequestID string
@@ -168,7 +168,7 @@ type ContextRequest struct {
 	IntentHint RetrievalIntent
 }
 
-// SearchResult 是 P4 Orchestrator 内部 search 结果。
+// SearchResult 是 Orchestrator 内部 search 结果。
 type SearchResult struct {
 	// RequestID 请求 ID。
 	RequestID string
@@ -189,7 +189,7 @@ type SearchResult struct {
 	Diagnostics Diagnostics
 }
 
-// ContextResult 是 P4 Orchestrator 内部 context 结果。
+// ContextResult 是 Orchestrator 内部 context 结果。
 type ContextResult struct {
 	// RequestID 请求 ID。
 	RequestID string
@@ -216,7 +216,7 @@ type ContextResult struct {
 	LatencyMS int64
 }
 
-// ResultItem 是 P4 search 返回的单条记忆。
+// ResultItem 是 search 返回的单条记忆。
 type ResultItem struct {
 	// MemoryID 记忆 ID。
 	MemoryID string
@@ -258,7 +258,7 @@ type ResultItem struct {
 	CodeRefs []memory.CodeRef
 }
 
-// Candidate 是 P4 检索排序前后的候选模型。
+// Candidate 是检索排序前后的候选模型。
 // 它保留各分量分数，便于 D2/C1/C2 在不改变 API 的情况下实现 rerank、relation expansion 和降级诊断。
 type Candidate struct {
 	// Memory 记忆领域对象。
@@ -313,7 +313,7 @@ type Candidate struct {
 	CodeRefs []memory.CodeRef
 }
 
-// Diagnostics 是 P4 search 诊断信息。
+// Diagnostics 是 search 诊断信息。
 type Diagnostics struct {
 	// RetrievalTraceID 检索 trace ID。
 	RetrievalTraceID string
@@ -355,7 +355,7 @@ type Diagnostics struct {
 	Status TraceStatus
 }
 
-// ContextDiagnostics 是 P4 context 构造诊断。
+// ContextDiagnostics 是 context 构造诊断。
 type ContextDiagnostics struct {
 	// Diagnostics 基础检索诊断。
 	Diagnostics
@@ -364,7 +364,7 @@ type ContextDiagnostics struct {
 	BudgetAllocation BudgetAllocation
 }
 
-// BudgetAllocation 表示 P4 context builder 的预算分配结果。
+// BudgetAllocation 表示 context builder 的预算分配结果。
 type BudgetAllocation struct {
 	// TotalTokens 总 token 预算。
 	TotalTokens int
@@ -555,7 +555,7 @@ type AccessLogQuery struct {
 	Limit int
 }
 
-// FromMemorySearchRequest 将 P1/P4 对外 memory.search 请求转换为 retrieval 内部 DTO。
+// FromMemorySearchRequest 将对外 memory.search 请求转换为 retrieval 内部 DTO。
 func FromMemorySearchRequest(req memory.SearchRequest) SearchRequest {
 	return SearchRequest{
 		Query:           req.Query,
@@ -572,7 +572,7 @@ func FromMemorySearchRequest(req memory.SearchRequest) SearchRequest {
 	}
 }
 
-// FromMemoryContextRequest 将 P1/P4 对外 memory.context 请求转换为 retrieval 内部 DTO。
+// FromMemoryContextRequest 将对外 memory.context 请求转换为 retrieval 内部 DTO。
 func FromMemoryContextRequest(req memory.ContextRequest) ContextRequest {
 	return ContextRequest{
 		Task:                   req.Task,

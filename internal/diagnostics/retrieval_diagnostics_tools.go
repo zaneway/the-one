@@ -148,7 +148,7 @@ type DocSectionDiffDiagnostic struct {
 	BaseHash    string   `json:"base_hash,omitempty"`
 }
 
-// RetrievalTracesTool 查询 P4 retrieval_trace 诊断记录。
+// RetrievalTracesTool 查询 retrieval_trace 诊断记录。
 // 返回 query/task 的短摘要和 used flags，不返回完整 prompt、工具输出或文档正文。
 func (s *Service) RetrievalTracesTool(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 	var req RetrievalTracesRequest
@@ -175,7 +175,7 @@ func (s *Service) RetrievalTracesTool(ctx context.Context, raw json.RawMessage) 
 	return resp, nil
 }
 
-// RetrievalAccessLogsTool 查询 P4 memory_access_log 诊断记录。
+// RetrievalAccessLogsTool 查询 memory_access_log 诊断记录。
 // 响应只包含访问摘要、分数拆解和 inclusion reason，不返回 memory content。
 func (s *Service) RetrievalAccessLogsTool(ctx context.Context, raw json.RawMessage) (any, *mcp.Error) {
 	var req RetrievalAccessLogsRequest

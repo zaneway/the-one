@@ -20,7 +20,7 @@ func TestMemoryOrchestratorSearchWritesTraceAndRetrievedLogs(t *testing.T) {
 			MemoryID:   "mem-decision",
 			MemoryType: memory.TypeDecision,
 			Scope:      memory.ScopeProjectLocal,
-			Content:    "P4-C1 需要接入检索 trace 和 access log",
+			Content:    "retrieval 需要接入检索 trace 和 access log",
 			Score:      0.9,
 			Confidence: 0.8,
 			State:      memory.StateStable,
@@ -30,7 +30,7 @@ func TestMemoryOrchestratorSearchWritesTraceAndRetrievedLogs(t *testing.T) {
 			MemoryID:   "mem-procedure",
 			MemoryType: memory.TypeProcedure,
 			Scope:      memory.ScopeUserGlobal,
-			Content:    "实现阶段完成后需要运行 go test",
+			Content:    "实现流程完成后需要运行 go test",
 			Score:      0.6,
 			Confidence: 0.7,
 			State:      memory.StateStable,
@@ -42,7 +42,7 @@ func TestMemoryOrchestratorSearchWritesTraceAndRetrievedLogs(t *testing.T) {
 	orchestrator := newTestOrchestrator(searcher, traceRepo, accessRepo)
 
 	resp, err := orchestrator.Search(ctx, memory.SearchRequest{
-		Query:       "P4-C1 trace access log",
+		Query:       "retrieval trace access log",
 		WorkspaceID: "ws-1",
 		ProjectID:   "prj-1",
 		Scope:       []string{memory.ScopeProjectLocal, memory.ScopeUserGlobal},
@@ -65,7 +65,7 @@ func TestMemoryOrchestratorSearchWritesTraceAndRetrievedLogs(t *testing.T) {
 			t.Fatalf("result %s missing score breakdown", result.MemoryID)
 		}
 		if result.Score <= 0 || len(result.WhyIncluded) == 0 {
-			t.Fatalf("result %s missing P4 score/reasons: %+v", result.MemoryID, result)
+			t.Fatalf("result %s missing retrieval score/reasons: %+v", result.MemoryID, result)
 		}
 	}
 	if len(traceRepo.created) != 1 || len(traceRepo.updated) != 1 {
@@ -95,7 +95,7 @@ func TestMemoryOrchestratorContextWritesInjectedLogs(t *testing.T) {
 			MemoryID:   "mem-constraint",
 			MemoryType: memory.TypeConstraint,
 			Scope:      memory.ScopeProjectLocal,
-			Content:    "所有 P4 在线检索能力都必须保持一期不保存完整源码和完整输出的边界。",
+			Content:    "所有 retrieval 在线检索能力都必须保持当前版本不保存完整源码和完整输出的边界。",
 			Score:      0.9,
 			Confidence: 0.8,
 			State:      memory.StateStable,
@@ -117,7 +117,7 @@ func TestMemoryOrchestratorContextWritesInjectedLogs(t *testing.T) {
 	orchestrator := newTestOrchestrator(searcher, traceRepo, accessRepo)
 
 	resp, err := orchestrator.Context(ctx, memory.ContextRequest{
-		Task:        "继续完成 P4-C1 阶段",
+		Task:        "继续完成 retrieval 流程",
 		WorkspaceID: "ws-1",
 		ProjectID:   "prj-1",
 		TokenBudget: 120,
@@ -165,7 +165,7 @@ func TestMemoryOrchestratorSearchExpandsSupportRelation(t *testing.T) {
 			MemoryID:   "mem-seed",
 			MemoryType: memory.TypeDecision,
 			Scope:      memory.ScopeProjectLocal,
-			Content:    "P4-C2 需要 relation-aware rerank。",
+			Content:    "retrieval 需要 relation-aware rerank。",
 			Score:      0.9,
 			Confidence: 0.8,
 			State:      memory.StateStable,

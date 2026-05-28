@@ -22,7 +22,7 @@ func TestP4B4DocSnapshotRepositoryWriteDedupAndList(t *testing.T) {
 		WorkspaceID: "ws_p4",
 		ProjectID:   "proj_p4",
 		RepoID:      "repo_p4",
-		Path:        "doc//design/../P4.md",
+		Path:        "doc//design/../retrieval.md",
 		Role:        "implementation_design",
 		ContentHash: "sha256:doc",
 		ModifiedAt:  time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC),
@@ -42,7 +42,7 @@ func TestP4B4DocSnapshotRepositoryWriteDedupAndList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WriteDocSnapshot() error = %v", err)
 	}
-	if snapshot.ID == "" || snapshot.Path != "doc/P4.md" || snapshot.SectionCount != 1 || len(snapshot.Sections) != 1 {
+	if snapshot.ID == "" || snapshot.Path != "doc/retrieval.md" || snapshot.SectionCount != 1 || len(snapshot.Sections) != 1 {
 		t.Fatalf("snapshot = %+v, want generated id, normalized path and one section", snapshot)
 	}
 	if len([]rune(snapshot.Sections[0].Summary)) != maxDocSectionSummary {
@@ -61,7 +61,7 @@ func TestP4B4DocSnapshotRepositoryWriteDedupAndList(t *testing.T) {
 		WorkspaceID:     "ws_p4",
 		ProjectID:       "proj_p4",
 		RepoID:          "repo_p4",
-		Path:            "doc/P4.md",
+		Path:            "doc/retrieval.md",
 		IncludeSections: true,
 	})
 	if err != nil {
@@ -82,7 +82,7 @@ func TestP4B4DocSnapshotRepositoryDeleteCleansSections(t *testing.T) {
 
 	snapshot, err := store.WriteDocSnapshot(ctx, docindex.DocumentSnapshot{
 		WorkspaceID: "ws_p4",
-		Path:        "doc/P4.markdown",
+		Path:        "doc/retrieval.markdown",
 		ContentHash: "sha256:doc_delete",
 		Sections: []docindex.DocumentSection{
 			{SectionID: "1", Level: 1, StartLine: 1, EndLine: 5, ContentHash: "sha256:s1"},
@@ -115,12 +115,12 @@ func TestP4B4DocSnapshotRepositoryValidation(t *testing.T) {
 	invalidSnapshots := []docindex.DocumentSnapshot{
 		{WorkspaceID: "ws", Path: "../secret.md", ContentHash: "sha256:x"},
 		{WorkspaceID: "ws", Path: "/tmp/secret.md", ContentHash: "sha256:x"},
-		{WorkspaceID: "ws", Path: "doc/P4.txt", ContentHash: "sha256:x"},
-		{WorkspaceID: "ws", Path: "doc/P4.md", ContentHash: "sha256:x", Sections: []docindex.DocumentSection{
+		{WorkspaceID: "ws", Path: "doc/retrieval.txt", ContentHash: "sha256:x"},
+		{WorkspaceID: "ws", Path: "doc/retrieval.md", ContentHash: "sha256:x", Sections: []docindex.DocumentSection{
 			{SectionID: "dup", ContentHash: "sha256:a"},
 			{SectionID: "dup", ContentHash: "sha256:b"},
 		}},
-		{WorkspaceID: "ws", Path: "doc/P4.md", ContentHash: "sha256:x", Sections: []docindex.DocumentSection{
+		{WorkspaceID: "ws", Path: "doc/retrieval.md", ContentHash: "sha256:x", Sections: []docindex.DocumentSection{
 			{SectionID: "bad", StartLine: 10, EndLine: 9, ContentHash: "sha256:a"},
 		}},
 	}

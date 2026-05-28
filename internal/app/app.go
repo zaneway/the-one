@@ -22,10 +22,10 @@ import (
 	"github.com/zaneway/theone/internal/storage/sqlite"
 )
 
-// App 组装 theone 的 P0 运行时依赖。
+// App 组装 theone 运行时依赖。
 //
-// P0 只负责配置、日志、SQLite、migration 和 health/status 工具注册；
-// 记忆写入、检索和 review 业务会在 P1 基于同一 Registry 扩展。
+// 负责配置、日志、SQLite、migration 和诊断工具注册；
+// 记忆写入、检索和 review 业务基于同一 Registry 扩展。
 type App struct {
 	cfg       config.Config
 	version   string
@@ -54,10 +54,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 	// Step 3: 创建 MCP 工具注册中心，所有工具通过 registry.Register 注册
 	registry := mcp.NewRegistry(logger)
-	// Step 4: 注册 P0 诊断工具（memory.health / memory.status）
+	// Step 4: 注册诊断工具（memory.health / memory.status）
 	diagnosticService := diagnostics.NewService(version, cfg, store)
 	diagnostics.RegisterTools(registry, diagnosticService)
-	// Step 5: 注册 P1/P4 记忆工具（remember/review 保持 P1，search/context 通过 P4-C1 Orchestrator 写 trace/access log）
+	// Step 5: 注册记忆工具（remember/review/search/context）
 	var codeIndexAdapter retrieval.CodeIndexAdapter
 	if cfg.CodeIndex.Provider != "none" {
 		codeIndexAdapter = codeindex.NewLocalBasicAdapter(cfg.CodeIndex, "")
@@ -81,11 +81,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	)
 	tools.RegisterMemoryTools(registry, memoryService, logger)
 	tools.RegisterAutomationTools(registry, automationService, logger)
-	// Step 7: 注册 P5-A MVP 验收模型工具（run.start / task.record）
+	// Step 7: 注册 MVP 验收模型工具（run.start / task.record）
 	mvpService := mvp.NewService(store)
 	tools.RegisterMVPTools(registry, mvpService, logger)
-	// Step 8: 注册 P2 捕获工具（memory.observe）
-	// captureService 持有 automationService 引用，raw_event 写入后可触发 P3 入队
+	// Step 8: 注册捕获工具（memory.observe）
+	// captureService 持有 automationService 引用，raw_event 写入后可触发自动入队
 	captureService := capture.NewServiceWithAutomation(cfg, store, automationService)
 	tools.RegisterCaptureTools(registry, captureService, logger)
 	// Step 9: 创建异步 Worker（后台 goroutine，轮询 pending jobs 并执行）

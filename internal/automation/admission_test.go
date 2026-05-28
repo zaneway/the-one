@@ -65,7 +65,7 @@ func TestAdmissionUserPreferenceStableDurable(t *testing.T) {
 
 func TestAdmissionArchitectureDecisionPendingReview(t *testing.T) {
 	res := NewAdmissionController().Decide(AdmissionInput{
-		Candidate: projectCandidate(memory.TypeDecision, "P3 只实现 rule_based Provider，外部 LLM 放到二期"),
+		Candidate: projectCandidate(memory.TypeDecision, "automation 只实现 rule_based Provider，外部 LLM 放到后续版本"),
 	})
 	if res.Decision != DecisionWritePendingReview || !res.RequiresReview {
 		t.Fatalf("result = %s review=%v, want pending review", res.Decision, res.RequiresReview)
@@ -76,7 +76,7 @@ func TestAdmissionArchitectureDecisionPendingReview(t *testing.T) {
 
 func TestAdmissionSecurityConstraintPendingReview(t *testing.T) {
 	res := NewAdmissionController().Decide(AdmissionInput{
-		Candidate: projectCandidate(memory.TypeConstraint, "P3 不得保存完整工具输出和完整 diff"),
+		Candidate: projectCandidate(memory.TypeConstraint, "automation 不得保存完整工具输出和完整 diff"),
 	})
 	if res.Decision != DecisionWritePendingReview || res.InitialState != memory.StatePendingReview {
 		t.Fatalf("result = %s/%s, want pending_review", res.Decision, res.InitialState)
@@ -147,14 +147,14 @@ func TestAdmissionConflictPendingReview(t *testing.T) {
 func TestAdmissionRequirementAssumptionAndOpenIssue(t *testing.T) {
 	controller := NewAdmissionController()
 
-	requirement := projectCandidate(memory.TypeRequirement, "P3 验收必须包含 Admission reason codes")
+	requirement := projectCandidate(memory.TypeRequirement, "automation 验收必须包含 Admission reason codes")
 	reqRes := controller.Decide(AdmissionInput{Candidate: requirement})
 	if reqRes.Decision != DecisionWritePendingReview {
 		t.Fatalf("requirement decision = %s, want pending review for acceptance-impact requirement", reqRes.Decision)
 	}
 	assertReason(t, reqRes, "requirement_declared")
 
-	assumption := projectCandidate(memory.TypeAssumption, "前置假设：P2 raw_event 已稳定可用")
+	assumption := projectCandidate(memory.TypeAssumption, "前置假设：capture raw_event 已稳定可用")
 	assumption.CandidateReason = []string{"assumption_recorded"}
 	assumptionRes := controller.Decide(AdmissionInput{Candidate: assumption})
 	if assumptionRes.Decision != DecisionWriteProvisional {
@@ -214,7 +214,7 @@ func projectCandidate(memoryType string, content string) processor.MemoryCandida
 		ProjectID:         "proj",
 		SourceType:        "agent_summary",
 		Content:           content,
-		Keywords:          []string{"P3", "Admission"},
+		Keywords:          []string{"automation", "Admission"},
 		RetrievalCues:     []string{"reason"},
 		Confidence:        0.8,
 		Importance:        0.8,

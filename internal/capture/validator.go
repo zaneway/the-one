@@ -20,7 +20,7 @@ import (
 // 9. 归一化keywords和salient_spans
 // 10. 归一化session和task信息
 // 11. 校验source_refs中的capture_method
-// 设计说明：该方法只处理P2 RawEvent层所需的轻量校验，内容边界由CheckMinimizedObserve单独负责
+// 设计说明：该方法只处理 RawEvent 层所需的轻量校验，内容边界由 CheckMinimizedObserve 单独负责
 func NormalizeObserve(cfg config.CaptureConfig, req *ObserveRequest) error {
 	req.SessionID = strings.TrimSpace(req.SessionID)
 	req.TaskID = strings.TrimSpace(req.TaskID)
@@ -91,7 +91,7 @@ func NormalizeObserve(cfg config.CaptureConfig, req *ObserveRequest) error {
 
 // NormalizeTaskSummary 生成任务查找用的轻量标准化摘要
 // 处理流程：去除空白、合并连续空格
-// 设计说明：P2 不持久化该值，只用于内存中的任务查找
+// 设计说明：不持久化该值，只用于内存中的任务查找
 func NormalizeTaskSummary(value string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }

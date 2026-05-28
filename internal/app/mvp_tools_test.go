@@ -22,7 +22,7 @@ func TestAppRegistersMVPTools(t *testing.T) {
 	defer app.Close()
 
 	rawRun, toolErr := app.CallTool(ctx, "memory.mvp.run.start", mvp.StartRunRequest{
-		Name:        "P5-A app tool test",
+		Name:        "MVP app tool test",
 		Mode:        mvp.RunModeSynthetic,
 		WorkspaceID: "ws_p5",
 		ProjectID:   "proj_p5",
@@ -119,9 +119,9 @@ func TestAppMVPReportIncludesFailureDetails(t *testing.T) {
 	defer app.Close()
 
 	rawRun, toolErr := app.CallTool(ctx, "memory.mvp.run.start", mvp.StartRunRequest{
-		Name:        "P5 failure report",
+		Name:        "MVP failure report",
 		Mode:        mvp.RunModeSynthetic,
-		WorkspaceID: "ws_p5_failure",
+		WorkspaceID: "ws_mvp_failure",
 	})
 	if toolErr != nil {
 		t.Fatalf("memory.mvp.run.start error = %v", toolErr)
@@ -133,8 +133,8 @@ func TestAppMVPReportIncludesFailureDetails(t *testing.T) {
 		}
 	}
 	if _, err := app.store.CreateRetrievalTrace(ctx, retrieval.TraceRecord{
-		ID:          "rt_p5_failure",
-		WorkspaceID: "ws_p5_failure",
+		ID:          "rt_mvp_failure",
+		WorkspaceID: "ws_mvp_failure",
 		LatencyMS:   30,
 		Status:      retrieval.TraceCompleted,
 	}); err != nil {
@@ -145,7 +145,7 @@ func TestAppMVPReportIncludesFailureDetails(t *testing.T) {
 		ScenarioID:       "mvp_01_task_continuation",
 		Round:            1,
 		AgentType:        mvp.AgentCodex,
-		RetrievalTraceID: "rt_p5_failure",
+		RetrievalTraceID: "rt_mvp_failure",
 		Status:           mvp.TaskStatusFailed,
 		TaskSuccess:      false,
 		Observed:         []byte(`{"repeated_explanation_count":0,"task_state_recall":1,"baseline_context_tokens":1000,"candidate_context_tokens":500}`),

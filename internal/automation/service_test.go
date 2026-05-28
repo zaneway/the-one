@@ -50,7 +50,7 @@ func TestServiceRunsEvidenceCandidateAdmissionChain(t *testing.T) {
 		SessionID:   session.ID,
 		WorkspaceID: session.WorkspaceID,
 		ProjectID:   session.ProjectID,
-		TaskSummary: "推进 P3-C1 automation service",
+		TaskSummary: "推进 automation automation service",
 		Status:      capture.StatusActive,
 		StartedAt:   now,
 	}
@@ -68,7 +68,7 @@ func TestServiceRunsEvidenceCandidateAdmissionChain(t *testing.T) {
 		SourceChannel:  capture.SourceChannelAgentSession,
 		OccurredAt:     now,
 		Actor:          capture.ActorUser,
-		ContentSummary: "以后推进 P3 时先按详细设计拆分任务，再用测试验证。",
+		ContentSummary: "以后推进 automation 时先按详细设计拆分任务，再用测试验证。",
 		ContentHash:    "sha256:p3-c1-preference",
 		CreatedAt:      now,
 	}
@@ -120,7 +120,7 @@ func TestServiceWritesReviewCheckpointFromCandidate(t *testing.T) {
 	if _, err := store.UpsertSession(ctx, session); err != nil {
 		t.Fatalf("UpsertSession() error = %v", err)
 	}
-	task := capture.AgentTask{ID: "task_checkpoint", SessionID: session.ID, WorkspaceID: session.WorkspaceID, ProjectID: session.ProjectID, TaskSummary: "P3 详细设计复查", OutcomeSummary: "P3 详细设计复查完成。", Status: capture.StatusCompleted, StartedAt: now}
+	task := capture.AgentTask{ID: "task_checkpoint", SessionID: session.ID, WorkspaceID: session.WorkspaceID, ProjectID: session.ProjectID, TaskSummary: "automation 详细设计复查", OutcomeSummary: "automation 详细设计复查完成。", Status: capture.StatusCompleted, StartedAt: now}
 	if _, err := store.UpsertTask(ctx, task); err != nil {
 		t.Fatalf("UpsertTask() error = %v", err)
 	}
@@ -135,8 +135,8 @@ func TestServiceWritesReviewCheckpointFromCandidate(t *testing.T) {
 		SourceChannel:  capture.SourceChannelAgentSession,
 		OccurredAt:     now,
 		Actor:          capture.ActorAgent,
-		ContentSummary: "P3 详细设计复查完成。",
-		SourceRefsJSON: `[{"checkpoint_type":"implementation_design_review","review_intent":["logic_consistency"],"target_docs":[{"path":"doc/The One 长期记忆系统 P3 详细设计.md"}],"conclusion":"supplemented"}]`,
+		ContentSummary: "automation 详细设计复查完成。",
+		SourceRefsJSON: `[{"checkpoint_type":"implementation_design_review","review_intent":["logic_consistency"],"target_docs":[{"path":"doc/The One 长期记忆系统 automation 详细设计.md"}],"conclusion":"supplemented"}]`,
 		ContentHash:    "sha256:p3-checkpoint-chain",
 		CreatedAt:      now,
 	}
@@ -451,17 +451,17 @@ func TestServiceRunsP4JobsThroughDispatcher(t *testing.T) {
 	service := automation.NewService(cfg, store, processor.NewRuleBasedProvider())
 	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 	if _, _, err := store.EnqueueJob(ctx, automation.AsyncJob{
-		ID:          "job_p4_code_ref",
+		ID:          "job_retrieval_code_ref",
 		JobType:     automation.JobTypeResolveCodeRef,
 		TargetType:  automation.TargetTypeMemoryItem,
-		TargetID:    "mem_p4_code",
+		TargetID:    "mem_retrieval_code",
 		PayloadJSON: `{"repo_id":"repo_p4","file_path":"internal/memory/service.go","symbol":"Service.Search","content_hash":"sha256:code","resolve_mode":"adapter"}`,
 		NextRunAt:   now,
 	}); err != nil {
-		t.Fatalf("EnqueueJob(job_p4_code_ref) error = %v", err)
+		t.Fatalf("EnqueueJob(job_retrieval_code_ref) error = %v", err)
 	}
-	runNextJob(t, ctx, store, service, automation.JobTypeResolveCodeRef, "mem_p4_code")
-	refs, err := store.ListCodeRefs(ctx, memory.CodeRefQuery{MemoryID: "mem_p4_code"})
+	runNextJob(t, ctx, store, service, automation.JobTypeResolveCodeRef, "mem_retrieval_code")
+	refs, err := store.ListCodeRefs(ctx, memory.CodeRefQuery{MemoryID: "mem_retrieval_code"})
 	if err != nil {
 		t.Fatalf("ListCodeRefs() error = %v", err)
 	}
@@ -484,14 +484,14 @@ func TestServiceRunsP4JobsThroughDispatcher(t *testing.T) {
 		t.Fatalf("WriteCodeRef(refresh) error = %v", err)
 	}
 	if _, _, err := store.EnqueueJob(ctx, automation.AsyncJob{
-		ID:          "job_p4_refresh_code_ref",
+		ID:          "job_retrieval_refresh_code_ref",
 		JobType:     automation.JobTypeRefreshCodeRefStatus,
 		TargetType:  automation.TargetTypeRepo,
 		TargetID:    repoRoot,
 		PayloadJSON: `{"repo_root":"` + repoRoot + `"}`,
 		NextRunAt:   now.Add(time.Second),
 	}); err != nil {
-		t.Fatalf("EnqueueJob(job_p4_refresh_code_ref) error = %v", err)
+		t.Fatalf("EnqueueJob(job_retrieval_refresh_code_ref) error = %v", err)
 	}
 	runNextJob(t, ctx, store, service, automation.JobTypeRefreshCodeRefStatus, repoRoot)
 	refreshed, err := store.GetCodeRef(ctx, "cr_refresh")
@@ -503,17 +503,17 @@ func TestServiceRunsP4JobsThroughDispatcher(t *testing.T) {
 	}
 
 	if _, _, err := store.EnqueueJob(ctx, automation.AsyncJob{
-		ID:          "job_p4_doc_snapshot",
+		ID:          "job_retrieval_doc_snapshot",
 		JobType:     automation.JobTypeBuildDocSnapshot,
 		TargetType:  automation.TargetTypeDocPath,
-		TargetID:    "doc/P4.md",
+		TargetID:    "doc/retrieval.md",
 		PayloadJSON: `{"workspace_id":"ws_p4","project_id":"proj_p4","repo_id":"repo_p4","content_hash":"sha256:doc","sections":[{"section_id":"8.3","heading_path":["8. Doc Index","8.3 doc_index 数据模型"],"level":3,"start_line":42,"end_line":80,"content_hash":"sha256:section"}]}`,
 		NextRunAt:   now,
 	}); err != nil {
-		t.Fatalf("EnqueueJob(job_p4_doc_snapshot) error = %v", err)
+		t.Fatalf("EnqueueJob(job_retrieval_doc_snapshot) error = %v", err)
 	}
-	runNextJob(t, ctx, store, service, automation.JobTypeBuildDocSnapshot, "doc/P4.md")
-	snapshots, err := store.ListDocSnapshots(ctx, docindex.SnapshotQuery{WorkspaceID: "ws_p4", ProjectID: "proj_p4", RepoID: "repo_p4", Path: "doc/P4.md", IncludeSections: true})
+	runNextJob(t, ctx, store, service, automation.JobTypeBuildDocSnapshot, "doc/retrieval.md")
+	snapshots, err := store.ListDocSnapshots(ctx, docindex.SnapshotQuery{WorkspaceID: "ws_p4", ProjectID: "proj_p4", RepoID: "repo_p4", Path: "doc/retrieval.md", IncludeSections: true})
 	if err != nil {
 		t.Fatalf("ListDocSnapshots() error = %v", err)
 	}
@@ -522,19 +522,19 @@ func TestServiceRunsP4JobsThroughDispatcher(t *testing.T) {
 	}
 
 	if _, _, err := store.EnqueueJob(ctx, automation.AsyncJob{
-		ID:          "job_p4_embedding",
+		ID:          "job_retrieval_embedding",
 		JobType:     automation.JobTypeComputeEmbedding,
 		TargetType:  automation.TargetTypeMemoryItem,
-		TargetID:    "mem_p4_code",
+		TargetID:    "mem_retrieval_code",
 		PayloadJSON: `{"embedding_model":"local_stub","embedding":[0.1,0.2,0.3]}`,
 		NextRunAt:   now,
 	}); err != nil {
-		t.Fatalf("EnqueueJob(job_p4_embedding) error = %v", err)
+		t.Fatalf("EnqueueJob(job_retrieval_embedding) error = %v", err)
 	}
-	runNextJob(t, ctx, store, service, automation.JobTypeComputeEmbedding, "mem_p4_code")
-	embeddingJob, err := store.GetJob(ctx, "job_p4_embedding")
+	runNextJob(t, ctx, store, service, automation.JobTypeComputeEmbedding, "mem_retrieval_code")
+	embeddingJob, err := store.GetJob(ctx, "job_retrieval_embedding")
 	if err != nil {
-		t.Fatalf("GetJob(job_p4_embedding) error = %v", err)
+		t.Fatalf("GetJob(job_retrieval_embedding) error = %v", err)
 	}
 	if !strings.Contains(embeddingJob.PayloadJSON, `"embedding_dim":3`) {
 		t.Fatalf("embedding payload = %s, want embedding_dim=3", embeddingJob.PayloadJSON)
@@ -542,7 +542,7 @@ func TestServiceRunsP4JobsThroughDispatcher(t *testing.T) {
 
 	if _, err := store.WriteMemoryAccessLog(ctx, retrieval.AccessLogRecord{
 		ID:        "mal_old_retrieved",
-		MemoryID:  "mem_p4_code",
+		MemoryID:  "mem_retrieval_code",
 		EventType: "retrieved",
 		CreatedAt: now.AddDate(0, 0, -31),
 	}); err != nil {
@@ -550,7 +550,7 @@ func TestServiceRunsP4JobsThroughDispatcher(t *testing.T) {
 	}
 	if _, err := store.WriteMemoryAccessLog(ctx, retrieval.AccessLogRecord{
 		ID:            "mal_old_injected",
-		MemoryID:      "mem_p4_code",
+		MemoryID:      "mem_retrieval_code",
 		EventType:     "injected",
 		UsedInContext: true,
 		CreatedAt:     now.AddDate(0, 0, -181),
@@ -558,7 +558,7 @@ func TestServiceRunsP4JobsThroughDispatcher(t *testing.T) {
 		t.Fatalf("WriteMemoryAccessLog(injected) error = %v", err)
 	}
 	if _, _, err := store.EnqueueJob(ctx, automation.AsyncJob{
-		ID:          "job_p4_cleanup",
+		ID:          "job_retrieval_cleanup",
 		JobType:     automation.JobTypeCleanupAccessLog,
 		TargetType:  automation.TargetTypeWorkspace,
 		TargetID:    "ws_p4",
@@ -568,7 +568,7 @@ func TestServiceRunsP4JobsThroughDispatcher(t *testing.T) {
 		t.Fatalf("EnqueueJob(cleanup) error = %v", err)
 	}
 	runNextJob(t, ctx, store, service, automation.JobTypeCleanupAccessLog, "ws_p4")
-	logs, err := store.ListMemoryAccessLogs(ctx, retrieval.AccessLogQuery{MemoryID: "mem_p4_code"})
+	logs, err := store.ListMemoryAccessLogs(ctx, retrieval.AccessLogQuery{MemoryID: "mem_retrieval_code"})
 	if err != nil {
 		t.Fatalf("ListMemoryAccessLogs() error = %v", err)
 	}
@@ -582,7 +582,7 @@ func TestServiceBuildsDocSnapshotFromMarkdownPath(t *testing.T) {
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
 	repoRoot := t.TempDir()
-	if err := os.WriteFile(filepath.Join(repoRoot, "design.md"), []byte("# Design\n\n## Scope\nP4-C4 review strategy\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoRoot, "design.md"), []byte("# Design\n\n## Scope\nretrieval review strategy\n"), 0o644); err != nil {
 		t.Fatalf("write markdown: %v", err)
 	}
 	store, err := sqlite.Open(ctx, cfg.Storage, slog.New(slog.DiscardHandler))
@@ -593,24 +593,24 @@ func TestServiceBuildsDocSnapshotFromMarkdownPath(t *testing.T) {
 
 	service := automation.NewService(cfg, store, processor.NewRuleBasedProvider())
 	if _, _, err := store.EnqueueJob(ctx, automation.AsyncJob{
-		ID:          "job_p4_doc_snapshot_build",
+		ID:          "job_retrieval_doc_snapshot_build",
 		JobType:     automation.JobTypeBuildDocSnapshot,
 		TargetType:  automation.TargetTypeDocPath,
 		TargetID:    "design.md",
-		PayloadJSON: `{"workspace_id":"ws_p4_build","project_id":"proj_p4","repo_id":"` + repoRoot + `"}`,
+		PayloadJSON: `{"workspace_id":"ws_retrieval_build","project_id":"proj_p4","repo_id":"` + repoRoot + `"}`,
 		NextRunAt:   time.Date(2026, 5, 24, 12, 30, 0, 0, time.UTC),
 	}); err != nil {
-		t.Fatalf("EnqueueJob(job_p4_doc_snapshot_build) error = %v", err)
+		t.Fatalf("EnqueueJob(job_retrieval_doc_snapshot_build) error = %v", err)
 	}
 	runNextJob(t, ctx, store, service, automation.JobTypeBuildDocSnapshot, "design.md")
-	snapshots, err := store.ListDocSnapshots(ctx, docindex.SnapshotQuery{WorkspaceID: "ws_p4_build", ProjectID: "proj_p4", RepoID: repoRoot, Path: "design.md", IncludeSections: true})
+	snapshots, err := store.ListDocSnapshots(ctx, docindex.SnapshotQuery{WorkspaceID: "ws_retrieval_build", ProjectID: "proj_p4", RepoID: repoRoot, Path: "design.md", IncludeSections: true})
 	if err != nil {
 		t.Fatalf("ListDocSnapshots() error = %v", err)
 	}
 	if len(snapshots) != 1 || snapshots[0].ContentHash == "" || snapshots[0].SectionCount != 2 {
 		t.Fatalf("snapshots = %+v, want computed markdown snapshot", snapshots)
 	}
-	if strings.Contains(snapshots[0].Sections[1].Summary, "P4-C4 review strategy") {
+	if strings.Contains(snapshots[0].Sections[1].Summary, "retrieval review strategy") {
 		t.Fatalf("section summary persisted body: %q", snapshots[0].Sections[1].Summary)
 	}
 }

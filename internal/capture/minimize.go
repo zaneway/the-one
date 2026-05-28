@@ -14,7 +14,7 @@ import (
 // 这些字段可能包含完整的工具输出、代码差异等内容，违反内容最小化原则
 var forbiddenRawFields = []string{"full_text", "full_output", "full_diff"}
 
-// CheckMinimizedObserve 执行 P2 observe 内容最小化硬边界检查
+// CheckMinimizedObserve 执行 observe 内容最小化硬边界检查
 // 校验规则：
 // 1. input_summary 字符数不超过 max_input_summary_chars（默认1200）
 // 2. output_summary 字符数不超过 max_output_summary_chars（默认2000）
@@ -25,7 +25,7 @@ var forbiddenRawFields = []string{"full_text", "full_output", "full_diff"}
 // 7. source_refs JSON 序列化后长度不超过 max_source_refs_chars（默认4000）
 // 8. source_refs 中禁止包含 full_text/full_output/full_diff 字段
 // 设计说明：
-// - P2 不做复杂脱敏和自动摘要，Adapter 必须先发送摘要、关键片段、hash 和 source ref
+// - 不做复杂脱敏和自动摘要，Adapter 必须先发送摘要、关键片段、hash 和 source ref
 // - 服务端发现完整全文字段、超长摘要或超长引用时直接拒绝
 // - 目的是避免 raw_event 退化为隐藏日志库，确保存储的都是最小化后的内容
 // - 使用 rune 长度而非字节长度，正确处理中文等多字节字符
@@ -124,7 +124,7 @@ func ComputeContentHash(req ObserveRequest) (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-// DedupKey 返回 P2 raw_event 的幂等键（去重键）
+// DedupKey 返回 raw_event 的幂等键（去重键）
 // 键生成规则：
 // - 有 session_id 时：content_hash|session_id|event_type
 // - 无 session_id 时：content_hash|source_channel|workspace_id|project_id|repo_id|event_type

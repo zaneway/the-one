@@ -29,7 +29,7 @@ type Worker struct {
 	cfg     WorkerConfig
 }
 
-// NewWorker 创建本地 worker。配置缺省时使用 P3 设计文档中的保守默认值。
+// NewWorker 创建本地 worker。配置缺省时使用保守默认值。
 func NewWorker(service *Service, repo Repository, cfg WorkerConfig) *Worker {
 	if cfg.PollIntervalMS <= 0 {
 		cfg.PollIntervalMS = 1000

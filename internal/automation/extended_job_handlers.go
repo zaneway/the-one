@@ -30,18 +30,18 @@ type accessLogCleanupRepository interface {
 	CleanupMemoryAccessLogs(ctx context.Context, eventType string, before time.Time) (int, error)
 }
 
-type p4JobHandler struct {
+type extendedJobHandler struct {
 	cfg  config.Config
 	repo any
 }
 
-func newP4JobHandler(cfg config.Config, repo any) JobHandler {
-	return p4JobHandler{cfg: cfg, repo: repo}
+func newExtendedJobHandler(cfg config.Config, repo any) JobHandler {
+	return extendedJobHandler{cfg: cfg, repo: repo}
 }
 
-// CanHandle 判断是否为 P4 阶段的 job 类型。
-// P4 job 类型：resolve_code_ref, refresh_code_ref_status, build_doc_snapshot, compute_embedding, cleanup_access_log。
-func (h p4JobHandler) CanHandle(jobType string) bool {
+// CanHandle 判断是否为相关 job 类型。
+// job 类型：resolve_code_ref, refresh_code_ref_status, build_doc_snapshot, compute_embedding, cleanup_access_log。
+func (h extendedJobHandler) CanHandle(jobType string) bool {
 	switch jobType {
 	case JobTypeResolveCodeRef, JobTypeRefreshCodeRefStatus, JobTypeBuildDocSnapshot, JobTypeComputeEmbedding, JobTypeCleanupAccessLog:
 		return true
@@ -50,7 +50,7 @@ func (h p4JobHandler) CanHandle(jobType string) bool {
 	}
 }
 
-func (h p4JobHandler) RunJob(ctx context.Context, job AsyncJob) (map[string]any, error) {
+func (h extendedJobHandler) RunJob(ctx context.Context, job AsyncJob) (map[string]any, error) {
 	switch job.JobType {
 	case JobTypeResolveCodeRef:
 		return h.runResolveCodeRef(ctx, job)
@@ -63,14 +63,14 @@ func (h p4JobHandler) RunJob(ctx context.Context, job AsyncJob) (map[string]any,
 	case JobTypeCleanupAccessLog:
 		return h.runCleanupAccessLog(ctx, job)
 	default:
-		return nil, fmt.Errorf("PROVIDER_NOT_FOUND: unsupported P4 job_type %q", job.JobType)
+		return nil, fmt.Errorf("PROVIDER_NOT_FOUND: unsupported job_type %q", job.JobType)
 	}
 }
 
 // runResolveCodeRef 解析并持久化 code_ref。
 // 流程：从 payload 中提取 code_ref → 写入 repository → 可选使用 CodeIndexAdapter 在线解析。
 // resolve_mode=persist_only 时只写入不解析；resolve_mode=adapter 时使用 local_basic 解析器。
-func (h p4JobHandler) runResolveCodeRef(ctx context.Context, job AsyncJob) (map[string]any, error) {
+func (h extendedJobHandler) runResolveCodeRef(ctx context.Context, job AsyncJob) (map[string]any, error) {
 	repo, ok := any(h.repo).(codeRefRepository)
 	if !ok {
 		return nil, fmt.Errorf("PROVIDER_NOT_FOUND: code_ref repository unavailable")
@@ -134,7 +134,7 @@ func (h p4JobHandler) runResolveCodeRef(ctx context.Context, job AsyncJob) (map[
 // runRefreshCodeRefStatus 批量刷新已有 code_ref 的解析状态。
 // 流程：从 payload/target 中获取待刷新的 code_ref 列表 → 使用 CodeIndexAdapter 重新解析 → 写回更新。
 // 设计意图：代码变更后批量刷新 code_ref 的行号和 hash 状态。
-func (h p4JobHandler) runRefreshCodeRefStatus(ctx context.Context, job AsyncJob) (map[string]any, error) {
+func (h extendedJobHandler) runRefreshCodeRefStatus(ctx context.Context, job AsyncJob) (map[string]any, error) {
 	repo, ok := any(h.repo).(codeRefRepository)
 	if !ok {
 		return nil, fmt.Errorf("PROVIDER_NOT_FOUND: code_ref repository unavailable")
@@ -188,8 +188,8 @@ func (h p4JobHandler) runRefreshCodeRefStatus(ctx context.Context, job AsyncJob)
 
 // runBuildDocSnapshot 构建并持久化 Markdown 文档快照。
 // 流程：从 payload 或 target_id 获取 doc_path → BuildMarkdownSnapshot → WriteDocSnapshot。
-// 设计意图：为 P4 Doc Index 策略提供文档变更检测基础。
-func (h p4JobHandler) runBuildDocSnapshot(ctx context.Context, job AsyncJob) (map[string]any, error) {
+// 设计意图：为 Doc Index 策略提供文档变更检测基础。
+func (h extendedJobHandler) runBuildDocSnapshot(ctx context.Context, job AsyncJob) (map[string]any, error) {
 	repo, ok := any(h.repo).(docSnapshotRepository)
 	if !ok {
 		return nil, fmt.Errorf("PROVIDER_NOT_FOUND: doc snapshot repository unavailable")
@@ -235,7 +235,7 @@ func (h p4JobHandler) runBuildDocSnapshot(ctx context.Context, job AsyncJob) (ma
 // runComputeEmbedding 写入预计算的 memory embedding 向量。
 // 设计意图：embedding 由外部 provider 生成（如 OpenAI），本 handler 只负责持久化。
 // provider=none 或 payload 为空时安全跳过。
-func (h p4JobHandler) runComputeEmbedding(ctx context.Context, job AsyncJob) (map[string]any, error) {
+func (h extendedJobHandler) runComputeEmbedding(ctx context.Context, job AsyncJob) (map[string]any, error) {
 	var payload computeEmbeddingPayload
 	if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
 		return nil, err
@@ -265,7 +265,7 @@ func (h p4JobHandler) runComputeEmbedding(ctx context.Context, job AsyncJob) (ma
 // runCleanupAccessLog 清理低价值的 memory_access_log 明细。
 // 清理策略：retrieved 类型保留 30 天，injected 类型保留 180 天。
 // 设计意图：控制 access_log 表的增长，保留有价值的反馈事件（user_confirmed 等）。
-func (h p4JobHandler) runCleanupAccessLog(ctx context.Context, job AsyncJob) (map[string]any, error) {
+func (h extendedJobHandler) runCleanupAccessLog(ctx context.Context, job AsyncJob) (map[string]any, error) {
 	repo, ok := any(h.repo).(accessLogCleanupRepository)
 	if !ok {
 		return nil, fmt.Errorf("PROVIDER_NOT_FOUND: access log cleanup repository unavailable")
@@ -364,7 +364,7 @@ func firstPositive(values ...int) int {
 	return 0
 }
 
-func (h p4JobHandler) newCodeIndexAdapter(repoRoot string) *codeindex.LocalBasicAdapter {
+func (h extendedJobHandler) newCodeIndexAdapter(repoRoot string) *codeindex.LocalBasicAdapter {
 	if h.cfg.CodeIndex.Provider == "none" {
 		return nil
 	}

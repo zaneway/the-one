@@ -13,7 +13,7 @@ import (
 )
 
 // Repository 记忆仓库接口
-// 定义 P1 Memory CRUD 所需的事务能力
+// 定义 Memory CRUD 所需的事务能力
 // 设计约束：SQLite 实现必须保证多表写入原子性
 type Repository interface {
 	// FindDuplicate 查找重复记忆
@@ -58,31 +58,31 @@ type Repository interface {
 }
 
 // Service 记忆服务结构体
-// 编排 P1 手动记忆写入、检索、上下文构建和 review 流转
+// 编排手动记忆写入、检索、上下文构建和 review 流转
 type Service struct {
 	cfg               config.Config            // 配置信息
 	repo              Repository               // 仓库接口，负责持久化
-	orchestrator      RetrievalOrchestrator    // P4 检索编排器；为空时保持 P1 FTS 路径
-	accessFeedback    AccessFeedbackWriter     // P0 质量闭环：review 等写入 access log
+	orchestrator      RetrievalOrchestrator    // 检索编排器；为空时保持 FTS 路径
+	accessFeedback    AccessFeedbackWriter     // 质量闭环：review 等写入 access log
 	rememberAdmission RememberAdmissionDecider // 显式 remember 准入；运行时必须注入
 }
 
-// RetrievalOrchestrator 定义 memory.Service 可选接入的 P4 检索编排接口。
+// RetrievalOrchestrator 定义 memory.Service 可选接入的检索编排接口。
 // 设计约束：该接口使用 memory 包现有 DTO，避免 memory 反向依赖 internal/retrieval 造成包循环；
-// P4-C1 可以在 retrieval 包中实现 adapter，把 retrieval 内部 DTO 转换为 memory 对外响应。
+// 可以在 retrieval 包中实现 adapter，把 retrieval 内部 DTO 转换为 memory 对外响应。
 type RetrievalOrchestrator interface {
-	// Search 执行 P4 检索编排，返回向后兼容的 memory.search 响应。
+	// Search 执行检索编排，返回向后兼容的 memory.search 响应。
 	Search(ctx context.Context, req SearchRequest) (SearchResponse, error)
 
-	// Context 执行 P4 上下文构造，返回向后兼容的 memory.context 响应。
+	// Context 执行上下文构造，返回向后兼容的 memory.context 响应。
 	Context(ctx context.Context, req ContextRequest) (ContextResponse, error)
 }
 
 // ServiceOption 配置 Memory Service 的可选能力。
 type ServiceOption func(*Service)
 
-// WithRetrievalOrchestrator 注入 P4 检索编排器。
-// 为空时不改变 P1/P2/P3 行为；非空时 Search/Context 委托给编排器，Remember/Review 仍由 memory.Service 处理。
+// WithRetrievalOrchestrator 注入检索编排器。
+// 为空时不改变默认行为；非空时 Search/Context 委托给编排器，Remember/Review 仍由 memory.Service 处理。
 func WithRetrievalOrchestrator(orchestrator RetrievalOrchestrator) ServiceOption {
 	return func(s *Service) {
 		s.orchestrator = orchestrator
@@ -96,7 +96,7 @@ func WithAccessFeedbackWriter(writer AccessFeedbackWriter) ServiceOption {
 	}
 }
 
-// WithRememberAdmissionDecider 注入 remember 准入决策器（与 P3 compute_admission 同一规则集）。
+// WithRememberAdmissionDecider 注入 remember 准入决策器（与 compute_admission 同一规则集）。
 func WithRememberAdmissionDecider(decider RememberAdmissionDecider) ServiceOption {
 	return func(s *Service) {
 		s.rememberAdmission = decider
@@ -104,7 +104,7 @@ func WithRememberAdmissionDecider(decider RememberAdmissionDecider) ServiceOptio
 }
 
 // NewService 创建 Memory 服务。
-// 默认只启用 P1 FTS + metadata 检索路径；通过 WithRetrievalOrchestrator 可接入 P4 检索编排器。
+// 默认只启用 FTS + metadata 检索路径；通过 WithRetrievalOrchestrator 可接入检索编排器。
 func NewService(cfg config.Config, repo Repository, opts ...ServiceOption) *Service {
 	service := &Service{cfg: cfg, repo: repo}
 	for _, opt := range opts {
@@ -117,7 +117,7 @@ func NewService(cfg config.Config, repo Repository, opts ...ServiceOption) *Serv
 
 // Remember 实现显式写入闭环。
 // 完整流程：归一化 -> 内容边界检查 -> 幂等检测 -> 准入决策 -> 构建 memory/evidence/checkpoint -> 事务写入。
-// 准入：必须经过 RememberAdmissionDecider（与 P3 AdmissionController 同一规则），未通过则拒绝持久化。
+// 准入：必须经过 RememberAdmissionDecider（与 AdmissionController 同一规则），未通过则拒绝持久化。
 //
 // 幂等检测：按 scope + type + content + 所有隔离 ID 匹配，命中则返回已有记忆。
 func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberResponse, error) {
@@ -287,13 +287,13 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 	return RememberResponse{MemoryID: memoryID, State: state, Tier: tier, Deduped: false}, nil
 }
 
-// Search 执行 P1 FTS + metadata 检索
+// Search 执行 FTS + metadata 检索
 // 处理流程：
 // 1. 校验查询文本和scope
 // 2. 生成检索追踪ID
 // 3. 执行FTS5全文检索 + metadata过滤
 // 4. 返回排序后的结果和诊断信息
-// Search 执行 P1 FTS + metadata 检索。
+// Search 执行 FTS + metadata 检索。
 // 处理流程：校验查询文本和 scope -> 生成检索追踪 ID -> 执行 FTS5 全文检索 + metadata 过滤 -> 返回排序结果。
 // 诊断信息：返回 FTSHits、FilteredCount、LatencyMS 和 RetrievalTraceID，用于评估检索质量。
 func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse, error) {
@@ -326,7 +326,7 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse
 	return SearchResponse{RetrievalTraceID: traceID, Results: results, Diagnostics: diag}, nil
 }
 
-// Context 构造 P1 压缩上下文包，为 Agent 提供可注入 prompt 的记忆集合。
+// Context 构造压缩上下文包，为 Agent 提供可注入 prompt 的记忆集合。
 // 完整流程：
 //  1. 校验任务描述和 token 预算（默认 1800 字符）
 //  2. 确定检索范围：project_local > user_global > repo_local > session
@@ -337,7 +337,7 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse
 //  7. 按 token budget 逐条压缩和裁剪记忆
 //  8. 收集 constraints 列表用于 Agent prompt 约束注入
 //
-// 设计说明：P1 使用字符数近似 token 数，后续可替换为 tokenizer；compress 使用 rune 计算，正确处理中文。
+// 设计说明：使用字符数近似 token 数，后续可替换为 tokenizer；compress 使用 rune 计算，正确处理中文。
 func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextResponse, error) {
 	if s.orchestrator != nil {
 		return s.orchestrator.Context(ctx, req)
@@ -548,7 +548,7 @@ func containsMemoryType(results []SearchResult, memoryType string) bool {
 	return false
 }
 
-// Review 执行 P1 pending memory 查询和状态流转
+// Review 执行 pending memory 查询和状态流转
 // 支持六种操作：
 // - list: 查询pending_review状态的记忆列表
 // - approve: 批准记忆，状态转为stable，记录用户确认
@@ -556,7 +556,7 @@ func containsMemoryType(results []SearchResult, memoryType string) bool {
 // - archive: 归档记忆，状态转为archived
 // - edit: 编辑记忆内容，更新版本号和search_text
 // - delete: 删除记忆，写入tombstone，删除FTS条目
-// Review 执行 P1 pending memory 查询和状态流转。
+// Review 执行 pending memory 查询和状态流转。
 // 六种操作：
 //   - list：查询 pending_review 状态的记忆列表，支持 scope 过滤
 //   - approve：pending_review -> stable，记录 user_confirmed=true
@@ -762,7 +762,7 @@ func isDesignReviewTask(task string) bool {
 
 // compress 按token预算压缩内容
 // 如果内容超过预算，截断并添加省略号
-// 设计说明：P1使用字符数近似token数，后续可替换为tokenizer
+// 设计说明：使用字符数近似 token 数，后续可替换为 tokenizer
 func compress(content string, budget int) string {
 	content = strings.TrimSpace(content)
 	if budget <= 0 || content == "" {

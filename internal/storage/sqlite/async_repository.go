@@ -237,7 +237,7 @@ func (s *Store) GetJob(ctx context.Context, jobID string) (automation.AsyncJob, 
 	return job, storageErr(err)
 }
 
-// ListJobs 按状态、类型和目标过滤异步任务，用于 P3 诊断接口。
+// ListJobs 按状态、类型和目标过滤异步任务，用于诊断接口。
 func (s *Store) ListJobs(ctx context.Context, req automation.ListJobsRequest) ([]automation.AsyncJob, error) {
 	query := baseJobSelect() + " where 1 = 1"
 	args := make([]any, 0)

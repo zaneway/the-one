@@ -28,7 +28,7 @@ const (
 	DecisionWriteStable = "write_stable"
 )
 
-// AdmissionController 是 P3 准入控制器。
+// AdmissionController 是准入控制器。
 // 职责：根据候选记忆的特征和上下文，决定是否写入长期记忆以及写入状态。
 // 设计约束：准入决策基于规则和加权评分公式，不依赖外部 LLM 调用。
 type AdmissionController struct{}
@@ -73,7 +73,7 @@ func NewAdmissionController() AdmissionController {
 //  5. 先尝试特殊决策（用户纠正 → stable，架构决策 → pending_review 等）
 //  6. 特殊决策未命中时，按评分区间做通用决策（<0.3 drop，0.3-0.5 raw_only，0.5-0.7 provisional，0.7-0.85 pending_review，>=0.85 stable）
 //
-// 评分公式（P3 设计文档）：
+// 评分公式：
 // score = 0.22*futureNeed + 0.18*encodingDepth + 0.16*stability + 0.14*taskControlSignal
 //   - 0.12*episodicSemanticValue + 0.08*retrievalTrainability
 //   - 0.16*interferenceRisk - 0.12*decayRisk - 0.10*conflictRisk
@@ -473,7 +473,7 @@ func result(candidate processor.MemoryCandidate, decision string, score float64,
 }
 
 // validateCandidateScope 校验候选记忆的 scope 是否合法。
-// 校验规则与 P1 手动写入一致：user_global 必须有 user_id 且无 project/repo，
+// 校验规则与手动写入一致：user_global 必须有 user_id 且无 project/repo，
 // project_local 必须有 workspace+project，repo_local 必须有 workspace+repo，session 必须有 workspace+session。
 func validateCandidateScope(candidate processor.MemoryCandidate) bool {
 	switch candidate.Scope {

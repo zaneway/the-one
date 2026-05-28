@@ -94,7 +94,7 @@ func TestP4RetrievalMigrationDocSnapshotDedupUsesEmptyScopeValues(t *testing.T) 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := store.db.ExecContext(ctx, `insert into doc_snapshot(
 		id, workspace_id, doc_path, content_hash, created_at
-	) values (?, ?, ?, ?, ?)`, "doc_001", "ws", "doc/P4.md", "sha256:doc", now); err != nil {
+	) values (?, ?, ?, ?, ?)`, "doc_001", "ws", "doc/retrieval.md", "sha256:doc", now); err != nil {
 		t.Fatalf("insert doc_snapshot with default project/repo: %v", err)
 	}
 	var projectID, repoID string
@@ -106,7 +106,7 @@ func TestP4RetrievalMigrationDocSnapshotDedupUsesEmptyScopeValues(t *testing.T) 
 	}
 	_, err = store.db.ExecContext(ctx, `insert into doc_snapshot(
 		id, workspace_id, doc_path, content_hash, created_at
-	) values (?, ?, ?, ?, ?)`, "doc_duplicate", "ws", "doc/P4.md", "sha256:doc", now)
+	) values (?, ?, ?, ?, ?)`, "doc_duplicate", "ws", "doc/retrieval.md", "sha256:doc", now)
 	if err == nil {
 		t.Fatal("duplicate doc_snapshot insert error = nil, want unique constraint violation")
 	}

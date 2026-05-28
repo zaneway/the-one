@@ -68,7 +68,7 @@ const (
 	CandidateStatusFailed    = "failed"    // 处理失败
 )
 
-// AsyncJob 表示 P3 异步处理队列中的一条任务记录。
+// AsyncJob 表示异步处理队列中的一条任务记录。
 // Worker 通过 status、next_run_at 和 retry_count 控制本地重试，不在事务内执行 Provider 逻辑。
 // 管道流转：extract_evidence → generate_memory_candidate → compute_admission。
 // 每个 job 通过 TargetType + TargetID 关联处理对象，DedupKey 保证幂等入队。
@@ -284,7 +284,7 @@ type AutomatedMemoryWrite struct {
 }
 
 // AutomatedMemoryCorrection 描述用户纠正命中旧 memory 后的原地覆盖写入。
-// P3 采用覆盖语义：保留旧 memory_id，更新内容和检索字段，并追加新 evidence/review 轨迹。
+// 采用覆盖语义：保留旧 memory_id，更新内容和检索字段，并追加新 evidence/review 轨迹。
 type AutomatedMemoryCorrection struct {
 	TargetMemoryID   string
 	Item             memory.MemoryItem

@@ -293,7 +293,7 @@ func scopedIdentity(event capture.RawEvent, scope string) (workspaceID, userID, 
 
 // checkpointCandidate 构造设计复查类型的候选记忆。
 // 设计复查记忆包含 ReviewCheckpoint 结构，记录 target_docs、review_intent、conclusion 等
-// 用于 P4 Doc Index 策略中对比文档变更。
+// 用于 Doc Index 策略中对比文档变更。
 func checkpointCandidate(input CandidateInput, content string, keywords, evidenceIDs []string) ([]MemoryCandidate, error) {
 	draft, ok := reviewCheckpointDraft(input.RawEvent)
 	if !ok {
@@ -306,7 +306,7 @@ func checkpointCandidate(input CandidateInput, content string, keywords, evidenc
 
 // reviewCheckpointDraft 从 raw_event 的 source_ref 中提取设计复查 checkpoint 结构。
 // 必须包含 target_docs、review_intent、conclusion 三个核心字段才视为有效 checkpoint。
-// target_hashes 用于 P4 Doc Index 策略中对比文档 section 级变更。
+// target_hashes 用于 Doc Index 策略中对比文档 section 级变更。
 func reviewCheckpointDraft(event capture.RawEvent) (ReviewCheckpointDraft, bool) {
 	ref := baseSourceRef(event)
 	targetDocs := sourceMapSlice(ref, "target_docs")
@@ -383,7 +383,7 @@ func isRepeatedFailure(event capture.RawEvent, task capture.AgentTask, related [
 
 // isDesignReview 判断是否为设计复查事件。
 // 判断条件：source_ref 包含 target_docs，或语句/任务摘要包含架构设计/复查等关键词。
-// 设计复查事件会生成 TypeReviewCheckpoint 记忆，用于 P4 Doc Index 策略。
+// 设计复查事件会生成 TypeReviewCheckpoint 记忆，用于 Doc Index 策略。
 func isDesignReview(event capture.RawEvent, task capture.AgentTask, statement string) bool {
 	ref := baseSourceRef(event)
 	if len(sourceMapSlice(ref, "target_docs")) > 0 {

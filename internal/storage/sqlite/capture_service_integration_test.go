@@ -132,7 +132,7 @@ func TestCaptureServiceObserveEnqueuesAutomationJobWithSQLiteRepository(t *testi
 		ProjectID:      "project_a",
 		AgentType:      "cursor",
 		Actor:          capture.ActorUser,
-		ContentSummary: "以后推进 P3 时先按详细设计拆分任务。",
+		ContentSummary: "以后推进 automation 时先按详细设计拆分任务。",
 		ContentHash:    "sha256:p3-c3-sqlite",
 		CaptureCapabilities: capture.CaptureCapabilities{
 			MCPObserve: true,

@@ -13,7 +13,7 @@ import (
 
 const defaultMVPLimit = 50
 
-// CreateRun 创建一次 P5 MVP 验收 run。
+// CreateRun 创建一次 MVP 验收 run。
 // 设计约束：run 只保存验收摘要和 scope，不保存完整 prompt、完整输出或完整对话。
 func (s *Store) CreateRun(ctx context.Context, run mvp.AcceptanceRun) (mvp.AcceptanceRun, error) {
 	if strings.TrimSpace(run.Name) == "" || strings.TrimSpace(run.WorkspaceID) == "" {
@@ -62,7 +62,7 @@ func (s *Store) CreateRun(ctx context.Context, run mvp.AcceptanceRun) (mvp.Accep
 	return run, nil
 }
 
-// GetRun 按 run_id 读取一次 P5 验收 run。
+// GetRun 按 run_id 读取一次验收 run。
 func (s *Store) GetRun(ctx context.Context, runID string) (mvp.AcceptanceRun, error) {
 	if strings.TrimSpace(runID) == "" {
 		return mvp.AcceptanceRun{}, fmt.Errorf("VALIDATION_FAILED: run_id is required")
@@ -108,7 +108,7 @@ func (s *Store) UpdateRunStatus(ctx context.Context, run mvp.AcceptanceRun) erro
 	return nil
 }
 
-// ListRuns 按 workspace/scope 查询 P5 验收 run。WorkspaceID 必填，避免验收历史无边界扫描。
+// ListRuns 按 workspace/scope 查询验收 run。WorkspaceID 必填，避免验收历史无边界扫描。
 func (s *Store) ListRuns(ctx context.Context, query mvp.RunQuery) ([]mvp.AcceptanceRun, error) {
 	if strings.TrimSpace(query.WorkspaceID) == "" {
 		return nil, fmt.Errorf("VALIDATION_FAILED: workspace_id is required")
@@ -284,7 +284,7 @@ func (s *Store) UpsertMetricSamples(ctx context.Context, samples []mvp.MetricSam
 	return prepared, nil
 }
 
-// ListMetricSamples 按 run 查询 P5 指标样本。RunID 必填。
+// ListMetricSamples 按 run 查询指标样本。RunID 必填。
 func (s *Store) ListMetricSamples(ctx context.Context, query mvp.MetricQuery) ([]mvp.MetricSample, error) {
 	if strings.TrimSpace(query.RunID) == "" {
 		return nil, fmt.Errorf("VALIDATION_FAILED: run_id is required")
@@ -402,8 +402,8 @@ func (s *Store) ListAgentCapabilities(ctx context.Context, query mvp.CapabilityQ
 	return scanMVPCapabilityRows(rows)
 }
 
-// ListRetrievalLatenciesByTraceIDs 查询 P5 task 绑定的 retrieval_trace 延迟样本。
-// 设计约束：必须由明确 trace_id 列表驱动，避免 P5 指标计算扫描全部 retrieval_trace。
+// ListRetrievalLatenciesByTraceIDs 查询 task 绑定的 retrieval_trace 延迟样本。
+// 设计约束：必须由明确 trace_id 列表驱动，避免指标计算扫描全部 retrieval_trace。
 func (s *Store) ListRetrievalLatenciesByTraceIDs(ctx context.Context, traceIDs []string) ([]float64, error) {
 	cleaned := make([]string, 0, len(traceIDs))
 	seen := map[string]bool{}

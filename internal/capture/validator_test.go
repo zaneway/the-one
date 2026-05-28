@@ -45,7 +45,7 @@ func TestNormalizeObserveAllowsSessionStartWithoutSessionID(t *testing.T) {
 		AgentType:     "claude_code",
 		Actor:         ActorAdapter,
 		Task: &TaskInput{
-			TaskSummary: "  run   P2 tests  ",
+			TaskSummary: "  run   capture tests  ",
 		},
 		SourceRefs: []SourceRef{{"capture_method": "git_diff"}},
 	}
@@ -53,7 +53,7 @@ func TestNormalizeObserveAllowsSessionStartWithoutSessionID(t *testing.T) {
 	if err := NormalizeObserve(cfg, &req); err != nil {
 		t.Fatalf("NormalizeObserve() error = %v", err)
 	}
-	if req.Task.TaskSummary != "run P2 tests" {
+	if req.Task.TaskSummary != "run capture tests" {
 		t.Fatalf("task summary = %q, want normalized summary", req.Task.TaskSummary)
 	}
 }

@@ -23,10 +23,10 @@ const (
 	injectedAccessEventType  = "injected"
 )
 
-// MemorySearcher 定义 P4-C1 可复用的 P1 FTS + metadata 检索能力。
+// MemorySearcher 定义可复用的 FTS + metadata 检索能力。
 // 设计边界：该接口只做候选召回，不负责 trace、access log 或上下文注入。
 type MemorySearcher interface {
-	// Search 执行 FTS + metadata 检索，返回 P1 兼容结果和基础诊断。
+	// Search 执行 FTS + metadata 检索，返回兼容结果和基础诊断。
 	Search(ctx context.Context, req memory.SearchRequest) ([]memory.SearchResult, memory.SearchDiagnostics, error)
 }
 
@@ -47,14 +47,14 @@ type AccessLogRepository interface {
 	WriteMemoryAccessLogs(ctx context.Context, records []AccessLogRecord) ([]AccessLogRecord, error)
 }
 
-// RelationRepository 定义 P4-C2 relation expansion 所需的最小读取能力。
+// RelationRepository 定义 relation expansion 所需的最小读取能力。
 // 设计边界：只读取已持久化的 depth=1 强关系边，不在线生成关系。
 type RelationRepository interface {
 	// ListRelationExpansions 查询 seed memory 的一跳关系扩展。
 	ListRelationExpansions(ctx context.Context, query RelationExpansionQuery) ([]RelationExpansion, error)
 }
 
-// CodeRefRepository 定义 P4-C3 code_ref 在线读取和状态写回能力。
+// CodeRefRepository 定义 code_ref 在线读取和状态写回能力。
 // 查询必须按 memory_id 收敛，避免检索路径扫描完整 code_ref 表。
 type CodeRefRepository interface {
 	// ListCodeRefs 按 memory_id 查询已持久化 code_ref。
@@ -64,14 +64,14 @@ type CodeRefRepository interface {
 	WriteCodeRef(ctx context.Context, ref memory.CodeRef) (memory.CodeRef, error)
 }
 
-// CodeIndexAdapter 定义 P4-C3 local_basic 解析器所需的最小接口。
+// CodeIndexAdapter 定义 local_basic 解析器所需的最小接口。
 // 该接口只解析已有 code_ref，不把调用图或结构事实写入 Memory。
 type CodeIndexAdapter interface {
 	// ResolveCodeRefs 对已有 code_ref 做 best-effort 文件/符号解析。
 	ResolveCodeRefs(ctx context.Context, refs []memory.CodeRef) ([]memory.CodeRef, error)
 }
 
-// DocSnapshotRepository 定义 P4-C4 review strategy 所需的文档快照读写能力。
+// DocSnapshotRepository 定义 review strategy 所需的文档快照读写能力。
 // 查询必须按 workspace_id + doc_path 收敛，避免 context 在线路径扫描文档历史。
 type DocSnapshotRepository interface {
 	// WriteDocSnapshot 写入当前 Markdown 文档快照。
@@ -81,14 +81,14 @@ type DocSnapshotRepository interface {
 	ListDocSnapshots(ctx context.Context, query docindex.SnapshotQuery) ([]docindex.DocumentSnapshot, error)
 }
 
-// ReviewCheckpointRepository 定义 P4-C4 使用 checkpoint target_hashes 的最小读取能力。
+// ReviewCheckpointRepository 定义使用 checkpoint target_hashes 的最小读取能力。
 // Orchestrator 只读取结构化 hash 元数据，不读取或保存完整历史文档正文。
 type ReviewCheckpointRepository interface {
 	// GetReviewCheckpoint 按 review_checkpoint memory_id 读取 checkpoint 元数据。
 	GetReviewCheckpoint(ctx context.Context, memoryID string) (memory.ReviewCheckpoint, bool, error)
 }
 
-// MemoryOrchestrator 是 P4-C1 面向 memory.Service 的在线检索编排器。
+// MemoryOrchestrator 是面向 memory.Service 的在线检索编排器。
 // 它复用现有 FTS + metadata repository，补齐 intent、score_breakdown、trace 和 access log；
 // C2 仅启用持久化 relation depth=1 expansion；vector/code/doc 扩展仍不在本阶段执行。
 type MemoryOrchestrator struct {
@@ -104,7 +104,7 @@ type MemoryOrchestrator struct {
 	logger         *slog.Logger
 }
 
-// MemoryOrchestratorOption 配置 P4-C1 在线检索编排器的可选依赖。
+// MemoryOrchestratorOption 配置在线检索编排器的可选依赖。
 type MemoryOrchestratorOption func(*MemoryOrchestrator)
 
 // WithTraceRepository 注入 retrieval_trace repository。
@@ -139,7 +139,7 @@ func WithCodeRefRepository(repo CodeRefRepository) MemoryOrchestratorOption {
 	}
 }
 
-// WithCodeIndexAdapter 注入 P4-C3 Code Index Adapter。
+// WithCodeIndexAdapter 注入 Code Index Adapter。
 // 为空时仅返回已持久化 code_ref，不做在线状态刷新。
 func WithCodeIndexAdapter(adapter CodeIndexAdapter) MemoryOrchestratorOption {
 	return func(o *MemoryOrchestrator) {
@@ -171,7 +171,7 @@ func WithLogger(logger *slog.Logger) MemoryOrchestratorOption {
 	}
 }
 
-// NewMemoryOrchestrator 创建 P4-C1 memory.Search/Context adapter。
+// NewMemoryOrchestrator 创建 memory.Search/Context adapter。
 // memoryRepo 必须提供 FTS + metadata 检索能力；trace/access log repository 可选注入。
 func NewMemoryOrchestrator(cfg config.Config, memoryRepo MemorySearcher, opts ...MemoryOrchestratorOption) *MemoryOrchestrator {
 	orchestrator := &MemoryOrchestrator{
@@ -190,7 +190,7 @@ func NewMemoryOrchestrator(cfg config.Config, memoryRepo MemorySearcher, opts ..
 	return orchestrator
 }
 
-// Search 执行 P4-C1 在线检索编排。
+// Search 执行在线检索编排。
 // 流程：参数校验 -> 创建 trace -> FTS + metadata 召回 -> relation expansion -> code ref attach -> rerank -> 写入 retrieved access log -> 更新 trace。
 // 设计约束：所有可选依赖（trace/access log/relation/code ref）降级时不影响核心检索响应，仅在 diagnostics 中标记 fallback reason。
 func (o *MemoryOrchestrator) Search(ctx context.Context, req memory.SearchRequest) (memory.SearchResponse, error) {
@@ -252,7 +252,7 @@ func (o *MemoryOrchestrator) Search(ctx context.Context, req memory.SearchReques
 	return memory.SearchResponse{RetrievalTraceID: trace.ID, Results: retrieved.Results, Diagnostics: diag}, nil
 }
 
-// Context 执行 P4-C1 上下文构造。
+// Context 执行上下文构造。
 // 流程：参数校验 -> intent 检测 -> 创建 trace -> FTS 检索 + 补充检索（偏好/ checkpoint）-> 写 retrieved access log
 // -> buildContextPack（按预算裁剪）-> attachReviewStrategy（Doc Index 策略）-> 写 injected access log -> 更新 trace。
 // 与 Search 的区别：Context 会做两次补充检索（偏好和 review_checkpoint），并按 token budget 裁剪输出。
@@ -974,7 +974,7 @@ func strongerReviewMode(current, next string) string {
 	return current
 }
 
-// expandRelations 对 seed 候选执行一跳关系扩展（P4-C2）。
+// expandRelations 对 seed 候选执行一跳关系扩展。
 // 扩展策略：查询 seed memory 的 depth=1 强关系边（supports/supersedes/superseded_by/contradicts），
 // 将 related memory 合并到候选集，并调整 seed 的 RelationSupport/StalenessPenalty/ConflictPenalty。
 // 设计边界：只读取已持久化的关系边，不在线生成关系。
@@ -1019,7 +1019,7 @@ func (o *MemoryOrchestrator) expandRelations(ctx context.Context, req memory.Sea
 	return used, nil
 }
 
-// attachCodeRefs 为候选记忆附加 code_ref 信息（P4-C3）。
+// attachCodeRefs 为候选记忆附加 code_ref 信息。
 // 流程：
 //  1. 按 memory_id 查询已持久化的 code_ref
 //  2. 如果 CodeIndexAdapter 可用，对 code_ref 做在线文件/符号解析并写回状态

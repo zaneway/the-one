@@ -29,7 +29,7 @@ func TestRuleBasedUserDeclarationPreferenceCandidate(t *testing.T) {
 
 func TestRuleBasedUserDeclarationConstraintCandidate(t *testing.T) {
 	provider := NewRuleBasedProvider()
-	event := rawEvent(capture.EventUserDeclaration, "P3 不要引入外部 LLM Provider，必须保持 rule_based 本地可测。")
+	event := rawEvent(capture.EventUserDeclaration, "automation 不要引入外部 LLM Provider，必须保持 rule_based 本地可测。")
 	event.ProjectID = "proj_001"
 
 	evidence := extractOne(t, provider, event)
@@ -68,8 +68,8 @@ func TestRuleBasedAgentDecisionCandidate(t *testing.T) {
 	provider := NewRuleBasedProvider()
 	event := rawEvent(capture.EventAgentDecision, "")
 	event.SourceRefsJSON = refsJSON(map[string]any{
-		"decision_summary": "P3 只实现 rule_based Provider。",
-		"reason_summary":   "保持本地可测，外部 LLM 放到二期。",
+		"decision_summary": "automation 只实现 rule_based Provider。",
+		"reason_summary":   "保持本地可测，外部 LLM 放到后续版本。",
 	})
 
 	evidence := extractOne(t, provider, event)
@@ -148,15 +148,15 @@ func TestRuleBasedFileEditStructureOnlyNoEvidence(t *testing.T) {
 
 func TestRuleBasedDesignReviewCheckpointCandidate(t *testing.T) {
 	provider := NewRuleBasedProvider()
-	event := rawEvent(capture.EventTaskResult, "P3 详细设计复查完成，存在少量遗漏，已补充自动写入规则。")
+	event := rawEvent(capture.EventTaskResult, "automation 详细设计复查完成，存在少量遗漏，已补充自动写入规则。")
 	event.SourceRefsJSON = refsJSON(map[string]any{
 		"target_docs": []map[string]any{{
-			"path": "doc/The One 长期记忆系统 P3 详细设计.md",
+			"path": "doc/The One 长期记忆系统 automation 详细设计.md",
 			"role": "implementation_design",
 		}},
 		"review_intent":      []string{"logic_consistency", "acceptance_completeness"},
 		"conclusion":         "supplemented",
-		"confirmed_baseline": []string{"P3 只实现 rule_based Provider"},
+		"confirmed_baseline": []string{"automation 只实现 rule_based Provider"},
 	})
 
 	evidence := extractOne(t, provider, event)
@@ -215,7 +215,7 @@ func extractOne(t *testing.T, provider RuleBasedProvider, event capture.RawEvent
 		},
 		Task: capture.AgentTask{
 			ID:             event.TaskID,
-			TaskSummary:    "实现 P3",
+			TaskSummary:    "实现 automation",
 			OutcomeSummary: event.ContentSummary,
 		},
 		CaptureQuality: CaptureQualitySnapshot{CaptureLevel: 3},

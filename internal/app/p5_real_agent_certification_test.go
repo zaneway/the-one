@@ -20,9 +20,9 @@ func TestP5DMissingAgentCertificationFails(t *testing.T) {
 	defer app.Close()
 
 	rawRun, toolErr := app.CallTool(ctx, "memory.mvp.run.start", mvp.StartRunRequest{
-		Name:          "P5-D missing agent certification",
+		Name:          "MVP missing agent certification",
 		Mode:          mvp.RunModeMixed,
-		WorkspaceID:   "ws_p5_real",
+		WorkspaceID:   "ws_mvp_real",
 		ProjectID:     "proj_the_one",
 		RepoID:        "repo_the_one",
 		BaselineType:  mvp.BaselineSummaryOnly,

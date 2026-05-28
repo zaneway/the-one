@@ -12,7 +12,7 @@ import (
 	"github.com/zaneway/theone/internal/memory"
 )
 
-// RerankOptions 控制 P4-D2 排序公式的上下文参数。
+// RerankOptions 控制排序公式的上下文参数。
 // 这些参数只影响分数估算，不触发任何存储读写。
 type RerankOptions struct {
 	Query         string
@@ -24,7 +24,7 @@ type RerankOptions struct {
 	Now           time.Time
 }
 
-// RerankCandidates 计算候选记忆的 score breakdown，并按 P4 稳定排序规则返回副本。
+// RerankCandidates 计算候选记忆的 score breakdown，并按稳定排序规则返回副本。
 // 该函数不会修改输入切片中的元素，便于上层在诊断中保留原始召回顺序。
 func RerankCandidates(candidates []Candidate, opts RerankOptions) []Candidate {
 	out := append([]Candidate(nil), candidates...)
@@ -44,8 +44,8 @@ func RerankCandidates(candidates []Candidate, opts RerankOptions) []Candidate {
 	return out
 }
 
-// ScoreCandidate 计算单条候选记忆的 P4 rerank 分数和 score breakdown。
-// 缺失字段按 P4 详细设计中的默认值处理，确保排序行为稳定可解释。
+// ScoreCandidate 计算单条候选记忆的 rerank 分数和 score breakdown。
+// 缺失字段按默认值处理，确保排序行为稳定可解释。
 func ScoreCandidate(candidate *Candidate, opts RerankOptions) memory.ScoreBreakdown {
 	if candidate == nil {
 		return memory.ScoreBreakdown{}
@@ -120,7 +120,7 @@ func normalizeFTSScores(candidates []Candidate) {
 	}
 }
 
-// finalScore 计算 P4-D2 最终排序分数。
+// finalScore 计算最终排序分数。
 // 公式：positive_sum - conflict_penalty - staleness_penalty - context_cost_penalty
 //
 // 正向因子（权重归一化后求和）：

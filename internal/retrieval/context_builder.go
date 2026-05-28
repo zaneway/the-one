@@ -52,7 +52,7 @@ type contextBucketReportBucket struct {
 	ItemCount    int
 }
 
-// buildContextPack 按 P4-C5 多 bucket 预算构造可注入上下文。
+// buildContextPack 按多 bucket 预算构造可注入上下文。
 // 核心流程：
 //  1. 按 intent 选择 bucket profile（不同意图下各 bucket 的权重和限制不同）
 //  2. 将检索结果分配到 6 个 bucket：stable_design / preferences_procedures / failure / recent_session / code_refs / review_checkpoint

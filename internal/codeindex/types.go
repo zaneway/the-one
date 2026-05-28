@@ -28,7 +28,7 @@ type Capabilities struct {
 	Impact bool
 }
 
-// Adapter 定义 P4-C3 Code Index Adapter 的最小接口。
+// Adapter 定义 Code Index Adapter 的最小接口。
 // local_basic 只实现 code_ref resolve；调用图、影响面和 LSP 能力必须明确返回 unsupported。
 type Adapter interface {
 	// Name 返回 Adapter 名称。
