@@ -64,5 +64,6 @@ PY
 )"
 
 echo "${END_JSON}" | "${THEONE_BIN}" observe -config "${CONFIG_PATH}" -data-dir "${DATA_DIR}" >/dev/null 2>&1 || true
+rm -f "${STATE_FILE}" >/dev/null 2>&1 || true
 exit 0
 

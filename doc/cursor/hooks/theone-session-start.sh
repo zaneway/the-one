@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 THEONE_BIN="${ROOT_DIR}/bin/theone"
 CONFIG_PATH="${ROOT_DIR}/theone.yaml"
 DATA_DIR="${ROOT_DIR}/.theone-data"
+STATE_FILE="${DATA_DIR}/runtime-state/session.json"
 
 if [[ ! -x "${THEONE_BIN}" ]]; then
   exit 0
@@ -59,6 +60,28 @@ payload = {
 print(json.dumps(payload, ensure_ascii=False))
 PY
 )"
+
+python3 - <<'PY' "${SESSION_JSON}" "${STATE_FILE}" >/dev/null 2>&1 || true
+import json
+import os
+import sys
+from datetime import datetime
+
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+state_file = sys.argv[2] if len(sys.argv) > 2 else ""
+try:
+    data = json.loads(raw) if raw.strip() else {}
+except Exception:
+    data = {}
+if state_file:
+    os.makedirs(os.path.dirname(state_file), exist_ok=True)
+    with open(state_file, "w", encoding="utf-8") as f:
+        json.dump({
+            "session_id": (data.get("session_id") or "").strip(),
+            "task_id": (data.get("task_id") or "").strip(),
+            "updated_at": datetime.now().astimezone().isoformat()
+        }, f, ensure_ascii=False)
+PY
 
 echo "${SESSION_JSON}" | "${THEONE_BIN}" observe -config "${CONFIG_PATH}" -data-dir "${DATA_DIR}" >/dev/null 2>&1 || true
 exit 0
