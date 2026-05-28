@@ -8,6 +8,7 @@ import (
 
 	"github.com/zaneway/theone/internal/capture"
 	"github.com/zaneway/theone/internal/memory"
+	"github.com/zaneway/theone/internal/scoring"
 )
 
 const RuleBasedProviderName = "rule_based"
@@ -116,49 +117,60 @@ func (RuleBasedProvider) GenerateCandidates(ctx context.Context, input Candidate
 	if input.Evidence.ID != "" {
 		evidenceIDs = append(evidenceIDs, input.Evidence.ID)
 	}
+	eventScore := scoring.ScoreRawEvent(scoring.RawEventInput{
+		EventType:      input.RawEvent.EventType,
+		OccurredAt:     input.RawEvent.OccurredAt,
+		ContentSummary: input.RawEvent.ContentSummary,
+		InputSummary:   input.RawEvent.InputSummary,
+		OutputSummary:  input.RawEvent.OutputSummary,
+		KeywordsJSON:   input.RawEvent.KeywordsJSON,
+		SourceRefsJSON: input.RawEvent.SourceRefsJSON,
+		Query:          statement,
+		Now:            input.Now,
+	})
 
 	switch input.RawEvent.EventType {
 	case capture.EventUserCorrection:
 		// 用户纠正：继承原记忆的 type 和 scope，确保覆盖写入时保持一致
-		return []MemoryCandidate{baseCandidate(input, statement, inheritedCorrectionType(sourceRef), inheritedCorrectionScope(input, sourceRef), keywords, evidenceIDs, "user_correction")}, nil
+		return []MemoryCandidate{baseCandidate(input, statement, inheritedCorrectionType(sourceRef), inheritedCorrectionScope(input, sourceRef), keywords, evidenceIDs, "user_correction", eventScore)}, nil
 	case capture.EventUserDeclaration, capture.EventConversationMessage:
 		// 用户声明或对话消息：通过关键词信号分类为不同记忆类型
-		candidate, ok := classifyDeclaration(input, statement, keywords, evidenceIDs)
+		candidate, ok := classifyDeclaration(input, statement, keywords, evidenceIDs, eventScore)
 		if !ok {
 			return nil, nil
 		}
 		return []MemoryCandidate{candidate}, nil
 	case capture.EventAgentDecision:
 		// Agent 决策：固定为架构决策类型，项目级作用域
-		return []MemoryCandidate{baseCandidate(input, statement, memory.TypeDecision, memory.ScopeProjectLocal, keywords, evidenceIDs, "architecture_decision")}, nil
+		return []MemoryCandidate{baseCandidate(input, statement, memory.TypeDecision, memory.ScopeProjectLocal, keywords, evidenceIDs, "architecture_decision", eventScore)}, nil
 	case capture.EventToolResultSummary:
 		if !isFailedToolEvent(input.RawEvent, sourceRef) {
 			return nil, nil
 		}
 		// 重复失败或包含根因信号：标记为持久失败签名（可跨 session 复用）
 		if isRepeatedFailure(input.RawEvent, input.Task, input.RelatedMemory) || hasAnySignal(statement, "重复", "复现", "root cause", "根因", "repeated") {
-			return []MemoryCandidate{baseCandidate(input, statement, memory.TypeFailure, failureScope(input.RawEvent), keywords, evidenceIDs, "repeated_failure_signature")}, nil
+			return []MemoryCandidate{baseCandidate(input, statement, memory.TypeFailure, failureScope(input.RawEvent), keywords, evidenceIDs, "repeated_failure_signature", eventScore)}, nil
 		}
 		// 单次失败：仅保留为 session 级临时状态
-		return []MemoryCandidate{baseCandidate(input, statement, memory.TypeTemporaryState, memory.ScopeSession, keywords, evidenceIDs, "session_only_state")}, nil
+		return []MemoryCandidate{baseCandidate(input, statement, memory.TypeTemporaryState, memory.ScopeSession, keywords, evidenceIDs, "session_only_state", eventScore)}, nil
 	case capture.EventTaskResult:
 		// 设计复查结果：生成 review_checkpoint 记忆（含 target_docs 和 hash）
 		if isDesignReview(input.RawEvent, input.Task, statement) {
 			return checkpointCandidate(input, statement, keywords, evidenceIDs)
 		}
-		return []MemoryCandidate{baseCandidate(input, statement, memory.TypeSessionSummary, memory.ScopeSession, keywords, evidenceIDs, "task_result_summary")}, nil
+		return []MemoryCandidate{baseCandidate(input, statement, memory.TypeSessionSummary, memory.ScopeSession, keywords, evidenceIDs, "task_result_summary", eventScore)}, nil
 	case capture.EventSessionEnd:
 		if isDesignReview(input.RawEvent, input.Task, statement) {
 			return checkpointCandidate(input, statement, keywords, evidenceIDs)
 		}
-		return []MemoryCandidate{baseCandidate(input, statement, memory.TypeSessionSummary, memory.ScopeSession, keywords, evidenceIDs, "session_summary")}, nil
+		return []MemoryCandidate{baseCandidate(input, statement, memory.TypeSessionSummary, memory.ScopeSession, keywords, evidenceIDs, "session_summary", eventScore)}, nil
 	case capture.EventAgentResponseSummary:
 		if isDesignReview(input.RawEvent, input.Task, statement) {
 			return checkpointCandidate(input, statement, keywords, evidenceIDs)
 		}
 		// 包含决策信号：归类为架构决策
 		if hasAnySignal(statement, "决策", "decision") {
-			return []MemoryCandidate{baseCandidate(input, statement, memory.TypeDecision, memory.ScopeProjectLocal, keywords, evidenceIDs, "architecture_decision")}, nil
+			return []MemoryCandidate{baseCandidate(input, statement, memory.TypeDecision, memory.ScopeProjectLocal, keywords, evidenceIDs, "architecture_decision", eventScore)}, nil
 		}
 	}
 	return nil, nil
@@ -223,29 +235,29 @@ func evidenceConfidence(sourceType string, input EvidenceInput, sourceRef map[st
 //  5. 偏好信号（以后、偏好、我希望） → TypePreference, ScopeUserGlobal
 //  6. 有关联项目 → TypeProjectFact, ScopeProjectLocal
 //  7. 默认 → TypePreference, ScopeUserGlobal
-func classifyDeclaration(input CandidateInput, statement string, keywords, evidenceIDs []string) (MemoryCandidate, bool) {
+func classifyDeclaration(input CandidateInput, statement string, keywords, evidenceIDs []string, eventScore float64) (MemoryCandidate, bool) {
 	switch {
 	case hasAnySignal(statement, "待确认", "未决", "开放问题", "后续确认", "open issue", "todo", "risk"):
-		return baseCandidate(input, statement, memory.TypeOpenIssue, scopedProjectOrRepo(input.RawEvent), keywords, evidenceIDs, "open_issue_recorded"), true
+		return baseCandidate(input, statement, memory.TypeOpenIssue, scopedProjectOrRepo(input.RawEvent), keywords, evidenceIDs, "open_issue_recorded", eventScore), true
 	case hasAnySignal(statement, "假设", "前置假设", "默认认为", "基于", "assume", "assumption"):
-		return baseCandidate(input, statement, memory.TypeAssumption, memory.ScopeProjectLocal, keywords, evidenceIDs, "assumption_recorded"), true
+		return baseCandidate(input, statement, memory.TypeAssumption, memory.ScopeProjectLocal, keywords, evidenceIDs, "assumption_recorded", eventScore), true
 	case hasAnySignal(statement, "验收", "需求", "目标", "必须支持", "必须满足", "requirement", "acceptance"):
-		return baseCandidate(input, statement, memory.TypeRequirement, memory.ScopeProjectLocal, keywords, evidenceIDs, "requirement_declared"), true
+		return baseCandidate(input, statement, memory.TypeRequirement, memory.ScopeProjectLocal, keywords, evidenceIDs, "requirement_declared", eventScore), true
 	case hasAnySignal(statement, "不要", "不能", "禁止", "不得", "不引入", "边界约束", "安全", "合规", "must not", "constraint"):
-		return baseCandidate(input, statement, memory.TypeConstraint, memory.ScopeProjectLocal, keywords, evidenceIDs, "constraint_declared"), true
+		return baseCandidate(input, statement, memory.TypeConstraint, memory.ScopeProjectLocal, keywords, evidenceIDs, "constraint_declared", eventScore), true
 	case hasAnySignal(statement, "以后", "偏好", "我希望", "回答", "沟通", "prefer", "preference"):
-		return baseCandidate(input, statement, memory.TypePreference, memory.ScopeUserGlobal, keywords, evidenceIDs, "user_declared"), true
+		return baseCandidate(input, statement, memory.TypePreference, memory.ScopeUserGlobal, keywords, evidenceIDs, "user_declared", eventScore), true
 	case input.RawEvent.ProjectID != "":
-		return baseCandidate(input, statement, memory.TypeProjectFact, memory.ScopeProjectLocal, keywords, evidenceIDs, "project_fact_declared"), true
+		return baseCandidate(input, statement, memory.TypeProjectFact, memory.ScopeProjectLocal, keywords, evidenceIDs, "project_fact_declared", eventScore), true
 	default:
-		return baseCandidate(input, statement, memory.TypePreference, memory.ScopeUserGlobal, keywords, evidenceIDs, "user_declared"), true
+		return baseCandidate(input, statement, memory.TypePreference, memory.ScopeUserGlobal, keywords, evidenceIDs, "user_declared", eventScore), true
 	}
 }
 
 // baseCandidate 构造候选记忆的基础字段。
 // scope 决定了哪些 identity 字段会被填充（见 scopedIdentity）。
 // EncodingDepth 固定为 2（rule_based 提取器不做深度编码，留给 admission 评估）。
-func baseCandidate(input CandidateInput, content, memoryType, scope string, keywords, evidenceIDs []string, reason string) MemoryCandidate {
+func baseCandidate(input CandidateInput, content, memoryType, scope string, keywords, evidenceIDs []string, reason string, eventScore float64) MemoryCandidate {
 	workspaceID, userID, projectID, repoID, sessionID := scopedIdentity(input.RawEvent, scope)
 	return MemoryCandidate{
 		MemoryType:        memoryType,
@@ -264,6 +276,7 @@ func baseCandidate(input CandidateInput, content, memoryType, scope string, keyw
 		Confidence:        defaultFloat(input.Evidence.Confidence, 0.7),
 		Importance:        defaultImportance(memoryType),
 		EncodingDepth:     2,
+		EventScore:        eventScore,
 		CandidateReason:   []string{reason},
 		SourceEvidenceIDs: evidenceIDs,
 	}
@@ -299,7 +312,18 @@ func checkpointCandidate(input CandidateInput, content string, keywords, evidenc
 	if !ok {
 		return nil, nil
 	}
-	candidate := baseCandidate(input, content, memory.TypeReviewCheckpoint, memory.ScopeProjectLocal, keywords, evidenceIDs, "design_review_checkpoint")
+	eventScore := scoring.ScoreRawEvent(scoring.RawEventInput{
+		EventType:      input.RawEvent.EventType,
+		OccurredAt:     input.RawEvent.OccurredAt,
+		ContentSummary: input.RawEvent.ContentSummary,
+		InputSummary:   input.RawEvent.InputSummary,
+		OutputSummary:  input.RawEvent.OutputSummary,
+		KeywordsJSON:   input.RawEvent.KeywordsJSON,
+		SourceRefsJSON: input.RawEvent.SourceRefsJSON,
+		Query:          content,
+		Now:            input.Now,
+	})
+	candidate := baseCandidate(input, content, memory.TypeReviewCheckpoint, memory.ScopeProjectLocal, keywords, evidenceIDs, "design_review_checkpoint", eventScore)
 	candidate.ReviewCheckpoint = &draft
 	return []MemoryCandidate{candidate}, nil
 }

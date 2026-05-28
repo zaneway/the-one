@@ -134,6 +134,7 @@ type MemoryCandidateRecord struct {
 	Confidence            float64
 	Importance            float64
 	EncodingDepth         int
+	EventScore            float64
 	CandidateReasonJSON   string
 	AdmissionScore        float64
 	AdmissionDecision     string

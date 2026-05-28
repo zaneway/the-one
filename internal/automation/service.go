@@ -556,6 +556,7 @@ func (s *Service) materializeCandidate(candidate processor.MemoryCandidate, evid
 		Confidence:            defaultFloat(candidate.Confidence, evidence.Confidence),
 		Importance:            defaultFloat(candidate.Importance, 0.5),
 		EncodingDepth:         defaultInt(candidate.EncodingDepth, 2),
+		EventScore:            defaultFloat(candidate.EventScore, 0),
 		CandidateReasonJSON:   reasonsJSON,
 		Status:                CandidateStatusGenerated,
 		DedupKey:              strings.Join([]string{s.provider.Name(), evidence.ID, candidate.MemoryType, candidate.Scope, candidate.Content}, ":"),
@@ -635,6 +636,7 @@ func candidateFromRecord(record MemoryCandidateRecord, sourceType string) proces
 		Confidence:        record.Confidence,
 		Importance:        record.Importance,
 		EncodingDepth:     record.EncodingDepth,
+		EventScore:        record.EventScore,
 		CandidateReason:   decodeStringSlice(record.CandidateReasonJSON),
 		SourceEvidenceIDs: decodeStringSlice(record.SourceEvidenceIDsJSON),
 	}

@@ -70,6 +70,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		retrieval.WithCodeIndexAdapter(codeIndexAdapter),
 		retrieval.WithDocSnapshotRepository(store),
 		retrieval.WithReviewCheckpointRepository(store),
+		retrieval.WithRawEventRepository(store),
 		retrieval.WithLogger(logger),
 	)
 	// Step 6: 注册 自动化服务（observe 入队、准入管道、remember 准入）

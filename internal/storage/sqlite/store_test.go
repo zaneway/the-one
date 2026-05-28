@@ -26,7 +26,7 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	status := store.Status()
-	wantVersion := 7
+	wantVersion := 8
 	if status.Migrations.CurrentVersion != wantVersion {
 		t.Fatalf("current version = %d, want %d", status.Migrations.CurrentVersion, wantVersion)
 	}
@@ -60,7 +60,7 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 	}
 	for table, columns := range map[string][]string{
 		"async_job":        {"job_type", "target_type", "dedup_key", "payload_json"},
-		"memory_candidate": {"source_evidence_ids_json", "review_checkpoint_json", "admission_decision", "dedup_key"},
+		"memory_candidate": {"source_evidence_ids_json", "review_checkpoint_json", "event_score", "admission_decision", "dedup_key"},
 		"memory_relation":  {"source_id", "target_id", "relation_type", "weight"},
 		"retrieval_trace":  {"retrieval_intent", "retrieval_mode", "used_fts", "used_vector", "used_relation", "used_code_index", "used_doc_index", "candidate_count", "injected_count", "latency_ms", "status"},
 		"memory_access_log": {

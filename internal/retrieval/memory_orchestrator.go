@@ -9,16 +9,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zaneway/theone/internal/capture"
 	"github.com/zaneway/theone/internal/config"
 	"github.com/zaneway/theone/internal/docindex"
 	"github.com/zaneway/theone/internal/idgen"
 	"github.com/zaneway/theone/internal/memory"
+	"github.com/zaneway/theone/internal/scoring"
 )
 
 const (
 	defaultSearchLimit       = 10
 	defaultContextBudget     = 1800
 	defaultRelationLimit     = 20
+	rawEventFallbackMaxItems = 5
 	retrievedAccessEventType = "retrieved"
 	injectedAccessEventType  = "injected"
 )
@@ -88,6 +91,12 @@ type ReviewCheckpointRepository interface {
 	GetReviewCheckpoint(ctx context.Context, memoryID string) (memory.ReviewCheckpoint, bool, error)
 }
 
+// RawEventRepository 定义 raw_event 补充检索所需的最小读取能力。
+// 仅用于命中不足时补充最近窗口内的高信号事件，不替代 memory_item 主检索路径。
+type RawEventRepository interface {
+	ListEvents(ctx context.Context, req capture.ListEventsRequest) ([]capture.RawEvent, error)
+}
+
 // MemoryOrchestrator 是面向 memory.Service 的在线检索编排器。
 // 它复用现有 FTS + metadata repository，补齐 intent、score_breakdown、trace 和 access log；
 // C2 仅启用持久化 relation depth=1 expansion；vector/code/doc 扩展仍不在本阶段执行。
@@ -101,6 +110,7 @@ type MemoryOrchestrator struct {
 	codeIndex      CodeIndexAdapter
 	docRepo        DocSnapshotRepository
 	checkpointRepo ReviewCheckpointRepository
+	rawEventRepo   RawEventRepository
 	logger         *slog.Logger
 }
 
@@ -160,6 +170,14 @@ func WithDocSnapshotRepository(repo DocSnapshotRepository) MemoryOrchestratorOpt
 func WithReviewCheckpointRepository(repo ReviewCheckpointRepository) MemoryOrchestratorOption {
 	return func(o *MemoryOrchestrator) {
 		o.checkpointRepo = repo
+	}
+}
+
+// WithRawEventRepository 注入 raw_event 读取能力。
+// 仅用于 memory.search/context 命中不足时补充最近 5 小时内的高信号事件。
+func WithRawEventRepository(repo RawEventRepository) MemoryOrchestratorOption {
+	return func(o *MemoryOrchestrator) {
+		o.rawEventRepo = repo
 	}
 }
 
@@ -467,6 +485,16 @@ func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequ
 		result.CodeRefs = append([]memory.CodeRef(nil), candidate.CodeRefs...)
 		out = append(out, result)
 	}
+	rawEventFallbackReasons := []string{}
+	if len(out) < req.Limit {
+		rawEventResults, fallbackReason := o.retrieveFromRawEvents(ctx, req, req.Limit-len(out))
+		if len(rawEventResults) > 0 {
+			out = appendMissingResults(out, rawEventResults)
+		}
+		if fallbackReason != "" {
+			rawEventFallbackReasons = append(rawEventFallbackReasons, fallbackReason)
+		}
+	}
 	mode := ModeFTSMetadata
 	if usedRelation {
 		mode = ModeFTSRelation
@@ -480,8 +508,96 @@ func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequ
 		Mode:            mode,
 		UsedRelation:    usedRelation,
 		UsedCodeIndex:   usedCodeIndex,
-		FallbackReasons: appendFallbackReasons(relationFallback, codeFallback...),
+		FallbackReasons: appendFallbackReasons(appendFallbackReasons(relationFallback, codeFallback...), rawEventFallbackReasons...),
 	}, nil
+}
+
+func (o *MemoryOrchestrator) retrieveFromRawEvents(ctx context.Context, req memory.SearchRequest, limit int) ([]memory.SearchResult, string) {
+	if limit <= 0 {
+		return nil, ""
+	}
+	if o.rawEventRepo == nil {
+		return nil, ""
+	}
+	if req.WorkspaceID == "" {
+		return nil, "raw_event_scope_unavailable"
+	}
+	rawEvents, err := o.rawEventRepo.ListEvents(ctx, capture.ListEventsRequest{
+		WorkspaceID: req.WorkspaceID,
+		ProjectID:   req.ProjectID,
+		RepoID:      req.RepoID,
+		SessionID:   req.SessionID,
+		EventTypes: []string{
+			capture.EventUserCorrection,
+			capture.EventUserDeclaration,
+			capture.EventAgentDecision,
+		},
+		Limit: maxInt(rawEventFallbackMaxItems*4, limit*4),
+	})
+	if err != nil {
+		o.logger.Warn("raw_event fallback query failed", "error", err)
+		return nil, "raw_event_query_failed"
+	}
+	now := time.Now()
+	results := make([]memory.SearchResult, 0, limit)
+	for _, event := range rawEvents {
+		if len(results) >= limit {
+			break
+		}
+		if !scoring.WithinRawEventWindow(event.OccurredAt, now, scoring.RawEventPolicy{WindowHours: scoring.DefaultRawEventWindowHours}) {
+			continue
+		}
+		score := scoring.ScoreRawEvent(scoring.RawEventInput{
+			EventType:      event.EventType,
+			OccurredAt:     event.OccurredAt,
+			ContentSummary: event.ContentSummary,
+			InputSummary:   event.InputSummary,
+			OutputSummary:  event.OutputSummary,
+			KeywordsJSON:   event.KeywordsJSON,
+			SourceRefsJSON: event.SourceRefsJSON,
+			Query:          req.Query,
+			Now:            now,
+		})
+		if score <= 0 {
+			continue
+		}
+		results = append(results, memory.SearchResult{
+			MemoryID:   "rawevt:" + event.ID,
+			MemoryType: event.EventType,
+			Scope:      scopedRawEvent(event),
+			Title:      "raw_event fallback",
+			Content:    firstNonEmpty(event.ContentSummary, event.OutputSummary, event.InputSummary),
+			Score:      score,
+			Confidence: score,
+			State:      memory.StateProvisional,
+			Tier:       memory.TierTemporary,
+			WhyIncluded: []string{
+				"raw_event_fallback",
+				"recent_window",
+			},
+			ScoreBreakdown: &memory.ScoreBreakdown{
+				TaskFit: score,
+				Final:   score,
+			},
+		})
+	}
+	if len(results) == 0 {
+		return nil, ""
+	}
+	return results, "raw_event_fallback"
+}
+
+func scopedRawEvent(event capture.RawEvent) string {
+	switch {
+	case event.SessionID != "":
+		return memory.ScopeSession
+	case event.ProjectID != "":
+		return memory.ScopeProjectLocal
+	case event.RepoID != "":
+		return memory.ScopeRepoLocal
+	default:
+		return memory.ScopeUserGlobal
+	}
 }
 
 // contextSearch 执行 Context 专用的多轮检索策略。
@@ -1573,4 +1689,23 @@ func safeRatio(numerator, denominator int) float64 {
 		return 0
 	}
 	return float64(numerator) / float64(denominator)
+}
+
+func clamp(value, min, max float64) float64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

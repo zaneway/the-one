@@ -357,17 +357,17 @@ func (s *Store) WriteCandidate(ctx context.Context, candidate automation.MemoryC
 		id, raw_event_id, evidence_id, provider, memory_type, scope, workspace_id, user_id,
 		project_id, repo_id, session_id, task_id, title, content, keywords_json, entities_json,
 		retrieval_cues_json, tags_json, source_evidence_ids_json, review_checkpoint_json,
-		confidence, importance, encoding_depth, candidate_reason_json, admission_score,
+		confidence, importance, encoding_depth, event_score, candidate_reason_json, admission_score,
 		admission_decision, admission_reason_json, resulting_memory_id, status, dedup_key,
 		created_at, updated_at
-	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		candidate.ID, nullString(candidate.RawEventID), nullString(candidate.EvidenceID), candidate.Provider,
 		candidate.MemoryType, candidate.Scope, nullString(candidate.WorkspaceID), nullString(candidate.UserID),
 		nullString(candidate.ProjectID), nullString(candidate.RepoID), nullString(candidate.SessionID),
 		nullString(candidate.TaskID), nullString(candidate.Title), candidate.Content, nullString(candidate.KeywordsJSON),
 		nullString(candidate.EntitiesJSON), nullString(candidate.RetrievalCuesJSON), nullString(candidate.TagsJSON),
 		nullString(candidate.SourceEvidenceIDsJSON), nullString(candidate.ReviewCheckpointJSON), candidate.Confidence,
-		candidate.Importance, candidate.EncodingDepth, nullString(candidate.CandidateReasonJSON),
+		candidate.Importance, candidate.EncodingDepth, nullableFloat(candidate.EventScore), nullString(candidate.CandidateReasonJSON),
 		nullableFloat(candidate.AdmissionScore), nullString(candidate.AdmissionDecision),
 		nullString(candidate.AdmissionReasonJSON), nullString(candidate.ResultingMemoryID), candidate.Status,
 		nullString(candidate.DedupKey), candidate.CreatedAt.Format(time.RFC3339Nano), candidate.UpdatedAt.Format(time.RFC3339Nano),
@@ -527,7 +527,7 @@ func baseCandidateSelect() string {
 		coalesce(repo_id, ''), coalesce(session_id, ''), coalesce(task_id, ''), coalesce(title, ''),
 		content, coalesce(keywords_json, ''), coalesce(entities_json, ''), coalesce(retrieval_cues_json, ''),
 		coalesce(tags_json, ''), coalesce(source_evidence_ids_json, ''), coalesce(review_checkpoint_json, ''),
-		confidence, importance, encoding_depth, coalesce(candidate_reason_json, ''),
+		confidence, importance, encoding_depth, event_score, coalesce(candidate_reason_json, ''),
 		admission_score, coalesce(admission_decision, ''), coalesce(admission_reason_json, ''),
 		coalesce(resulting_memory_id, ''), status, coalesce(dedup_key, ''), created_at, updated_at
 		from memory_candidate`
@@ -535,6 +535,7 @@ func baseCandidateSelect() string {
 
 func scanCandidate(row rowScanner) (automation.MemoryCandidateRecord, error) {
 	var candidate automation.MemoryCandidateRecord
+	var eventScore sql.NullFloat64
 	var score sql.NullFloat64
 	var createdAt, updatedAt string
 	err := row.Scan(&candidate.ID, &candidate.RawEventID, &candidate.EvidenceID, &candidate.Provider,
@@ -542,11 +543,14 @@ func scanCandidate(row rowScanner) (automation.MemoryCandidateRecord, error) {
 		&candidate.RepoID, &candidate.SessionID, &candidate.TaskID, &candidate.Title, &candidate.Content,
 		&candidate.KeywordsJSON, &candidate.EntitiesJSON, &candidate.RetrievalCuesJSON, &candidate.TagsJSON,
 		&candidate.SourceEvidenceIDsJSON, &candidate.ReviewCheckpointJSON, &candidate.Confidence,
-		&candidate.Importance, &candidate.EncodingDepth, &candidate.CandidateReasonJSON, &score,
+		&candidate.Importance, &candidate.EncodingDepth, &eventScore, &candidate.CandidateReasonJSON, &score,
 		&candidate.AdmissionDecision, &candidate.AdmissionReasonJSON, &candidate.ResultingMemoryID,
 		&candidate.Status, &candidate.DedupKey, &createdAt, &updatedAt)
 	if err != nil {
 		return automation.MemoryCandidateRecord{}, err
+	}
+	if eventScore.Valid {
+		candidate.EventScore = eventScore.Float64
 	}
 	if score.Valid {
 		candidate.AdmissionScore = score.Float64

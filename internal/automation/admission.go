@@ -7,6 +7,7 @@ import (
 
 	"github.com/zaneway/theone/internal/memory"
 	"github.com/zaneway/theone/internal/processor"
+	"github.com/zaneway/theone/internal/scoring"
 )
 
 // ============================================================================
@@ -109,6 +110,7 @@ func (AdmissionController) Decide(input AdmissionInput) AdmissionResult {
 			0.18*features.encodingDepthScore+ // 编码深度（0-4 归一化到 0-1）
 			0.16*features.stability+ // 稳定性（来源数、用户确认、置信度）
 			0.14*features.taskControlSignal+ // 任务控制信号（用户声明的"以后记住"等）
+			0.10*features.rawEventSignal+ // 高信号 raw_event 来源：纠正/声明/决策
 			0.12*features.episodicSemanticValue+ // 语义价值（按记忆类型评分）
 			0.08*features.retrievalTrainability- // 检索可训练性（retrieval_cues 和 keywords 数量）
 			0.16*features.interferenceRisk- // 干扰风险（scope 负载、模糊表述、pending 记忆）
@@ -126,6 +128,7 @@ func (AdmissionController) Decide(input AdmissionInput) AdmissionResult {
 		"feature_encoding_depth", features.encodingDepthScore,
 		"feature_stability", features.stability,
 		"feature_task_control_signal", features.taskControlSignal,
+		"feature_raw_event_signal", features.rawEventSignal,
 		"feature_semantic_value", features.episodicSemanticValue,
 		"feature_retrieval_trainability", features.retrievalTrainability,
 		"feature_interference_risk", features.interferenceRisk,
@@ -175,6 +178,7 @@ type admissionFeatures struct {
 	encodingDepthScore    float64 // 编码深度分：0-4 归一化到 0-1，越高表示加工越深
 	stability             float64 // 稳定性分：来源数、用户确认、置信度的加权和
 	taskControlSignal     float64 // 任务控制信号：用户声明"以后记住"等控制性语言时为 1.0
+	rawEventSignal        float64 // 原始事件高信号权重：user.correction/user.declaration/agent.decision
 	episodicSemanticValue float64 // 语义价值：按记忆类型评分（decision/constraint=0.9，temporary=0.3）
 	retrievalTrainability float64 // 检索可训练性：retrieval_cues 和 keywords 数量的归一化值
 	interferenceRisk      float64 // 干扰风险：scope 负载过高、模糊表述、存在 pending 记忆
@@ -244,12 +248,17 @@ func estimateFeatures(input AdmissionInput) admissionFeatures {
 		encodingDepthScore:    clamp(float64(candidate.EncodingDepth)/4.0, 0, 1),
 		stability:             stability,
 		taskControlSignal:     taskControlSignal(candidate),
+		rawEventSignal:        rawEventSignal(candidate),
 		episodicSemanticValue: semanticValue(candidate.MemoryType),
 		retrievalTrainability: clamp(0.2*float64(len(candidate.RetrievalCues))+0.1*float64(len(candidate.Keywords)), 0, 1),
 		interferenceRisk:      clamp(interference, 0, 1),
 		decayRisk:             decayRisk(candidate),
 		conflictRisk:          clamp(conflict, 0, 1),
 	}
+}
+
+func rawEventSignal(candidate processor.MemoryCandidate) float64 {
+	return scoring.RawEventEntrySignal(candidate.SourceType, candidate.CandidateReason, candidate.EventScore)
 }
 
 // specialDecision 基于记忆类型和来源的硬规则决策，优先于评分决策。

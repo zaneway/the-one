@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/zaneway/theone/internal/capture"
 	"github.com/zaneway/theone/internal/config"
 	"github.com/zaneway/theone/internal/docindex"
 	"github.com/zaneway/theone/internal/memory"
@@ -398,6 +400,62 @@ func TestMemoryOrchestratorContextBuildsDocReviewStrategy(t *testing.T) {
 	}
 }
 
+func TestMemoryOrchestratorSearchFallbackToRawEvents(t *testing.T) {
+	ctx := context.Background()
+	searcher := &fakeMemorySearcher{results: nil}
+	traceRepo := &fakeTraceRepo{}
+	accessRepo := &fakeAccessLogRepo{}
+	rawRepo := &fakeRawEventRepo{events: []capture.RawEvent{
+		{
+			ID:             "evt-correction",
+			EventType:      capture.EventUserCorrection,
+			WorkspaceID:    "ws-1",
+			ProjectID:      "prj-1",
+			ContentSummary: "用户纠正：记忆检索缺少 raw_event 回退，需要增加最近5小时窗口。",
+			KeywordsJSON:   `["raw_event","回退"]`,
+			OccurredAt:     time.Now().Add(-20 * time.Minute),
+		},
+		{
+			ID:             "evt-old",
+			EventType:      capture.EventAgentDecision,
+			WorkspaceID:    "ws-1",
+			ProjectID:      "prj-1",
+			ContentSummary: "过期事件，不应被召回。",
+			OccurredAt:     time.Now().Add(-6 * time.Hour),
+		},
+	}}
+	orchestrator := NewMemoryOrchestrator(config.Default(), searcher,
+		WithTraceRepository(traceRepo),
+		WithAccessLogRepository(accessRepo),
+		WithRelationRepository(&fakeRelationRepo{}),
+		WithRawEventRepository(rawRepo),
+		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+	)
+
+	resp, err := orchestrator.Search(ctx, memory.SearchRequest{
+		Query:       "raw_event 回退",
+		WorkspaceID: "ws-1",
+		ProjectID:   "prj-1",
+		Scope:       []string{memory.ScopeProjectLocal},
+		Limit:       5,
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("results len = %d, want 1 fallback raw_event", len(resp.Results))
+	}
+	if resp.Results[0].MemoryID != "rawevt:evt-correction" {
+		t.Fatalf("fallback memory id = %q, want rawevt:evt-correction", resp.Results[0].MemoryID)
+	}
+	if resp.Results[0].Score <= 0.9 {
+		t.Fatalf("fallback score = %f, want > 0.9", resp.Results[0].Score)
+	}
+	if !containsString(resp.Diagnostics.FallbackReasons, "raw_event_fallback") {
+		t.Fatalf("fallback reasons = %+v, want raw_event_fallback", resp.Diagnostics.FallbackReasons)
+	}
+}
+
 func newTestOrchestrator(searcher *fakeMemorySearcher, traceRepo *fakeTraceRepo, accessRepo *fakeAccessLogRepo) *MemoryOrchestrator {
 	return NewMemoryOrchestrator(config.Default(), searcher,
 		WithTraceRepository(traceRepo),
@@ -525,6 +583,14 @@ func (f *fakeDocSnapshotRepo) ListDocSnapshots(ctx context.Context, query docind
 
 type fakeReviewCheckpointRepo struct {
 	checkpoints map[string]memory.ReviewCheckpoint
+}
+
+type fakeRawEventRepo struct {
+	events []capture.RawEvent
+}
+
+func (f *fakeRawEventRepo) ListEvents(ctx context.Context, req capture.ListEventsRequest) ([]capture.RawEvent, error) {
+	return append([]capture.RawEvent(nil), f.events...), nil
 }
 
 func (f *fakeReviewCheckpointRepo) GetReviewCheckpoint(ctx context.Context, memoryID string) (memory.ReviewCheckpoint, bool, error) {

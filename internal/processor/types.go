@@ -86,6 +86,7 @@ type MemoryCandidate struct {
 	Confidence        float64
 	Importance        float64
 	EncodingDepth     int
+	EventScore        float64
 	ReviewCheckpoint  *ReviewCheckpointDraft
 	CandidateReason   []string
 	SourceEvidenceIDs []string
