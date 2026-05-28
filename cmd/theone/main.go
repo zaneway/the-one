@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/zaneway/theone/internal/adapter"
 	"github.com/zaneway/theone/internal/app"
 	"github.com/zaneway/theone/internal/config"
 )
@@ -31,6 +33,9 @@ func main() {
 //	serve  - 解析配置、初始化运行时依赖（SQLite + migration + MCP Registry + Worker）、启动 MCP stdio 服务
 //	health - 复用运行时调用 memory.health 工具，验证存储层可用性
 //	status - 复用运行时调用 memory.status 工具，返回 capability 和配置摘要
+//	observe - 从 stdin 读取 JSON 并调用 memory.observe（供 Hook/脚本本地写入入口复用）
+//	observe-turn - 从 stdin 读取 Turn payload，聚合后批量写入 memory.observe
+//	observe-envelope - 从 stdin 读取 IngestEnvelope，面向 wrapper/log collector 接入
 func run(args []string) error {
 	if len(args) == 0 {
 		args = []string{"serve"}
@@ -70,8 +75,65 @@ func run(args []string) error {
 		return callLocalTool(context.Background(), cfg, "memory.status", map[string]any{
 			"include_config": includeConfig,
 		})
+	case "observe":
+		cfg, err := parseConfig(args[1:], false)
+		if err != nil {
+			return err
+		}
+		params, err := decodeJSONParams(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("decode observe params: %w", err)
+		}
+		return callLocalTool(context.Background(), cfg, "memory.observe", params)
+	case "observe-turn":
+		cfg, err := parseConfig(args[1:], false)
+		if err != nil {
+			return err
+		}
+		payload, err := decodeTurnPayload(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("decode observe-turn payload: %w", err)
+		}
+		stateStore := adapter.NewFileStateStore(runtimeStateDir(cfg))
+		runtime := adapter.NewTurnRuntime(stateStore)
+		requests, err := runtime.BuildObserveRequests(payload)
+		if err != nil {
+			return err
+		}
+		anyRequests := make([]any, 0, len(requests))
+		for _, req := range requests {
+			anyRequests = append(anyRequests, req)
+		}
+		return callLocalObserveBatch(context.Background(), cfg, anyRequests, payload.SessionID, payload.TaskID)
+	case "observe-envelope":
+		cfg, err := parseConfig(args[1:], false)
+		if err != nil {
+			return err
+		}
+		envelope, err := decodeIngestEnvelope(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("decode observe-envelope payload: %w", err)
+		}
+		if err := adapter.ValidateIngestEnvelope(envelope); err != nil {
+			return err
+		}
+		payload, err := adapter.TurnPayloadFromEnvelope(envelope)
+		if err != nil {
+			return err
+		}
+		stateStore := adapter.NewFileStateStore(runtimeStateDir(cfg))
+		runtime := adapter.NewTurnRuntime(stateStore)
+		requests, err := runtime.BuildObserveRequests(payload)
+		if err != nil {
+			return err
+		}
+		anyRequests := make([]any, 0, len(requests))
+		for _, req := range requests {
+			anyRequests = append(anyRequests, req)
+		}
+		return callLocalObserveBatch(context.Background(), cfg, anyRequests, envelope.SessionID, payload.TaskID)
 	default:
-		return fmt.Errorf("unknown command %q: expected serve, health, or status", args[0])
+		return fmt.Errorf("unknown command %q: expected serve, health, status, observe, observe-turn, or observe-envelope", args[0])
 	}
 }
 
@@ -161,4 +223,85 @@ func callLocalTool(ctx context.Context, cfg config.Config, tool string, params m
 		return err
 	}
 	return nil
+}
+
+func decodeJSONParams(input io.Reader) (map[string]any, error) {
+	decoder := json.NewDecoder(input)
+	decoder.UseNumber()
+	var params map[string]any
+	if err := decoder.Decode(&params); err != nil {
+		if err == io.EOF {
+			return nil, fmt.Errorf("stdin is empty, expected JSON object")
+		}
+		return nil, err
+	}
+	if len(params) == 0 {
+		return nil, fmt.Errorf("params object is empty")
+	}
+	return params, nil
+}
+
+func decodeTurnPayload(input io.Reader) (adapter.TurnPayload, error) {
+	decoder := json.NewDecoder(input)
+	decoder.UseNumber()
+	var payload adapter.TurnPayload
+	if err := decoder.Decode(&payload); err != nil {
+		if err == io.EOF {
+			return adapter.TurnPayload{}, fmt.Errorf("stdin is empty, expected JSON object")
+		}
+		return adapter.TurnPayload{}, err
+	}
+	return payload, nil
+}
+
+func decodeIngestEnvelope(input io.Reader) (adapter.IngestEnvelope, error) {
+	decoder := json.NewDecoder(input)
+	decoder.UseNumber()
+	var envelope adapter.IngestEnvelope
+	if err := decoder.Decode(&envelope); err != nil {
+		if err == io.EOF {
+			return adapter.IngestEnvelope{}, fmt.Errorf("stdin is empty, expected JSON object")
+		}
+		return adapter.IngestEnvelope{}, err
+	}
+	return envelope, nil
+}
+
+func runtimeStateDir(cfg config.Config) string {
+	return filepath.Join(filepath.Dir(cfg.Storage.Path), "runtime-state")
+}
+
+func callLocalObserveBatch(ctx context.Context, cfg config.Config, requests []any, sessionID, taskID string) error {
+	runtime, err := app.New(ctx, cfg, version)
+	if err != nil {
+		return err
+	}
+	defer runtime.Close()
+
+	results := make([]any, 0, len(requests))
+	failures := make([]adapter.FailureRecord, 0, 1)
+	queue := adapter.NewFailureQueue(runtimeStateDir(cfg))
+	for _, req := range requests {
+		result, toolErr := runtime.CallTool(ctx, "memory.observe", req)
+		if toolErr != nil {
+			record := adapter.FailureRecord{
+				ErrorCode:    toolErr.ErrorCode,
+				ErrorSummary: toolErr.Message,
+				SessionID:    sessionID,
+				TaskID:       taskID,
+			}
+			failures = append(failures, record)
+			_ = queue.Append(record)
+			continue
+		}
+		results = append(results, result)
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(map[string]any{
+		"count":         len(results),
+		"results":       results,
+		"failure_count": len(failures),
+		"failures":      failures,
+	})
 }
