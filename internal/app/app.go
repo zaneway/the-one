@@ -72,14 +72,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		retrieval.WithReviewCheckpointRepository(store),
 		retrieval.WithLogger(logger),
 	)
+	// Step 6: 注册 自动化服务（observe 入队、准入管道、remember 准入）
+	automationService := automation.NewService(cfg, store, processor.NewRuleBasedProvider())
 	memoryService := memory.NewService(cfg, store,
 		memory.WithRetrievalOrchestrator(retrievalOrchestrator),
 		memory.WithAccessFeedbackWriter(store),
+		memory.WithRememberAdmissionDecider(automationService),
 	)
 	tools.RegisterMemoryTools(registry, memoryService, logger)
-	// Step 6: 注册 P3 自动化工具（memory.jobs.* / memory.candidates.* / memory.automation.status）
-	// automationService 依赖 store 和 rule-based provider（从事件中提取证据的规则引擎）
-	automationService := automation.NewService(cfg, store, processor.NewRuleBasedProvider())
 	tools.RegisterAutomationTools(registry, automationService, logger)
 	// Step 7: 注册 P5-A MVP 验收模型工具（run.start / task.record）
 	mvpService := mvp.NewService(store)
@@ -120,7 +120,7 @@ func (a *App) Serve(ctx context.Context) error {
 		return fmt.Errorf("unsupported mcp addr %q", a.cfg.Server.MCPAddr)
 	}
 	// 可选启动自动化 Worker：独立 goroutine 运行，通过 context 取消实现优雅关闭
-	if a.cfg.Automation.WorkerEnabled && a.worker != nil {
+	if a.worker != nil {
 		go func() {
 			if err := a.worker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				a.logger.Error("automation worker stopped", "error", err)

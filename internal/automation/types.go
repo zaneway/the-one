@@ -256,9 +256,7 @@ type ReconcileResponse struct {
 }
 
 type AutomationStatusResponse struct {
-	WorkerEnabled          bool   `json:"worker_enabled"`
 	Provider               string `json:"provider"`
-	EnableAutoProcessing   bool   `json:"enable_auto_processing"`
 	PendingJobs            int    `json:"pending_jobs"`
 	RunningJobs            int    `json:"running_jobs"`
 	FailedJobs             int    `json:"failed_jobs"`

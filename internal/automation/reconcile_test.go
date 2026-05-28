@@ -118,28 +118,3 @@ func TestServiceReconcileEnqueuesExtractJobsWhenNotDryRun(t *testing.T) {
 		t.Fatalf("jobs = %+v, want extract_evidence for orphan raw_event", jobs)
 	}
 }
-
-func TestServiceReconcileReturnsProviderDisabledWithoutError(t *testing.T) {
-	ctx := context.Background()
-	cfg := config.Default()
-	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
-	cfg.Processor.Provider = "none"
-	store, err := sqlite.Open(ctx, cfg.Storage, slog.New(slog.DiscardHandler))
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	defer store.Close()
-
-	service := automation.NewService(cfg, store, processor.NewRuleBasedProvider())
-	resp, err := service.Reconcile(ctx, automation.ReconcileRequest{
-		WorkspaceID: "ws",
-		Mode:        automation.ReconcileModeOrphanRawEvent,
-		DryRun:      true,
-	})
-	if err != nil {
-		t.Fatalf("Reconcile() error = %v", err)
-	}
-	if len(resp.Diagnostics) != 1 || resp.Diagnostics[0] != "provider_disabled" {
-		t.Fatalf("diagnostics = %+v, want provider_disabled", resp.Diagnostics)
-	}
-}

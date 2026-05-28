@@ -2,6 +2,7 @@ package automation
 
 import (
 	"encoding/json"
+	"log/slog"
 	"strings"
 
 	"github.com/zaneway/theone/internal/memory"
@@ -79,11 +80,22 @@ func NewAdmissionController() AdmissionController {
 func (AdmissionController) Decide(input AdmissionInput) AdmissionResult {
 	candidate := input.Candidate
 	reasons := reasonSet{}
+	logger := slog.Default()
 	// Step 1: scope 合法性校验——无效 scope 直接丢弃
 	scopeValid := validateCandidateScope(candidate)
 	if !scopeValid {
 		reasons.add("scope_invalid")
-		return result(candidate, DecisionDrop, 0, "", "", false, false, reasons, false, false, 0, 0, 0)
+		res := result(candidate, DecisionDrop, 0, "", "", false, false, reasons, false, false, 0, 0, 0)
+		logger.Info("admission decided",
+			"decision_source", "scope_validation",
+			"decision", res.Decision,
+			"admission_score", res.AdmissionScore,
+			"memory_type", candidate.MemoryType,
+			"scope", candidate.Scope,
+			"write_memory_item", writesToMemoryItem(res.Decision),
+			"reason_codes", res.ReasonCodes,
+		)
+		return res
 	}
 	// Step 2: 收集维度标记（scope 类型、candidate 来源等）
 	addScopeReasons(candidate, &reasons)
@@ -105,6 +117,21 @@ func (AdmissionController) Decide(input AdmissionInput) AdmissionResult {
 		0,
 		1,
 	)
+	logger.Info("admission score computed",
+		"memory_type", candidate.MemoryType,
+		"scope", candidate.Scope,
+		"admission_score", score,
+		"score_band", admissionScoreBand(score),
+		"feature_future_need", features.futureNeed,
+		"feature_encoding_depth", features.encodingDepthScore,
+		"feature_stability", features.stability,
+		"feature_task_control_signal", features.taskControlSignal,
+		"feature_semantic_value", features.episodicSemanticValue,
+		"feature_retrieval_trainability", features.retrievalTrainability,
+		"feature_interference_risk", features.interferenceRisk,
+		"feature_decay_risk", features.decayRisk,
+		"feature_conflict_risk", features.conflictRisk,
+	)
 
 	// Step 5: 冲突检测和高影响标记
 	if features.conflictRisk > 0 {
@@ -117,10 +144,27 @@ func (AdmissionController) Decide(input AdmissionInput) AdmissionResult {
 
 	// Step 6: 决策——先尝试特殊决策（按记忆类型和来源的硬规则），未命中时按评分区间决策
 	decision, state, tier, requiresReview, userConfirmed := specialDecision(candidate, highImpact, &reasons)
+	decisionSource := "special_decision"
 	if decision == "" {
+		decisionSource = "score_decision"
 		decision, state, tier, requiresReview, userConfirmed = scoreDecision(candidate, score, &reasons)
 	}
-	return result(candidate, decision, score, state, tier, requiresReview, userConfirmed, reasons, scopeValid, highImpact, features.conflictRisk, features.interferenceRisk, features.decayRisk)
+	res := result(candidate, decision, score, state, tier, requiresReview, userConfirmed, reasons, scopeValid, highImpact, features.conflictRisk, features.interferenceRisk, features.decayRisk)
+	logger.Info("admission decided",
+		"decision_source", decisionSource,
+		"decision", res.Decision,
+		"admission_score", res.AdmissionScore,
+		"score_band", admissionScoreBand(res.AdmissionScore),
+		"memory_type", res.MemoryType,
+		"scope", res.Scope,
+		"initial_state", res.InitialState,
+		"initial_tier", res.InitialTier,
+		"write_memory_item", writesToMemoryItem(res.Decision),
+		"requires_review", res.RequiresReview,
+		"user_confirmed", res.UserConfirmed,
+		"reason_codes", res.ReasonCodes,
+	)
+	return res
 }
 
 // admissionFeatures 准入特征向量，9 维特征用于加权评分。
@@ -223,10 +267,10 @@ func estimateFeatures(input AdmissionInput) admissionFeatures {
 // 返回值：decision, initialState, initialTier, requiresReview, userConfirmed
 // 返回空 decision 表示未命中特殊规则，由 scoreDecision 接管。
 func specialDecision(candidate processor.MemoryCandidate, highImpact bool, reasons *reasonSet) (string, string, string, bool, bool) {
-	// 普通工具成功输出直接丢弃，不进入长期记忆
+	// 普通工具成功输出不再直接丢弃，交由评分区间统一决策并记录原因码。
 	if hasReason(candidate, "ordinary_success_output") {
 		reasons.add("ordinary_success_output")
-		return DecisionDrop, "", "", false, false
+		return "", "", "", false, false
 	}
 	// 用户纠正直接写入 stable，旧记忆会被 supersede 或 archived
 	if candidate.SourceType == "user_confirmed" || hasReason(candidate, "user_correction") {
@@ -292,30 +336,119 @@ func specialDecision(candidate processor.MemoryCandidate, highImpact bool, reaso
 //   - 0.70 ~ 0.85: 用户声明偏好 → stable + durable，其他 → pending_review
 //   - >= 0.85: 用户声明 → stable，其他 → stable + long_term
 func scoreDecision(candidate processor.MemoryCandidate, score float64, reasons *reasonSet) (string, string, string, bool, bool) {
+	logger := slog.Default()
 	switch {
 	case score < 0.30:
 		reasons.add("candidate_dropped_by_score")
+		logger.Info("admission score band decision",
+			"score_band", "<0.30",
+			"admission_score", score,
+			"decision", DecisionDrop,
+			"write_memory_item", false,
+			"memory_type", candidate.MemoryType,
+			"scope", candidate.Scope,
+		)
 		return DecisionDrop, "", "", false, false
 	case score < 0.50:
 		if candidate.Scope == memory.ScopeSession {
 			reasons.add("session_only_state")
+			logger.Info("admission score band decision",
+				"score_band", "0.30-0.50",
+				"admission_score", score,
+				"decision", DecisionWriteTemporary,
+				"write_memory_item", true,
+				"memory_type", candidate.MemoryType,
+				"scope", candidate.Scope,
+			)
 			return DecisionWriteTemporary, memory.StateProvisional, memory.TierTemporary, false, false
 		}
+		logger.Info("admission score band decision",
+			"score_band", "0.30-0.50",
+			"admission_score", score,
+			"decision", DecisionWriteRawOnly,
+			"write_memory_item", false,
+			"memory_type", candidate.MemoryType,
+			"scope", candidate.Scope,
+		)
 		return DecisionWriteRawOnly, "", "", false, false
 	case score < 0.70:
+		logger.Info("admission score band decision",
+			"score_band", "0.50-0.70",
+			"admission_score", score,
+			"decision", DecisionWriteProvisional,
+			"write_memory_item", true,
+			"memory_type", candidate.MemoryType,
+			"scope", candidate.Scope,
+		)
 		return DecisionWriteProvisional, memory.StateProvisional, memory.TierShortTerm, false, false
 	case score < 0.85:
 		if candidate.SourceType == "user_declared" && candidate.MemoryType == memory.TypePreference {
 			reasons.add("user_declared")
+			logger.Info("admission score band decision",
+				"score_band", "0.70-0.85",
+				"admission_score", score,
+				"decision", DecisionWriteStable,
+				"write_memory_item", true,
+				"memory_type", candidate.MemoryType,
+				"scope", candidate.Scope,
+			)
 			return DecisionWriteStable, memory.StateStable, memory.TierDurable, false, true
 		}
+		logger.Info("admission score band decision",
+			"score_band", "0.70-0.85",
+			"admission_score", score,
+			"decision", DecisionWritePendingReview,
+			"write_memory_item", true,
+			"memory_type", candidate.MemoryType,
+			"scope", candidate.Scope,
+		)
 		return DecisionWritePendingReview, memory.StatePendingReview, memory.TierLongTerm, true, false
 	default:
 		if candidate.SourceType == "user_declared" {
 			reasons.add("user_declared")
+			logger.Info("admission score band decision",
+				"score_band", ">=0.85",
+				"admission_score", score,
+				"decision", DecisionWriteStable,
+				"write_memory_item", true,
+				"memory_type", candidate.MemoryType,
+				"scope", candidate.Scope,
+			)
 			return DecisionWriteStable, memory.StateStable, tierForStable(candidate, false), false, true
 		}
+		logger.Info("admission score band decision",
+			"score_band", ">=0.85",
+			"admission_score", score,
+			"decision", DecisionWriteStable,
+			"write_memory_item", true,
+			"memory_type", candidate.MemoryType,
+			"scope", candidate.Scope,
+		)
 		return DecisionWriteStable, memory.StateStable, memory.TierLongTerm, false, false
+	}
+}
+
+func admissionScoreBand(score float64) string {
+	switch {
+	case score < 0.30:
+		return "<0.30"
+	case score < 0.50:
+		return "0.30-0.50"
+	case score < 0.70:
+		return "0.50-0.70"
+	case score < 0.85:
+		return "0.70-0.85"
+	default:
+		return ">=0.85"
+	}
+}
+
+func writesToMemoryItem(decision string) bool {
+	switch decision {
+	case DecisionWriteTemporary, DecisionWriteProvisional, DecisionWritePendingReview, DecisionWriteStable:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -85,15 +85,13 @@ func (s *Service) Status(ctx context.Context) (AutomationStatusResponse, error) 
 		return AutomationStatusResponse{}, err
 	}
 	resp := AutomationStatusResponse{
-		WorkerEnabled:        s.cfg.Automation.WorkerEnabled,
-		Provider:             s.cfg.Processor.Provider,
-		EnableAutoProcessing: s.cfg.Processor.EnableAutoProcessing,
-		PendingJobs:          len(pending),
-		RunningJobs:          len(running),
-		FailedJobs:           len(failed),
-		RetentionJobEnabled:  s.cfg.Retention.JobEnabled,
-		TemporaryTTLDays:     s.cfg.Retention.TemporaryTTLDays,
-		ShortTermTTLDays:     s.cfg.Retention.ShortTermTTLDays,
+		Provider:            s.cfg.Processor.Provider,
+		PendingJobs:         len(pending),
+		RunningJobs:         len(running),
+		FailedJobs:          len(failed),
+		RetentionJobEnabled: s.cfg.Retention.JobEnabled,
+		TemporaryTTLDays:    s.cfg.Retention.TemporaryTTLDays,
+		ShortTermTTLDays:    s.cfg.Retention.ShortTermTTLDays,
 	}
 	if len(recent) > 0 {
 		resp.RecentJobUpdatedAt = recent[0].UpdatedAt.Format(time.RFC3339Nano)

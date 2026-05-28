@@ -119,7 +119,7 @@ func TestAppRegistersAutomationDiagnosticsTools(t *testing.T) {
 		t.Fatalf("memory.automation.status error = %v", toolErr)
 	}
 	status := rawStatus.(automation.AutomationStatusResponse)
-	if !status.WorkerEnabled || status.Provider != "rule_based" || status.PendingJobs < 1 {
+	if status.Provider != "rule_based" || status.PendingJobs < 1 {
 		t.Fatalf("status response = %#v, want enabled rule_based with pending job", rawStatus)
 	}
 }

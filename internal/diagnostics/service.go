@@ -190,10 +190,8 @@ func (s *Service) StatusTool(_ context.Context, raw json.RawMessage) (any, *mcp.
 	if req.IncludeConfig {
 		response.Config = map[string]any{
 			"processor_provider":                 s.cfg.Processor.Provider,
-			"processor_enable_auto_processing":   s.cfg.Processor.EnableAutoProcessing,
 			"processor_max_related_events":       s.cfg.Processor.MaxRelatedEvents,
 			"processor_max_candidates_per_event": s.cfg.Processor.MaxCandidatesPerEvent,
-			"automation_worker_enabled":          s.cfg.Automation.WorkerEnabled,
 			"automation_poll_interval_ms":        s.cfg.Automation.PollIntervalMS,
 			"automation_batch_size":              s.cfg.Automation.BatchSize,
 			"automation_max_attempts":            s.cfg.Automation.MaxAttempts,

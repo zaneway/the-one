@@ -60,10 +60,11 @@ type Repository interface {
 // Service 记忆服务结构体
 // 编排 P1 手动记忆写入、检索、上下文构建和 review 流转
 type Service struct {
-	cfg            config.Config         // 配置信息
-	repo           Repository            // 仓库接口，负责持久化
-	orchestrator   RetrievalOrchestrator // P4 检索编排器；为空时保持 P1 FTS 路径
-	accessFeedback AccessFeedbackWriter  // P0 质量闭环：review 等写入 access log
+	cfg               config.Config            // 配置信息
+	repo              Repository               // 仓库接口，负责持久化
+	orchestrator      RetrievalOrchestrator    // P4 检索编排器；为空时保持 P1 FTS 路径
+	accessFeedback    AccessFeedbackWriter     // P0 质量闭环：review 等写入 access log
+	rememberAdmission RememberAdmissionDecider // 显式 remember 准入；运行时必须注入
 }
 
 // RetrievalOrchestrator 定义 memory.Service 可选接入的 P4 检索编排接口。
@@ -95,6 +96,13 @@ func WithAccessFeedbackWriter(writer AccessFeedbackWriter) ServiceOption {
 	}
 }
 
+// WithRememberAdmissionDecider 注入 remember 准入决策器（与 P3 compute_admission 同一规则集）。
+func WithRememberAdmissionDecider(decider RememberAdmissionDecider) ServiceOption {
+	return func(s *Service) {
+		s.rememberAdmission = decider
+	}
+}
+
 // NewService 创建 Memory 服务。
 // 默认只启用 P1 FTS + metadata 检索路径；通过 WithRetrievalOrchestrator 可接入 P4 检索编排器。
 func NewService(cfg config.Config, repo Repository, opts ...ServiceOption) *Service {
@@ -107,15 +115,15 @@ func NewService(cfg config.Config, repo Repository, opts ...ServiceOption) *Serv
 	return service
 }
 
-// Remember 实现 P1 显式写入闭环。
-// 完整流程：归一化 -> 内容边界检查 -> 确定默认状态/层级 -> 幂等检测 -> 构建 memory/evidence/checkpoint -> 事务写入。
-// 状态决策规则：
-//   - user_declared 的 preference/constraint/decision -> stable + durable（用户声明直接信任）
-//   - review_checkpoint -> stable + durable（设计复查结论直接写入）
-//   - 其他 -> pending_review + short_term（需要用户确认）
+// Remember 实现显式写入闭环。
+// 完整流程：归一化 -> 内容边界检查 -> 幂等检测 -> 准入决策 -> 构建 memory/evidence/checkpoint -> 事务写入。
+// 准入：必须经过 RememberAdmissionDecider（与 P3 AdmissionController 同一规则），未通过则拒绝持久化。
 //
 // 幂等检测：按 scope + type + content + 所有隔离 ID 匹配，命中则返回已有记忆。
 func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberResponse, error) {
+	if s.rememberAdmission == nil {
+		return RememberResponse{}, fmt.Errorf("ADMISSION_REQUIRED: remember admission decider is not configured")
+	}
 	// Step 1: 归一化请求参数，填充默认值（user_id、workspace_id、source_type、confidence、importance）
 	if err := NormalizeRemember(s.cfg.Memory, &req); err != nil {
 		return RememberResponse{}, err
@@ -143,8 +151,6 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 	if req.MemoryType == TypeReviewCheckpoint && req.ReviewCheckpoint == nil {
 		return RememberResponse{}, fmt.Errorf("VALIDATION_FAILED: review_checkpoint is required")
 	}
-	// Step 4: 根据记忆类型和来源类型确定默认状态和层级
-	state, tier := defaultStateAndTier(req)
 	probe := MemoryItem{
 		Scope:       req.Scope,
 		WorkspaceID: req.WorkspaceID,
@@ -163,6 +169,15 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 		// 命中重复记忆，直接返回已有记忆的 ID 和状态，不重复写入
 		return RememberResponse{MemoryID: existing.ID, State: existing.State, Tier: existing.Tier, Deduped: true}, nil
 	}
+	admission, err := s.rememberAdmission.DecideRemember(ctx, req)
+	if err != nil {
+		return RememberResponse{}, err
+	}
+	if !admission.Allowed {
+		return RememberResponse{}, fmt.Errorf("ADMISSION_REJECTED: decision=%s reasons=%v", admission.Decision, admission.ReasonCodes)
+	}
+	state := admission.InitialState
+	tier := admission.InitialTier
 	// Step 6: 生成 memory_id 和 evidence_id（随机 ID，避免本地并发写入时时间序列冲突）
 	memoryID, err := idgen.New("mem")
 	if err != nil {
@@ -236,14 +251,14 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 		State:             state,
 		Confidence:        req.Confidence,
 		Importance:        req.Importance,
-		EncodingDepth:     2,                                // 语义摘要级别（0=原始指针, 1=表层摘要, 2=语义摘要, 3=实体关系, 4=策略抽象）
-		DecayRate:         defaultDecayRate(req.MemoryType), // 按记忆类型设置衰减率（decision=0.3慢衰减, temporary_state=1.2快衰减）
-		RetentionScore:    0,
+		EncodingDepth:     2, // 语义摘要级别（0=原始指针, 1=表层摘要, 2=语义摘要, 3=实体关系, 4=策略抽象）
+		DecayRate:         firstPositiveFloat(admission.DecayRate, defaultDecayRate(req.MemoryType)),
+		RetentionScore:    admission.RetentionScore,
 		Tier:              tier,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 		Pinned:            req.Pinned,
-		UserConfirmed:     req.SourceType == "user_declared" && state == StateStable, // 用户声明且直接 stable 的记忆标记为已确认
+		UserConfirmed:     admission.UserConfirmed,
 		Version:           1,
 	}
 	// Step 10: 构建 evidence 对象，interpreted_statement 为空时降级为 content
@@ -704,6 +719,13 @@ func sourceQuality(sourceType string) float64 {
 // - failure/procedure: 0.45（失败经验和流程，衰减中等）
 // - temporary_state: 1.2（临时状态，衰减快）
 // - 其他: 0.8（默认值）
+func firstPositiveFloat(value, fallback float64) float64 {
+	if value > 0 {
+		return value
+	}
+	return fallback
+}
+
 func defaultDecayRate(memoryType string) float64 {
 	switch memoryType {
 	case TypeDecision, TypeConstraint, TypePreference:

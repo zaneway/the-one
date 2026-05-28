@@ -319,15 +319,10 @@ type RetentionConfig struct {
 }
 
 // ProcessorConfig 自动记忆处理器配置结构体
-// 控制 P3 使用哪个 Provider，以及 observe 后是否自动入队处理
+// 控制 rule_based 抽取的近邻事件与候选数量上限
 type ProcessorConfig struct {
-	// Provider 处理器提供者
-	// P3 默认 rule_based；none 表示只保存 raw_event，不生成 evidence/candidate
+	// Provider 处理器提供者，仅支持 rule_based（observe 后必入队并由准入规则决定是否持久化）
 	Provider string `yaml:"provider" json:"provider"`
-
-	// EnableAutoProcessing 是否启用自动处理
-	// false 时 memory.observe 只写 raw_event，不 enqueue extract_evidence
-	EnableAutoProcessing bool `yaml:"enable_auto_processing" json:"enable_auto_processing"`
 
 	// MaxRelatedEvents Provider 抽取时读取的近邻事件上限
 	MaxRelatedEvents int `yaml:"max_related_events" json:"max_related_events"`
@@ -337,12 +332,8 @@ type ProcessorConfig struct {
 }
 
 // AutomationConfig 自动处理配置结构体
-// 控制 P3 本地 worker 是否启动，以及每轮领取任务和失败重试策略
+// 控制 本地 worker 轮询间隔、批大小与失败重试策略（serve 模式始终启动 worker）
 type AutomationConfig struct {
-	// WorkerEnabled 是否启用本地异步 worker
-	// 默认true，serve模式下由后续 app 集成决定是否启动
-	WorkerEnabled bool `yaml:"worker_enabled" json:"worker_enabled"`
-
 	// PollIntervalMS 空轮询间隔（毫秒）
 	// pending job 为空时 worker 的等待时间，默认1000ms
 	PollIntervalMS int `yaml:"poll_interval_ms" json:"poll_interval_ms"`
@@ -473,12 +464,10 @@ func Default() Config {
 		},
 		Processor: ProcessorConfig{
 			Provider:              "rule_based",
-			EnableAutoProcessing:  true,
 			MaxRelatedEvents:      20,
 			MaxCandidatesPerEvent: 3,
 		},
 		Automation: AutomationConfig{
-			WorkerEnabled:    true,
 			PollIntervalMS:   1000,
 			BatchSize:        10,
 			MaxAttempts:      3,
@@ -562,6 +551,9 @@ func validate(cfg Config) error {
 	}
 	if strings.TrimSpace(cfg.Processor.Provider) == "" || cfg.Processor.MaxRelatedEvents <= 0 || cfg.Processor.MaxCandidatesPerEvent <= 0 {
 		return errors.New("CONFIG_INVALID: processor config values must be positive and provider is required")
+	}
+	if cfg.Processor.Provider != "rule_based" {
+		return fmt.Errorf("CONFIG_INVALID: unsupported processor provider %q, only rule_based is allowed", cfg.Processor.Provider)
 	}
 	if cfg.Retrieval.DefaultLimit <= 0 || cfg.Retrieval.DefaultTokenBudget <= 0 || cfg.Retrieval.OnlineTimeoutMS <= 0 ||
 		cfg.Retrieval.MaxRelationExpansion <= 0 || cfg.Retrieval.MaxCandidatesBeforeRerank <= 0 {

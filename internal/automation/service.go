@@ -97,13 +97,9 @@ func NewService(cfg config.Config, repo Repository, provider processor.Provider)
 
 // EnqueueRawEvent 为 raw_event 创建 evidence 抽取任务。
 // P3 入口：capture service 在 raw_event 写入成功后调用此方法，触发自动记忆处理管道。
-// 设计约束：enable_auto_processing=false 或 provider=none 时直接返回，不入队。
 func (s *Service) EnqueueRawEvent(ctx context.Context, rawEvent capture.RawEvent) error {
 	if rawEvent.ID == "" {
 		return fmt.Errorf("VALIDATION_FAILED: raw_event id is required")
-	}
-	if !s.cfg.Processor.EnableAutoProcessing || s.cfg.Processor.Provider == "none" {
-		return nil
 	}
 	jobID, err := idgen.New("job")
 	if err != nil {

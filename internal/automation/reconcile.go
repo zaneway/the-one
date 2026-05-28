@@ -26,10 +26,6 @@ func (s *Service) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcil
 		DryRun: req.DryRun,
 		Items:  []ReconcileItem{},
 	}
-	if !s.cfg.Processor.EnableAutoProcessing || s.cfg.Processor.Provider == "none" {
-		resp.Diagnostics = []string{"provider_disabled"}
-		return resp, nil
-	}
 	limit, diagnostics := normalizeDiagnosticsLimit(req.Limit)
 	orphans, err := s.repo.ListOrphanRawEvents(ctx, OrphanRawEventRequest{
 		WorkspaceID: req.WorkspaceID,

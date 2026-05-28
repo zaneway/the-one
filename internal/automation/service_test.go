@@ -438,54 +438,6 @@ func TestServiceSkipsOrdinaryToolSuccessWithoutCandidate(t *testing.T) {
 	}
 }
 
-func TestServiceSkipsEnqueueWhenProcessorDisabled(t *testing.T) {
-	ctx := context.Background()
-	cfg := config.Default()
-	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
-	cfg.Processor.EnableAutoProcessing = false
-	store, err := sqlite.Open(ctx, cfg.Storage, slog.New(slog.DiscardHandler))
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	defer store.Close()
-
-	service := automation.NewService(cfg, store, processor.NewRuleBasedProvider())
-	if err := service.EnqueueRawEvent(ctx, capture.RawEvent{ID: "evt_disabled"}); err != nil {
-		t.Fatalf("EnqueueRawEvent() error = %v", err)
-	}
-	jobs, err := store.ListJobs(ctx, automation.ListJobsRequest{})
-	if err != nil {
-		t.Fatalf("ListJobs() error = %v", err)
-	}
-	if len(jobs) != 0 {
-		t.Fatalf("jobs = %+v, want none when auto processing disabled", jobs)
-	}
-}
-
-func TestServiceSkipsEnqueueWhenProviderNone(t *testing.T) {
-	ctx := context.Background()
-	cfg := config.Default()
-	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
-	cfg.Processor.Provider = "none"
-	store, err := sqlite.Open(ctx, cfg.Storage, slog.New(slog.DiscardHandler))
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	defer store.Close()
-
-	service := automation.NewService(cfg, store, processor.NewRuleBasedProvider())
-	if err := service.EnqueueRawEvent(ctx, capture.RawEvent{ID: "evt_provider_none"}); err != nil {
-		t.Fatalf("EnqueueRawEvent() error = %v", err)
-	}
-	jobs, err := store.ListJobs(ctx, automation.ListJobsRequest{})
-	if err != nil {
-		t.Fatalf("ListJobs() error = %v", err)
-	}
-	if len(jobs) != 0 {
-		t.Fatalf("jobs = %+v, want none when provider is none", jobs)
-	}
-}
-
 func TestServiceRunsP4JobsThroughDispatcher(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Default()
