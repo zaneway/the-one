@@ -16,7 +16,7 @@ type AccessFeedbackEvent struct {
 // ComputeAccessSignals 从 access log 事件计算强化、激活与负向惩罚（架构 §8.1–§8.2.3）。
 func ComputeAccessSignals(events []AccessFeedbackEvent, decayRate float64, now time.Time) AccessFeedbackSummary {
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
 	if decayRate <= 0 {
 		decayRate = 0.8
@@ -36,7 +36,7 @@ func ComputeAccessSignals(events []AccessFeedbackEvent, decayRate float64, now t
 
 // ComputeAccessFeedback 保留旧名，供单测与兼容调用。
 func ComputeAccessFeedback(events []AccessFeedbackEvent) AccessFeedbackSummary {
-	return ComputeAccessSignals(events, 0.8, time.Now().UTC())
+	return ComputeAccessSignals(events, 0.8, time.Now())
 }
 
 func computeEffectiveReinforcement(events []AccessFeedbackEvent) AccessFeedbackSummary {

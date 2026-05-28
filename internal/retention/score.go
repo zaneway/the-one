@@ -11,7 +11,7 @@ import (
 func ComputeScore(in Input) float64 {
 	now := in.Now
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
 	if in.State == memory.StateDeleted {
 		return 0
@@ -46,7 +46,7 @@ func ComputeScore(in Input) float64 {
 func ComputeTier(in Input) string {
 	now := in.Now
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
 	if in.Pinned {
 		return in.Tier

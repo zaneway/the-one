@@ -34,7 +34,7 @@ func (s *Store) WriteDocSnapshot(ctx context.Context, snapshot docindex.Document
 		return s.GetDocSnapshot(ctx, existing.ID, true)
 	}
 
-	now := time.Now().UTC()
+	now := time.Now()
 	if snapshot.ID == "" {
 		id, err := idgen.New("doc")
 		if err != nil {

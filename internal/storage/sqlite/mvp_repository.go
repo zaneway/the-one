@@ -38,7 +38,7 @@ func (s *Store) CreateRun(ctx context.Context, run mvp.AcceptanceRun) (mvp.Accep
 	if run.Status == "" {
 		run.Status = mvp.RunStatusRunning
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	if run.StartedAt.IsZero() {
 		run.StartedAt = now
 	}
@@ -80,7 +80,7 @@ func (s *Store) UpdateRunStatus(ctx context.Context, run mvp.AcceptanceRun) erro
 	if strings.TrimSpace(run.ID) == "" || strings.TrimSpace(run.Status) == "" {
 		return fmt.Errorf("VALIDATION_FAILED: run id and status are required")
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	endedAt := run.EndedAt
 	if endedAt.IsZero() && run.Status != mvp.RunStatusRunning {
 		endedAt = now
@@ -171,7 +171,7 @@ func (s *Store) RecordTask(ctx context.Context, task mvp.AcceptanceTask) (mvp.Ac
 			task.Status = mvp.TaskStatusFailed
 		}
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	if task.StartedAt.IsZero() {
 		task.StartedAt = now
 	}
@@ -230,7 +230,7 @@ func (s *Store) UpsertMetricSamples(ctx context.Context, samples []mvp.MetricSam
 	if len(samples) == 0 {
 		return nil, nil
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	prepared := make([]mvp.MetricSample, len(samples))
 	for i, sample := range samples {
 		if strings.TrimSpace(sample.RunID) == "" || strings.TrimSpace(sample.MetricName) == "" || strings.TrimSpace(sample.Unit) == "" {
@@ -339,7 +339,7 @@ func (s *Store) UpsertAgentCapability(ctx context.Context, capability mvp.AgentC
 	}
 	capability.CapabilityCoverage = mvp.CapabilityCoverage(capability)
 	if capability.CreatedAt.IsZero() {
-		capability.CreatedAt = time.Now().UTC()
+		capability.CreatedAt = time.Now()
 	}
 	_, err := s.db.ExecContext(ctx, `insert into mvp_agent_capability(
 		id, run_id, agent_type, adapter_name, adapter_version, capture_level,

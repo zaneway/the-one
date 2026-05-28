@@ -17,7 +17,7 @@ import (
 func (s *Store) ListExpiredTemporaryMemories(ctx context.Context, req retention.ListRequest) ([]retention.MemoryRecord, error) {
 	now := req.Now
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
 	ttlDays := req.TemporaryTTLDays
 	if ttlDays <= 0 {
@@ -65,7 +65,7 @@ func (s *Store) ArchiveTemporaryMemory(ctx context.Context, memoryID string, now
 		return fmt.Errorf("VALIDATION_FAILED: memory id is required")
 	}
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -131,7 +131,7 @@ func (s *Store) UpdateRetentionFields(ctx context.Context, memoryID string, upda
 	}
 	now := update.UpdatedAt
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
 	lastReinforced := sql.NullString{}
 	if update.HasLastReinforcedAt && !update.LastReinforcedAt.IsZero() {

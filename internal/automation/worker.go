@@ -54,7 +54,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if _, err := w.RunOnce(ctx, time.Now().UTC()); err != nil {
+		if _, err := w.RunOnce(ctx, time.Now()); err != nil {
 			return err
 		}
 		select {
@@ -71,7 +71,7 @@ func (w *Worker) RunOnce(ctx context.Context, now time.Time) (WorkerRunResult, e
 		return WorkerRunResult{}, err
 	}
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
 	recovered, err := w.repo.RecoverStaleRunningJobs(ctx, now, time.Duration(w.cfg.RunningTimeoutMS)*time.Millisecond)
 	if err != nil {
@@ -87,13 +87,13 @@ func (w *Worker) RunOnce(ctx context.Context, now time.Time) (WorkerRunResult, e
 			if w.shouldRetry(job) {
 				retryCount := job.RetryCount + 1
 				nextRunAt := now.Add(w.retryDelay(retryCount))
-				if retryErr := w.repo.MarkJobRetry(ctx, job.ID, retryCount, nextRunAt, err.Error(), time.Now().UTC()); retryErr != nil {
+				if retryErr := w.repo.MarkJobRetry(ctx, job.ID, retryCount, nextRunAt, err.Error(), time.Now()); retryErr != nil {
 					return result, retryErr
 				}
 				result.Retried++
 				continue
 			}
-			if failErr := w.repo.MarkJobFailed(ctx, job.ID, err.Error(), time.Now().UTC()); failErr != nil {
+			if failErr := w.repo.MarkJobFailed(ctx, job.ID, err.Error(), time.Now()); failErr != nil {
 				return result, failErr
 			}
 			result.Failed++

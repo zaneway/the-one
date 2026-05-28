@@ -33,6 +33,8 @@ func main() {
 //	serve  - 解析配置、初始化运行时依赖（SQLite + migration + MCP Registry + Worker）、启动 MCP stdio 服务
 //	health - 复用运行时调用 memory.health 工具，验证存储层可用性
 //	status - 复用运行时调用 memory.status 工具，返回 capability 和配置摘要
+//	search - 从 stdin 读取 JSON 并调用 memory.search（用于诊断和候选检索）
+//	context - 从 stdin 读取 JSON 并调用 memory.context（用于回答前注入上下文）
 //	observe - 从 stdin 读取 JSON 并调用 memory.observe（供 Hook/脚本本地写入入口复用）
 //	observe-turn - 从 stdin 读取 Turn payload，聚合后批量写入 memory.observe
 //	observe-envelope - 从 stdin 读取 IngestEnvelope，面向 wrapper/log collector 接入
@@ -85,6 +87,26 @@ func run(args []string) error {
 			return fmt.Errorf("decode observe params: %w", err)
 		}
 		return callLocalTool(context.Background(), cfg, "memory.observe", params)
+	case "search":
+		cfg, err := parseConfig(args[1:], false)
+		if err != nil {
+			return err
+		}
+		params, err := decodeJSONParams(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("decode search params: %w", err)
+		}
+		return callLocalTool(context.Background(), cfg, "memory.search", params)
+	case "context":
+		cfg, err := parseConfig(args[1:], false)
+		if err != nil {
+			return err
+		}
+		params, err := decodeJSONParams(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("decode context params: %w", err)
+		}
+		return callLocalTool(context.Background(), cfg, "memory.context", params)
 	case "observe-turn":
 		cfg, err := parseConfig(args[1:], false)
 		if err != nil {
@@ -133,7 +155,7 @@ func run(args []string) error {
 		}
 		return callLocalObserveBatch(context.Background(), cfg, anyRequests, envelope.SessionID, payload.TaskID)
 	default:
-		return fmt.Errorf("unknown command %q: expected serve, health, status, observe, observe-turn, or observe-envelope", args[0])
+		return fmt.Errorf("unknown command %q: expected serve, health, status, search, context, observe, observe-turn, or observe-envelope", args[0])
 	}
 }
 

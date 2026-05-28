@@ -52,7 +52,7 @@ func (s *Store) WriteEvidence(ctx context.Context, evidence memory.Evidence) err
 		evidence.Confidence = 0.7
 	}
 	if evidence.CreatedAt.IsZero() {
-		evidence.CreatedAt = time.Now().UTC()
+		evidence.CreatedAt = time.Now()
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -130,7 +130,7 @@ func (s *Store) WriteAutomatedMemory(ctx context.Context, input automation.Autom
 	if len(evidenceIDs) == 0 {
 		return memory.MemoryItem{}, fmt.Errorf("VALIDATION_FAILED: automated memory requires at least one evidence id")
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	if item.CreatedAt.IsZero() {
 		item.CreatedAt = now
 	}
@@ -232,7 +232,7 @@ func (s *Store) OverwriteMemoryWithCorrection(ctx context.Context, input automat
 	if len(evidenceIDs) == 0 {
 		return memory.MemoryItem{}, fmt.Errorf("VALIDATION_FAILED: correction requires at least one evidence id")
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	if item.NormalizedContent == "" {
 		item.NormalizedContent = item.Content
 	}
@@ -384,7 +384,7 @@ func (s *Store) WriteMemoryRelation(ctx context.Context, relation memory.MemoryR
 	if existing != "" {
 		return nil
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	if relation.Weight == 0 {
 		relation.Weight = 1.0
 	}
@@ -409,7 +409,7 @@ func (s *Store) ArchiveMemoryForSupersedes(ctx context.Context, memoryID string,
 		return fmt.Errorf("VALIDATION_FAILED: memory id is required")
 	}
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
 	result, err := s.db.ExecContext(ctx, `update memory_item
 		set state = ?, tier = ?, updated_at = ?
@@ -436,7 +436,7 @@ func (s *Store) UpdateMemorySupersedesID(ctx context.Context, memoryID, supersed
 		return fmt.Errorf("VALIDATION_FAILED: memory id and supersedes id are required")
 	}
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
 	result, err := s.db.ExecContext(ctx, `update memory_item
 		set supersedes_id = ?, updated_at = ?

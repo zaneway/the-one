@@ -32,7 +32,7 @@ func (s *Store) CreateRetrievalTrace(ctx context.Context, record retrieval.Trace
 		record.ID = id
 	}
 	if record.CreatedAt.IsZero() {
-		record.CreatedAt = time.Now().UTC()
+		record.CreatedAt = time.Now()
 	}
 	if record.Status == "" {
 		record.Status = retrieval.TraceStarted
@@ -169,7 +169,7 @@ func (s *Store) WriteMemoryAccessLogs(ctx context.Context, records []retrieval.A
 	if len(records) == 0 {
 		return nil, nil
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	prepared := make([]retrieval.AccessLogRecord, len(records))
 	for i, record := range records {
 		if strings.TrimSpace(record.MemoryID) == "" || strings.TrimSpace(record.EventType) == "" {
@@ -287,7 +287,7 @@ func (s *Store) CleanupMemoryAccessLogs(ctx context.Context, eventType string, b
 	}
 	result, err := s.db.ExecContext(ctx, `delete from memory_access_log
 		where event_type = ? and julianday(created_at) < julianday(?)`,
-		eventType, before.UTC().Format(time.RFC3339Nano),
+		eventType, before.In(time.Local).Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return 0, storageErr(err)

@@ -19,7 +19,7 @@ func (s *Service) RecordTaskSuccessFeedback(ctx context.Context, taskID, session
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	seen := make(map[string]struct{})
 	for _, log := range logs {
 		if log.EventType != "injected" {

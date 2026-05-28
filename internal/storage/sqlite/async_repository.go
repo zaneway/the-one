@@ -29,7 +29,7 @@ func (s *Store) EnqueueJob(ctx context.Context, job automation.AsyncJob) (automa
 		}
 	}
 	// 填充默认值：status=pending, priority=5, max_retries=3
-	now := time.Now().UTC()
+	now := time.Now()
 	if job.Status == "" {
 		job.Status = automation.JobStatusPending
 	}
@@ -68,7 +68,7 @@ func (s *Store) EnqueueJob(ctx context.Context, job automation.AsyncJob) (automa
 // 事务保证：查询和状态更新在同一事务中，确保不会领取到已被其他 worker 领取的任务。
 func (s *Store) ClaimJobs(ctx context.Context, now time.Time, limit int) ([]automation.AsyncJob, error) {
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
 	if limit <= 0 {
 		limit = 10
@@ -130,7 +130,7 @@ func (s *Store) ClaimJobs(ctx context.Context, now time.Time, limit int) ([]auto
 // 设计说明：使用 updated_at 而非 created_at 判断超时，因为 worker 可能在执行中途崩溃。
 func (s *Store) RecoverStaleRunningJobs(ctx context.Context, now time.Time, timeout time.Duration) (int, error) {
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
@@ -179,7 +179,7 @@ func (s *Store) MarkJobSucceeded(ctx context.Context, jobID string, payload stri
 		return fmt.Errorf("VALIDATION_FAILED: job id is required")
 	}
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
 	result, err := s.db.ExecContext(ctx, `update async_job
 		set status = ?, payload_json = ?, last_error = null, updated_at = ?
@@ -197,7 +197,7 @@ func (s *Store) MarkJobRetry(ctx context.Context, jobID string, retryCount int, 
 		return fmt.Errorf("VALIDATION_FAILED: job id is required")
 	}
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
 	if nextRunAt.IsZero() {
 		nextRunAt = now
@@ -217,7 +217,7 @@ func (s *Store) MarkJobFailed(ctx context.Context, jobID string, lastError strin
 		return fmt.Errorf("VALIDATION_FAILED: job id is required")
 	}
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
 	result, err := s.db.ExecContext(ctx, `update async_job
 		set status = ?, last_error = ?, updated_at = ?
@@ -336,7 +336,7 @@ func (s *Store) WriteCandidate(ctx context.Context, candidate automation.MemoryC
 			return nil
 		}
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	if candidate.Status == "" {
 		candidate.Status = automation.CandidateStatusGenerated
 	}
@@ -392,7 +392,7 @@ func (s *Store) UpdateCandidateAdmission(ctx context.Context, candidateID string
 		    resulting_memory_id = ?, status = ?, updated_at = ?
 		where id = ?`,
 		admission.AdmissionScore, nullString(admission.Decision), nullString(reasons), nullString(memoryID),
-		status, time.Now().UTC().Format(time.RFC3339Nano), candidateID,
+		status, time.Now().Format(time.RFC3339Nano), candidateID,
 	)
 	if err != nil {
 		return storageErr(err)

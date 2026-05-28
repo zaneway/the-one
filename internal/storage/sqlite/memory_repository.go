@@ -230,7 +230,7 @@ func (s *Store) Edit(ctx context.Context, memoryID, editContent, reviewer, feedb
 		return memory.MemoryItem{}, fmt.Errorf("STATE_CONFLICT: deleted memory is terminal")
 	}
 	// 更新 content/normalized_content/search_text，version 自增
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx,
 		`update memory_item
 		   set content = ?, normalized_content = ?, search_text = ?, version = version + 1, updated_at = ?
@@ -275,7 +275,7 @@ func (s *Store) Delete(ctx context.Context, memoryID, reviewer, feedback string)
 		return memory.MemoryItem{}, fmt.Errorf("STATE_CONFLICT: deleted memory is terminal")
 	}
 	// 标记为 deleted 状态
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx,
 		"update memory_item set state = ?, updated_at = ? where id = ?",
 		memory.StateDeleted, now, memoryID,
@@ -342,7 +342,7 @@ func (s *Store) transition(ctx context.Context, memoryID, action, newState, revi
 		return memory.MemoryItem{}, fmt.Errorf("STATE_CONFLICT: approve requires pending_review or archived")
 	}
 	// 更新 memory_item 状态和 user_confirmed 标记
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx,
 		"update memory_item set state = ?, user_confirmed = ?, updated_at = ? where id = ?",
 		newState, confirmed, now, memoryID,
@@ -666,7 +666,7 @@ func insertReviewRecord(ctx context.Context, tx *sql.Tx, memoryID, reviewType, s
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().Format(time.RFC3339Nano)
 	_, err = tx.ExecContext(ctx, `insert into memory_review(
 		id, memory_id, review_type, status, reviewer, feedback, original_content, edited_content, created_at, reviewed_at
 	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

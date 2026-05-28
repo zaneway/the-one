@@ -187,7 +187,7 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 	if err != nil {
 		return RememberResponse{}, err
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	// Step 7: 将数组字段序列化为 JSON 字符串，用于 SQLite 存储
 	keywordsJSON, err := toJSON(req.Keywords)
 	if err != nil {

@@ -152,7 +152,7 @@ func (s *Store) applyMigration(ctx context.Context, item migration) error {
 		"insert into schema_migration(version, name, applied_at, checksum) values (?, ?, ?, ?)",
 		item.version,
 		item.name,
-		time.Now().UTC().Format(time.RFC3339Nano),
+		time.Now().Format(time.RFC3339Nano),
 		item.checksum,
 	); err != nil {
 		_ = tx.Rollback()

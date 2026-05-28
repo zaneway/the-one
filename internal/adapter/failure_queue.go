@@ -33,7 +33,7 @@ func (q *FailureQueue) Append(record FailureRecord) error {
 		return fmt.Errorf("create dead letter dir: %w", err)
 	}
 	if record.LastErrorAt == "" {
-		record.LastErrorAt = time.Now().UTC().Format(time.RFC3339Nano)
+		record.LastErrorAt = time.Now().Format(time.RFC3339Nano)
 	}
 	data, err := json.Marshal(record)
 	if err != nil {

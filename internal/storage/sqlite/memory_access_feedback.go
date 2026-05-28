@@ -24,7 +24,7 @@ func (s *Store) RecordMemoryAccess(ctx context.Context, memoryID, eventType stri
 		EventType:     eventType,
 		EventWeight:   retention.AccessLogEventWeight(eventType),
 		SourceQuality: sourceQuality,
-		CreatedAt:     time.Now().UTC(),
+		CreatedAt:     time.Now(),
 	})
 	return err
 }

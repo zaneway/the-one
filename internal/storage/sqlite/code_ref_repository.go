@@ -36,7 +36,7 @@ func (s *Store) WriteCodeRef(ctx context.Context, ref memory.CodeRef) (memory.Co
 	ref.FilePath = normalizeCodeRefPath(ref.FilePath)
 	ref.RefSummary = compactRetrievalText(ref.RefSummary, maxCodeRefSummaryRune)
 
-	now := time.Now().UTC()
+	now := time.Now()
 	resolvedAt := nullableResolvedAt(ref.ResolveStatus, now)
 	_, err := s.db.ExecContext(ctx, `insert into code_ref(
 		id, memory_id, repo_id, commit_hash, file_path, symbol, line_start, line_end,
@@ -154,7 +154,7 @@ func (s *Store) UpdateCodeRefResolveStatus(ctx context.Context, id, status, cont
 	if !isValidCodeRefStatus(status) {
 		return memory.CodeRef{}, fmt.Errorf("VALIDATION_FAILED: invalid resolve_status %q", status)
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	result, err := s.db.ExecContext(ctx, `update code_ref set
 		resolve_status = ?,
 		resolved_at = ?,

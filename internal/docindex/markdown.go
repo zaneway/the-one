@@ -54,8 +54,8 @@ func BuildMarkdownSnapshot(opts MarkdownBuildOptions) (DocumentSnapshot, error) 
 		RepoID:      strings.TrimSpace(opts.RepoID),
 		Path:        filepath.ToSlash(cleanPath),
 		Role:        strings.TrimSpace(opts.Role),
-		ModifiedAt:  info.ModTime().UTC(),
-		CreatedAt:   time.Now().UTC(),
+		ModifiedAt:  info.ModTime().In(time.Local),
+		CreatedAt:   time.Now(),
 	}
 	if info.Size() > int64(opts.MaxDocSizeKB)*1024 {
 		hash, err := hashFile(fullPath)
@@ -207,7 +207,7 @@ func buildMarkdownSections(markdown string, maxSections int, storeSummary bool) 
 			StartLine:   header.line,
 			EndLine:     endLine,
 			ContentHash: hashString(strings.Join(sectionLines, "\n")),
-			CreatedAt:   time.Now().UTC(),
+			CreatedAt:   time.Now(),
 		}
 		if storeSummary {
 			section.Summary = compactSummary(strings.Join(header.path, " > "))

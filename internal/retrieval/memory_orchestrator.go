@@ -237,6 +237,16 @@ func (o *MemoryOrchestrator) Search(ctx context.Context, req memory.SearchReques
 		fallbackReasons = appendFallbackReasons(fallbackReasons, "access_log_unavailable")
 	}
 	o.finishTrace(ctx, trace, tracePersisted, traceStatus(fallbackReasons), len(retrieved.Results), 0, latencyMS, fallbackReasons)
+	o.logger.Info("检索命中统计",
+		"trace_id", trace.ID,
+		"query_hash", shortHashForLog(req.Query),
+		"retrieval_intent", string(intent),
+		"retrieval_mode", string(retrieved.Mode),
+		"candidate_count", len(retrieved.Results),
+		"injected_count", 0,
+		"fallback_reasons", fallbackReasons,
+		"latency_ms", latencyMS,
+	)
 
 	diag := retrieved.Diagnostics
 	diag.RetrievalTraceID = trace.ID
@@ -325,6 +335,17 @@ func (o *MemoryOrchestrator) Context(ctx context.Context, req memory.ContextRequ
 		o.logger.Warn("retrieval access log write failed", "event_type", injectedAccessEventType, "trace_id", trace.ID, "error", accessErr)
 		fallbackReasons = appendFallbackReasons(fallbackReasons, "access_log_unavailable")
 	}
+	o.logger.Info("注入命中统计",
+		"trace_id", trace.ID,
+		"task_hash", shortHashForLog(req.Task),
+		"retrieval_intent", string(intent),
+		"retrieval_mode", string(retrieved.Mode),
+		"candidate_count", len(retrieved.Results),
+		"injected_count", len(usedIDs),
+		"conversion_rate", safeRatio(len(usedIDs), len(retrieved.Results)),
+		"fallback_reasons", fallbackReasons,
+		"latency_ms", latencyMS,
+	)
 	latencyMS = time.Since(startedAt).Milliseconds()
 	o.finishTrace(ctx, trace, tracePersisted, traceStatus(fallbackReasons), len(retrieved.Results), len(usedIDs), latencyMS, fallbackReasons)
 
@@ -1235,7 +1256,7 @@ func (o *MemoryOrchestrator) startTrace(ctx context.Context, input traceInput) (
 		Mode:        input.Mode,
 		UsedFTS:     true,
 		Status:      TraceStarted,
-		CreatedAt:   time.Now().UTC(),
+		CreatedAt:   time.Now(),
 	}
 	if !o.cfg.Retrieval.EnableTrace {
 		trace.ID = newTraceID(o.logger)
@@ -1306,7 +1327,7 @@ func (o *MemoryOrchestrator) writeAccessLogs(ctx context.Context, input accessLo
 			ScoreBreakdown:   breakdown,
 			InclusionReasons: append([]string(nil), result.WhyIncluded...),
 			UsedInContext:    input.UsedInContext,
-			CreatedAt:        time.Now().UTC(),
+			CreatedAt:        time.Now(),
 		})
 	}
 	_, err := o.accessLogRepo.WriteMemoryAccessLogs(ctx, records)
@@ -1533,4 +1554,23 @@ func maxInt(left, right int) int {
 		return left
 	}
 	return right
+}
+
+func shortHashForLog(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	var sum uint32
+	for _, r := range value {
+		sum = sum*33 + uint32(r)
+	}
+	return fmt.Sprintf("%08x", sum)
+}
+
+func safeRatio(numerator, denominator int) float64 {
+	if denominator <= 0 {
+		return 0
+	}
+	return float64(numerator) / float64(denominator)
 }

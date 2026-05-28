@@ -561,17 +561,17 @@ func buildRawEvent(req ObserveRequest, occurredAt time.Time) (RawEvent, error) {
 // 为空时使用当前UTC时间
 func normalizeOccurredAt(value string) (time.Time, error) {
 	if value == "" {
-		return time.Now().UTC(), nil
+		return time.Now(), nil
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err == nil {
-		return parsed.UTC(), nil
+		return parsed.In(time.Local), nil
 	}
 	parsed, err = time.Parse(time.RFC3339, value)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("VALIDATION_FAILED: occurred_at must be RFC3339: %w", err)
 	}
-	return parsed.UTC(), nil
+	return parsed.In(time.Local), nil
 }
 
 // sessionGoal 从请求中提取会话目标摘要

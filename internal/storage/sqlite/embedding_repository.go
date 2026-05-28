@@ -15,7 +15,7 @@ func (s *Store) UpsertMemoryEmbedding(ctx context.Context, memoryID, model strin
 		return fmt.Errorf("VALIDATION_FAILED: memory_id, embedding model and vector are required")
 	}
 	blob := float32VectorBlob(vector)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `insert into memory_embedding(
 		memory_id, embedding_model, embedding_dim, embedding, created_at, updated_at
 	) values (?, ?, ?, ?, ?, ?)

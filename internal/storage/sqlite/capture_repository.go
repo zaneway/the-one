@@ -18,7 +18,7 @@ func (s *Store) UpsertSession(ctx context.Context, session capture.AgentSession)
 	if session.ID == "" {
 		return capture.AgentSession{}, fmt.Errorf("VALIDATION_FAILED: session id is required")
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	if session.StartedAt.IsZero() {
 		session.StartedAt = now
 	}
@@ -61,7 +61,7 @@ func (s *Store) EndSession(ctx context.Context, sessionID string, status string,
 		return capture.AgentSession{}, fmt.Errorf("VALIDATION_FAILED: session id is required")
 	}
 	if endedAt.IsZero() {
-		endedAt = time.Now().UTC()
+		endedAt = time.Now()
 	}
 	qualityJSON, err := toJSONText(quality)
 	if err != nil {
@@ -70,7 +70,7 @@ func (s *Store) EndSession(ctx context.Context, sessionID string, status string,
 	_, err = s.db.ExecContext(ctx, `update agent_session
 		set status = ?, ended_at = ?, capture_quality_json = ?, updated_at = ?
 		where id = ?`,
-		status, endedAt.Format(time.RFC3339Nano), nullString(qualityJSON), time.Now().UTC().Format(time.RFC3339Nano), sessionID,
+		status, endedAt.Format(time.RFC3339Nano), nullString(qualityJSON), time.Now().Format(time.RFC3339Nano), sessionID,
 	)
 	if err != nil {
 		return capture.AgentSession{}, storageErr(err)
@@ -83,7 +83,7 @@ func (s *Store) UpsertTask(ctx context.Context, task capture.AgentTask) (capture
 	if task.ID == "" {
 		return capture.AgentTask{}, fmt.Errorf("VALIDATION_FAILED: task id is required")
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	if task.StartedAt.IsZero() {
 		task.StartedAt = now
 	}
@@ -121,12 +121,12 @@ func (s *Store) EndTask(ctx context.Context, taskID string, status string, outco
 		return capture.AgentTask{}, fmt.Errorf("VALIDATION_FAILED: task id is required")
 	}
 	if endedAt.IsZero() {
-		endedAt = time.Now().UTC()
+		endedAt = time.Now()
 	}
 	_, err := s.db.ExecContext(ctx, `update agent_task
 		set status = ?, ended_at = ?, outcome_summary = ?, updated_at = ?
 		where id = ?`,
-		status, endedAt.Format(time.RFC3339Nano), nullString(outcome), time.Now().UTC().Format(time.RFC3339Nano), taskID,
+		status, endedAt.Format(time.RFC3339Nano), nullString(outcome), time.Now().Format(time.RFC3339Nano), taskID,
 	)
 	if err != nil {
 		return capture.AgentTask{}, storageErr(err)
@@ -184,7 +184,7 @@ func (s *Store) InsertRawEvent(ctx context.Context, event capture.RawEvent) erro
 	if event.ID == "" {
 		return fmt.Errorf("VALIDATION_FAILED: raw_event id is required")
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	if event.OccurredAt.IsZero() {
 		event.OccurredAt = now
 	}

@@ -274,7 +274,7 @@ func (h extendedJobHandler) runCleanupAccessLog(ctx context.Context, job AsyncJo
 	if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	if payload.Now != "" {
 		parsed, err := time.Parse(time.RFC3339Nano, payload.Now)
 		if err != nil {

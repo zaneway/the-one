@@ -121,7 +121,7 @@ func (s *Service) EnqueueRawEvent(ctx context.Context, rawEvent capture.RawEvent
 // 处理流程：通过 JobDispatcher 分发到对应 handler → 成功则 MarkJobSucceeded，失败则 MarkJobFailed。
 // 设计约束：Provider 执行发生在 claim 事务之外，避免长时间持锁。
 func (s *Service) RunJob(ctx context.Context, job AsyncJob) error {
-	now := time.Now().UTC()
+	now := time.Now()
 	payload, err := s.dispatcher.RunJob(ctx, job)
 	if err != nil {
 		_ = s.repo.MarkJobFailed(ctx, job.ID, err.Error(), now)
@@ -168,7 +168,7 @@ func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[str
 		Session:       session,
 		Task:          task,
 		RelatedEvents: related,
-		Now:           time.Now().UTC(),
+		Now:           time.Now(),
 	})
 	if err != nil {
 		return nil, err
@@ -228,7 +228,7 @@ func (s *Service) runGenerateMemoryCandidate(ctx context.Context, job AsyncJob) 
 		Session:       session,
 		Task:          task,
 		RelatedMemory: related,
-		Now:           time.Now().UTC(),
+		Now:           time.Now(),
 	})
 	if err != nil {
 		return nil, err
@@ -480,7 +480,7 @@ func (s *Service) materializeEvidence(ctx context.Context, rawEventID string, dr
 		SalientSpansJSON:     spansJSON,
 		SourceRefJSON:        sourceRefJSON,
 		Confidence:           defaultFloat(draft.Confidence, 0.7),
-		CreatedAt:            time.Now().UTC(),
+		CreatedAt:            time.Now(),
 	}
 	if err := s.repo.WriteEvidence(ctx, evidence); err != nil {
 		return memory.Evidence{}, err
@@ -569,7 +569,7 @@ func (s *Service) memoryItemFromAdmission(record MemoryCandidateRecord, candidat
 	if err != nil {
 		return memory.MemoryItem{}, err
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	searchText := ingest.BuildSearchText(ingest.SearchTextInput{
 		Title:             record.Title,
 		Content:           record.Content,

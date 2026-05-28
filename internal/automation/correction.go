@@ -14,7 +14,7 @@ func (s *Service) applyCorrectionSupersedes(ctx context.Context, written memory.
 	if !isUserCorrection(candidate, evidence) {
 		return nil
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	var primarySupersedes string
 	for _, item := range related {
 		if item.ID == written.ID {
