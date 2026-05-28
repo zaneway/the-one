@@ -16,8 +16,9 @@ theone **没有**独立安装包或 `install.sh`；「安装」= 克隆仓库 + 
 |------|------|
 | 单二进制 | `bin/theone`，支持 `serve` / `health` / `status` |
 | 首次 `serve` | 自动建库、执行 migration、注册 MCP 工具 |
-| 服务端自动处理 | `theone.yaml` 中 `processor.enable_auto_processing: true` 时，**在有人调用 observe 之后**自动入队抽取 |
-| 后台 Worker | `automation.worker_enabled: true` 时，`serve` 模式会启动 Worker |
+| 服务端自动处理 | `observe` 写入 `raw_event` 后**必定**入队 `extract_evidence`（`processor.provider` 仅允许 `rule_based`） |
+| 后台 Worker | `serve` 模式**始终**启动 Worker 消费 `async_job` |
+| 显式 remember | `memory.remember` 同步经准入控制器，未通过返回 `ADMISSION_REJECTED` |
 
 ### 1.2 安装后不会自动完成的事项
 
@@ -153,12 +154,12 @@ Cursor 以子进程方式拉起 `theone serve`。在受限环境下需注意：
 
 ### 5.2 作用
 
-- 引导 Agent 在 `session.start`、任务完成、工具结果、架构改动等节点调用 **`memory_observe`**
-- 按事件类型规定 **必填字段**（`content_summary`、`keywords`、`salient_spans`、`session_id`、`source_refs` 等）
+- 引导 Agent 在**有实质内容**的对话中调用 **`memory_observe`**（至少 `session.start` + 用户消息 + Agent 结论）
+- **入库关键字段完备**（L1 归属 + L2 检索字段 + L3 事件专属），不强制机械传满 schema 所有键；详见 Rule 中 L1/L2/L3 分级
 - 说明与 `memory_remember` / `memory_search` / `memory_context` 的分工
-- 强调只写**摘要**，禁止全文、完整 diff、密钥；**禁止**在 `conversation.message` 中伪造工具字段
+- 强调只写**摘要**，禁止全文、完整 diff、密钥；**禁止**在 `conversation.message` 中填写 `tool_name`
 
-**重要**：仅配置 MCP **不会**自动写入记忆；无 Rule 且无 Agent 主动调用时，`raw_event` / `memory_item` 仍为空。完整规范见 `.cursor/rules/theone-memory-observe.mdc`。
+**重要**：仅配置 MCP **不会**自动写入记忆。完整规范与 JSON 示例见 `.cursor/rules/theone-memory-observe.mdc`。
 
 ### 5.3 用户级 Rules（可选）
 
@@ -178,11 +179,10 @@ Cursor 以子进程方式拉起 `theone serve`。在受限环境下需注意：
 
 ```yaml
 processor:
-  provider: "rule_based"
-  enable_auto_processing: true    # observe 后自动入队
+  provider: "rule_based"        # 唯一合法值；observe 后必入队，经准入决定是否写入 memory_item
 
 automation:
-  worker_enabled: true            # serve 时后台处理
+  poll_interval_ms: 1000          # serve 时始终启动 Worker
 
 capture:
   require_session_for_agent_events: true   # observe 需 session_id（除 session.start）

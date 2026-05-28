@@ -112,11 +112,11 @@ flowchart TB
 | 记忆层 | `memory_item`、`evidence`、`memory_evidence_link`、FTS | 可检索的长期/中期记忆 |
 | 自动化 | `async_job`、`memory_candidate` | 从事件抽证据 → 候选 → 准入 → 写入记忆 |
 
-`memory.observe` 同步返回时 `pipeline` 为 `raw_event_only`：**单次 observe 不直接写 `memory_item`**。长期记忆来自 `memory.remember`，或 P3 后台管道在准入通过后写入。
+`memory.observe` 同步返回时 `pipeline` 为 `raw_event_only`：**单次 observe 不直接写 `memory_item`**，但会入队由规则引擎抽取并经准入后写入。`memory.remember` 同步走同一准入控制器，未通过则返回 `ADMISSION_REJECTED`。
 
 ### 事件捕获 → async_job → memory_item（P3 自动管道）
 
-前提：`theone.yaml` 中 `processor.enable_auto_processing: true`（默认开启），且 `serve` 模式下 `automation.worker_enabled: true` 时后台 Worker 会轮询执行任务。
+前提：`serve` 模式下后台 Worker 始终轮询执行任务；`processor.provider` 仅允许 `rule_based`，observe 与 remember 均经同一套准入规则决定是否写入 `memory_item`。
 
 ```mermaid
 sequenceDiagram

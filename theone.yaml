@@ -126,12 +126,8 @@ retention:
 # ── 处理器配置 ────────────────────────────────────────────
 # P3 自动 evidence/candidate 抽取 Provider 和内容上限
 processor:
-  # 处理器提供者: rule_based | none
-  # none 时只保存 raw_event，不生成 evidence/candidate
+  # 处理器提供者：仅 rule_based（observe 后必入队，由准入规则决定是否写入 memory_item）
   provider: "rule_based"
-
-  # observe 后是否自动入队 extract_evidence 任务
-  enable_auto_processing: true
 
   # Provider 抽取时读取的近邻事件上限
   max_related_events: 20
@@ -142,9 +138,6 @@ processor:
 # ── 自动化 Worker 配置 ───────────────────────────────────
 # P3 本地异步 worker 的轮询、批量和重试策略
 automation:
-  # 是否启动后台 Worker (serve 模式下生效)
-  worker_enabled: true
-
   # 无 pending job 时的空轮询间隔(毫秒)
   poll_interval_ms: 1000
 
