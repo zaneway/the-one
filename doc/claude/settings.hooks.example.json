@@ -1,0 +1,71 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__THEONE_REPO__/drivers/claude_code/hooks/theone-session-start.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__THEONE_REPO__/drivers/claude_code/hooks/theone-user-prompt-submit.sh",
+            "timeout": 45
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep|Glob|Task|WebFetch|WebSearch|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__THEONE_REPO__/drivers/claude_code/hooks/theone-post-tool-use.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__THEONE_REPO__/drivers/claude_code/hooks/theone-post-tool-use-failure.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__THEONE_REPO__/drivers/claude_code/hooks/theone-stop.sh",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__THEONE_REPO__/drivers/claude_code/hooks/theone-session-end.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
