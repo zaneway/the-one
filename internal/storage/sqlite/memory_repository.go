@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"time"
@@ -131,6 +132,7 @@ func (s *Store) GetReviewCheckpoint(ctx context.Context, memoryID string) (memor
 // 排序公式：0.55*bm25 + 0.20*scope + 0.15*confidence + 0.10*importance
 // 过滤规则：排除 deleted 状态，默认排除 archived；按 scope 隔离（project_local/repo_local/session 必须匹配对应 ID）。
 func (s *Store) Search(ctx context.Context, req memory.SearchRequest) ([]memory.SearchResult, memory.SearchDiagnostics, error) {
+	startedAt := time.Now()
 	if !s.capabilities.FTS5 {
 		return nil, memory.SearchDiagnostics{Fallback: "metadata"}, fmt.Errorf("FTS_UNAVAILABLE: sqlite fts5 is required for search")
 	}
@@ -139,19 +141,90 @@ func (s *Store) Search(ctx context.Context, req memory.SearchRequest) ([]memory.
 		limit = 10
 	}
 	matchQuery := buildFTSQuery(req.Query)
+
+	// 查询前日志：打印检索条件
+	s.logger.Debug("memory.search 开始",
+		"query", req.Query,
+		"match_query", matchQuery,
+		"limit", limit,
+		"scope", req.Scope,
+		"memory_types", req.MemoryTypes,
+		"workspace_id", req.WorkspaceID,
+		"project_id", req.ProjectID,
+		"repo_id", req.RepoID,
+		"session_id", req.SessionID,
+		"include_archived", req.IncludeArchived,
+	)
+
 	results, diag, err := s.searchByFTS(ctx, req, matchQuery, limit)
 	if err != nil {
+		s.logger.Error("memory.search FTS 查询失败",
+			"query", req.Query,
+			"error", err,
+			"duration_ms", time.Since(startedAt).Milliseconds(),
+		)
 		return nil, diag, err
 	}
+
+	// FTS 无结果时降级为 LIKE
+	usedFallback := false
 	if len(results) == 0 {
+		usedFallback = true
+		s.logger.Debug("memory.search FTS 无命中，降级为 LIKE 查询",
+			"query", req.Query,
+			"fts_hits", diag.FTSHits,
+		)
 		fallbackResults, fallbackDiag, err := s.searchByLike(ctx, req, limit)
 		fallbackDiag.FTSHits = diag.FTSHits
 		fallbackDiag.FilteredCount += diag.FilteredCount
 		if err != nil {
+			s.logger.Error("memory.search LIKE 降级查询失败",
+				"query", req.Query,
+				"error", err,
+				"duration_ms", time.Since(startedAt).Milliseconds(),
+			)
 			return nil, fallbackDiag, err
 		}
-		return fallbackResults, fallbackDiag, nil
+		results = fallbackResults
+		diag = fallbackDiag
 	}
+
+	// 查询后日志：打印结果摘要
+	duration := time.Since(startedAt)
+	logLevel := slog.LevelDebug
+	if duration > 100*time.Millisecond {
+		logLevel = slog.LevelWarn // 慢查询告警
+	}
+	s.logger.Log(ctx, logLevel, "memory.search 完成",
+		"query", req.Query,
+		"result_count", len(results),
+		"fts_hits", diag.FTSHits,
+		"filtered_count", diag.FilteredCount,
+		"fallback", diag.Fallback,
+		"used_like_fallback", usedFallback,
+		"duration_ms", duration.Milliseconds(),
+	)
+
+	// 打印 top-N 结果摘要（最多 5 条）
+	topN := 5
+	if len(results) < topN {
+		topN = len(results)
+	}
+	for i := 0; i < topN; i++ {
+		r := results[i]
+		contentPreview := truncateString(r.Content, 80)
+		s.logger.Debug("memory.search 结果",
+			"rank", i+1,
+			"memory_id", r.MemoryID,
+			"memory_type", r.MemoryType,
+			"scope", r.Scope,
+			"score", fmt.Sprintf("%.4f", r.Score),
+			"state", r.State,
+			"tier", r.Tier,
+			"content_preview", contentPreview,
+		)
+	}
+
 	return results, diag, nil
 }
 
@@ -434,6 +507,7 @@ func insertReviewCheckpoint(ctx context.Context, tx *sql.Tx, checkpoint memory.R
 // 查询流程：FTS5 match -> scope/state/type 过滤 -> BM25 排序 -> 取 top N*3 候选 -> 内存中二次排序裁剪。
 // 多取 3 倍候选是为了在二次排序后仍有足够的结果。
 func (s *Store) searchByFTS(ctx context.Context, req memory.SearchRequest, matchQuery string, limit int) ([]memory.SearchResult, memory.SearchDiagnostics, error) {
+	startedAt := time.Now()
 	// FTS5 虚表查询：通过 memory_item_fts match 匹配，JOIN memory_item 获取完整字段
 	// bm25() 返回负值（越小越相关），用于后续排序
 	query := `select m.id, m.memory_type, m.scope, coalesce(m.title, ''), m.content,
@@ -447,8 +521,19 @@ func (s *Store) searchByFTS(ctx context.Context, req memory.SearchRequest, match
 	// BM25 排序后多取 3 倍候选，确保二次排序后仍有足够结果
 	query += " order by rank limit ?"
 	args = append(args, limit*3)
+
+	s.logger.Debug("searchByFTS 执行查询",
+		"match_query", matchQuery,
+		"fetch_limit", limit*3,
+		"args_count", len(args),
+	)
+
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
+		s.logger.Error("searchByFTS SQL 执行失败",
+			"error", err,
+			"duration_ms", time.Since(startedAt).Milliseconds(),
+		)
 		return nil, memory.SearchDiagnostics{Fallback: "fts_metadata"}, storageErr(err)
 	}
 	defer rows.Close()
@@ -463,8 +548,22 @@ func (s *Store) searchByFTS(ctx context.Context, req memory.SearchRequest, match
 	if err := rows.Err(); err != nil {
 		return nil, memory.SearchDiagnostics{Fallback: "fts_metadata"}, storageErr(err)
 	}
+
+	s.logger.Debug("searchByFTS 原始召回完成",
+		"raw_count", len(raw),
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+	)
+
 	// 二次排序：BM25 归一化 + scope 权重 + confidence + importance 综合评分
 	results := s.rankSearchResults(ctx, raw, req, limit)
+
+	s.logger.Debug("searchByFTS 二次排序完成",
+		"raw_count", len(raw),
+		"result_count", len(results),
+		"filtered_count", max(0, len(raw)-len(results)),
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+	)
+
 	return results, memory.SearchDiagnostics{
 		FTSHits:       len(raw),
 		FilteredCount: max(0, len(raw)-len(results)),
@@ -476,20 +575,33 @@ func (s *Store) searchByFTS(ctx context.Context, req memory.SearchRequest, match
 // 使用 LIKE 模糊匹配 search_text 字段，按 updated_at 降序排列。
 // 降级路径不提供 BM25 相关性排序，只能依赖 metadata 权重。
 func (s *Store) searchByLike(ctx context.Context, req memory.SearchRequest, limit int) ([]memory.SearchResult, memory.SearchDiagnostics, error) {
+	startedAt := time.Now()
 	// LIKE 降级路径：FTS5 无命中或不可用时，用 LIKE 模糊匹配 search_text
 	// rank 固定为 0.0（无 BM25 分数），排序依赖 metadata 权重
+	likePattern := "%" + strings.ToLower(req.Query) + "%"
 	query := `select id, memory_type, scope, coalesce(title, ''), content,
 		confidence, importance, state, tier, 0.0 as rank
 		from memory_item
 		where lower(search_text) like ?`
-	args := []any{"%" + strings.ToLower(req.Query) + "%"}
+	args := []any{likePattern}
 	// tableOnly=true：直接查 memory_item 表，列名不加 "m." 前缀
 	query, args = appendSearchFilters(query, args, req, true)
 	// 无 BM25 时按 updated_at 降序，优先返回最近更新的记忆
 	query += " order by updated_at desc limit ?"
 	args = append(args, limit*3)
+
+	s.logger.Debug("searchByLike 执行查询",
+		"query", req.Query,
+		"like_pattern", likePattern,
+		"fetch_limit", limit*3,
+	)
+
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
+		s.logger.Error("searchByLike SQL 执行失败",
+			"error", err,
+			"duration_ms", time.Since(startedAt).Milliseconds(),
+		)
 		return nil, memory.SearchDiagnostics{Fallback: "metadata_like"}, storageErr(err)
 	}
 	defer rows.Close()
@@ -504,7 +616,17 @@ func (s *Store) searchByLike(ctx context.Context, req memory.SearchRequest, limi
 	if err := rows.Err(); err != nil {
 		return nil, memory.SearchDiagnostics{Fallback: "metadata_like"}, storageErr(err)
 	}
-	return s.rankSearchResults(ctx, raw, req, limit), memory.SearchDiagnostics{Fallback: "metadata_like"}, nil
+
+	results := s.rankSearchResults(ctx, raw, req, limit)
+
+	s.logger.Debug("searchByLike 完成",
+		"query", req.Query,
+		"raw_count", len(raw),
+		"result_count", len(results),
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+	)
+
+	return results, memory.SearchDiagnostics{Fallback: "metadata_like"}, nil
 }
 
 type rankedMemory struct {
@@ -843,4 +965,16 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// truncateString 截断字符串到指定 rune 长度，超出部分用 "..." 替代。
+func truncateString(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return string(runes[:maxLen])
+	}
+	return string(runes[:maxLen-3]) + "..."
 }

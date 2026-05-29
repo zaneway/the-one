@@ -61,6 +61,13 @@ type TurnPayload struct {
 	SalientSpans []string          `json:"salient_spans"`
 	ToolResults  []ToolResultInput `json:"tool_results"`
 	FileEdits    []FileEditInput   `json:"file_edits"`
+
+	RetrievalTraceID string   `json:"retrieval_trace_id"`
+	UsedMemoryIDs    []string `json:"used_memory_ids"`
+	InjectedToPrompt bool     `json:"injected_to_prompt"`
+
+	// SkipBaseTurn 为 true 时仅展开 tool/file/decision 等增量事件，不写 conversation/agent 回合。
+	SkipBaseTurn bool `json:"skip_base_turn"`
 }
 
 func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.ObserveRequest, error) {
@@ -116,7 +123,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 
 	hasHighSignal := len(payload.ToolResults) > 0 || len(payload.FileEdits) > 0 || strings.TrimSpace(payload.DecisionSummary) != ""
 	signature := turnSignature(payload.TurnID, payload.UserSummary, payload.AgentSummary)
-	emitBaseTurn := payload.IsSubstantive || hasHighSignal
+	emitBaseTurn := !payload.SkipBaseTurn && (payload.IsSubstantive || hasHighSignal)
 	if emitBaseTurn && !(payload.TurnID != "" && payload.TurnID == state.LastTurnID && signature == state.LastTurnSig) {
 		if strings.TrimSpace(payload.UserCorrectionSummary) != "" {
 			userReq := common
@@ -142,6 +149,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 			agentReq.EventType = capture.EventAgentResponseSummary
 			agentReq.Actor = capture.ActorAgent
 			agentReq.ContentSummary = payload.AgentSummary
+			agentReq.SourceRefs = appendRetrievalSourceRefs(agentReq.SourceRefs, payload)
 			requests = append(requests, agentReq)
 		}
 		state.LastTurnID = payload.TurnID
@@ -244,4 +252,24 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func appendRetrievalSourceRefs(refs []capture.SourceRef, payload TurnPayload) []capture.SourceRef {
+	if strings.TrimSpace(payload.RetrievalTraceID) == "" && len(payload.UsedMemoryIDs) == 0 && !payload.InjectedToPrompt {
+		return refs
+	}
+	ref := capture.SourceRef{
+		"source_type":    "memory_context",
+		"capture_method": capture.CaptureMethodAdapterHook,
+	}
+	if traceID := strings.TrimSpace(payload.RetrievalTraceID); traceID != "" {
+		ref["retrieval_trace_id"] = traceID
+	}
+	if payload.InjectedToPrompt {
+		ref["injected_to_prompt"] = true
+	}
+	if len(payload.UsedMemoryIDs) > 0 {
+		ref["used_memory_ids"] = payload.UsedMemoryIDs
+	}
+	return append(refs, ref)
 }

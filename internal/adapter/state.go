@@ -28,7 +28,7 @@ type FileStateStore struct {
 func NewFileStateStore(dirPath string) *FileStateStore {
 	return &FileStateStore{
 		dirPath:  dirPath,
-		filePath: filepath.Join(dirPath, "session.json"),
+		filePath: filepath.Join(dirPath, "turn-dedup.json"),
 	}
 }
 
@@ -36,13 +36,29 @@ func (s *FileStateStore) Load() (RuntimeState, error) {
 	data, err := os.ReadFile(s.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return RuntimeState{}, nil
+			return loadLegacyRuntimeState(s.dirPath)
 		}
 		return RuntimeState{}, fmt.Errorf("load runtime state: %w", err)
 	}
 	var state RuntimeState
 	if err := json.Unmarshal(data, &state); err != nil {
 		return RuntimeState{}, fmt.Errorf("decode runtime state: %w", err)
+	}
+	return state, nil
+}
+
+func loadLegacyRuntimeState(dirPath string) (RuntimeState, error) {
+	legacyPath := filepath.Join(dirPath, "session.json")
+	data, err := os.ReadFile(legacyPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return RuntimeState{}, nil
+		}
+		return RuntimeState{}, fmt.Errorf("load legacy runtime state: %w", err)
+	}
+	var state RuntimeState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return RuntimeState{}, fmt.Errorf("decode legacy runtime state: %w", err)
 	}
 	return state, nil
 }

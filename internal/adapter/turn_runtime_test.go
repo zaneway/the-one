@@ -32,6 +32,9 @@ func TestTurnRuntimeBuildObserveRequests(t *testing.T) {
 		SalientSpans:           []string{"通过全部测试"},
 		ToolResults:            []ToolResultInput{{ToolName: "go test", OutputSummary: "ok", ExitCode: 0}},
 		FileEdits:              []FileEditInput{{FilePath: "internal/auth/middleware.go", ContentSummary: "调整过期判断"}},
+		RetrievalTraceID:       "rt_test",
+		UsedMemoryIDs:          []string{"mem_a", "mem_b"},
+		InjectedToPrompt:       true,
 	})
 	if err != nil {
 		t.Fatalf("BuildObserveRequests() error = %v", err)
@@ -42,6 +45,7 @@ func TestTurnRuntimeBuildObserveRequests(t *testing.T) {
 	assertHasEvent(t, requests, capture.EventTaskStart)
 	assertHasEvent(t, requests, capture.EventConversationMessage)
 	assertHasEvent(t, requests, capture.EventAgentResponseSummary)
+	assertAgentHasMemoryContextRef(t, requests)
 	assertHasEvent(t, requests, capture.EventToolResultSummary)
 	assertHasEvent(t, requests, capture.EventFileEditSummary)
 	assertHasEvent(t, requests, capture.EventAgentDecision)
@@ -107,4 +111,19 @@ func hasEvent(requests []capture.ObserveRequest, eventType string) bool {
 		}
 	}
 	return false
+}
+
+func assertAgentHasMemoryContextRef(t *testing.T, requests []capture.ObserveRequest) {
+	t.Helper()
+	for _, req := range requests {
+		if req.EventType != capture.EventAgentResponseSummary {
+			continue
+		}
+		for _, ref := range req.SourceRefs {
+			if ref["source_type"] == "memory_context" {
+				return
+			}
+		}
+	}
+	t.Fatalf("agent.response.summary missing memory_context source_ref")
 }

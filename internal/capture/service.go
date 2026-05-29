@@ -220,8 +220,16 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 	if hasSession && req.EventType == EventSessionEnd {
 		// session.end 时，先结束所有活跃任务，再加载最终质量统计并关闭会话
 		if hasTask && task.Status == StatusActive {
-			if _, err := s.repo.EndTask(ctx, task.ID, sessionEndTaskStatus(req), taskOutcome(req), occurredAt); err != nil {
+			endStatus := sessionEndTaskStatus(req)
+			if _, err := s.repo.EndTask(ctx, task.ID, endStatus, taskOutcome(req), occurredAt); err != nil {
 				return ObserveResponse{}, err
+			}
+			if endStatus == StatusCompleted || endStatus == StatusSucceeded {
+				if recorder, ok := s.enqueuer.(TaskResultRecorder); ok {
+					if err := recorder.RecordTaskSuccessFeedback(ctx, task.ID, session.ID); err != nil {
+						diagnostics = append(diagnostics, "task_success_feedback_failed")
+					}
+				}
 			}
 		}
 		quality, err := s.loadQuality(ctx, session.ID)
