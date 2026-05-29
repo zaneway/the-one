@@ -1,0 +1,45 @@
+# Claude Code Driver → theone ingest（P4 / ExpandMode=v2）
+# 实现：drivers/claude_code/hooks + drivers/shared/theone-build-ingest.py
+agent_type: claude_code
+expand_mode: v2
+
+surface:
+  path: .claude/theone-context.md
+  inject_via: UserPromptSubmit.additionalContext
+
+binding:
+  file: binding.claude_code.json
+
+hooks:
+  SessionStart:
+    script: drivers/claude_code/hooks/theone-session-start.sh
+    emit:
+      - kind: session.lifecycle
+        event_type: session.start
+  UserPromptSubmit:
+    script: drivers/claude_code/hooks/theone-user-prompt-submit.sh
+    action: prefetch-context
+  PostToolUse:
+    script: drivers/claude_code/hooks/theone-post-tool-use.sh
+    emit:
+      - kind: capture.atomic
+        event_type: file.edit.summary
+        when_tool: [Write, Edit, MultiEdit, NotebookEdit]
+      - kind: capture.atomic
+        event_type: tool.result.summary
+        otherwise: true
+  PostToolUseFailure:
+    script: drivers/claude_code/hooks/theone-post-tool-use-failure.sh
+    emit:
+      - kind: capture.atomic
+        event_type: tool.result.summary
+  Stop:
+    script: drivers/claude_code/hooks/theone-stop.sh
+    emit:
+      - kind: turn.completed
+        event_type: agent.response.summary
+  SessionEnd:
+    script: drivers/claude_code/hooks/theone-session-end.sh
+    emit:
+      - kind: session.lifecycle
+        event_type: session.end

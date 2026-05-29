@@ -1,0 +1,30 @@
+# Cursor Driver → theone ingest（P2 / ExpandMode=v2）
+# 实现：.cursor/hooks/theone-build-ingest.py + theone ingest
+agent_type: cursor
+expand_mode: v2
+
+hooks:
+  sessionStart:
+    emit:
+      - kind: session.lifecycle
+        event_type: session.start
+  beforeSubmitPrompt:
+    action: prefetch-context
+  afterAgentResponse:
+    emit:
+      - kind: turn.completed
+        event_type: agent.response.summary
+        # v2：不含 tool_results / file_edits
+  afterFileEdit:
+    emit:
+      - kind: capture.atomic
+        event_type: file.edit.summary
+  afterMCPExecution:
+    emit:
+      - kind: capture.atomic
+        event_type: tool.result.summary
+  sessionEnd:
+    emit:
+      - kind: session.lifecycle
+        event_type: session.end
+  # stop：每轮 Agent 结束触发，勿绑 session.end；可选 drivers/cursor/hooks/theone-stop.sh（no-op）
