@@ -34,6 +34,9 @@ type Config struct {
 	// observe 事件捕获的内容边界和默认值
 	Capture CaptureConfig `yaml:"capture" json:"capture"`
 
+	// Adapter 接入层配置（ingest / ExpandMode）
+	Adapter AdapterConfig `yaml:"adapter" json:"adapter"`
+
 	// Retrieval 检索配置
 	// 在线检索默认值，检索实现会使用这些限制
 	Retrieval RetrievalConfig `yaml:"retrieval" json:"retrieval"`
@@ -143,6 +146,21 @@ type MemoryConfig struct {
 	// MaxSalientSpanCount 最大显著片段数量
 	// salient_spans数组的长度限制，默认10
 	MaxSalientSpanCount int `yaml:"max_salient_span_count" json:"max_salient_span_count"`
+}
+
+// AdapterConfig 接入层（ingest / SessionBinder / ExpandMode）配置。
+type AdapterConfig struct {
+	// ExpandMode 事件展开模式：legacy | v2
+	ExpandMode string `yaml:"expand_mode" json:"expand_mode"`
+
+	// AtomicStripTurnFields v2 下 turn.completed 误带 tool/file 时剥离（dogfood，非默认验收路径）
+	AtomicStripTurnFields bool `yaml:"atomic_strip_turn_fields" json:"atomic_strip_turn_fields"`
+
+	// PrefetchTimeoutMS prefetch-context 调用 memory.context 超时（毫秒）
+	PrefetchTimeoutMS int `yaml:"prefetch_timeout_ms" json:"prefetch_timeout_ms"`
+
+	// MaxInjectChars 注入 Markdown 最大字符数
+	MaxInjectChars int `yaml:"max_inject_chars" json:"max_inject_chars"`
 }
 
 // CaptureConfig 捕获配置结构体
@@ -405,6 +423,11 @@ func Default() Config {
 			MaxEvidenceChars:    1200,
 			MaxKeywordCount:     30,
 			MaxSalientSpanCount: 10,
+		},
+		Adapter: AdapterConfig{
+			ExpandMode:        "legacy",
+			PrefetchTimeoutMS: 3000,
+			MaxInjectChars:    4000,
 		},
 		Capture: CaptureConfig{
 			RequireSessionForAgentEvents: true,

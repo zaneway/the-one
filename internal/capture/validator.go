@@ -67,8 +67,10 @@ func NormalizeObserve(cfg config.CaptureConfig, req *ObserveRequest) error {
 		if req.AgentType == "" {
 			return fmt.Errorf("VALIDATION_FAILED: agent_session event requires agent_type")
 		}
-		// RequireSessionForAgentEvents 配置开启时，非 session.start 事件必须携带 session_id
-		if cfg.RequireSessionForAgentEvents && req.EventType != EventSessionStart && req.SessionID == "" {
+		if cfg.RequireSessionForAgentEvents && req.SessionID == "" {
+			if req.EventType == EventSessionStart {
+				return fmt.Errorf("SESSION_REQUIRED: session.start requires session_id (adapter must bind conversation_id)")
+			}
 			return fmt.Errorf("SESSION_REQUIRED: agent_session event requires session_id")
 		}
 	}

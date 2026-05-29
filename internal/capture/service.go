@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/zaneway/theone/internal/config"
@@ -78,18 +79,19 @@ type Service struct {
 	cfg      config.Config // 配置信息
 	repo     Repository    // 仓库接口，负责持久化
 	enqueuer JobEnqueuer   // 自动处理入队器；为空时保持 raw_event-only 行为
+	logger   *slog.Logger  // 结构化日志
 }
 
 // NewService 创建 capture service
 // 后续 MCP handler 和 diagnostics service 复用该入口
 func NewService(cfg config.Config, repo Repository) *Service {
-	return &Service{cfg: cfg, repo: repo}
+	return &Service{cfg: cfg, repo: repo, logger: slog.Default()}
 }
 
 // NewServiceWithAutomation 创建带自动处理入队能力的 capture service。
 // 该构造函数用于自动入队场景；调用方继续使用 NewService 即可保持原行为。
 func NewServiceWithAutomation(cfg config.Config, repo Repository, enqueuer JobEnqueuer) *Service {
-	return &Service{cfg: cfg, repo: repo, enqueuer: enqueuer}
+	return &Service{cfg: cfg, repo: repo, enqueuer: enqueuer, logger: slog.Default()}
 }
 
 // Observe 执行 memory.observe 的最小闭环。
@@ -113,14 +115,28 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 	// Step 1: 生成请求 ID，用于日志关联和问题追踪
 	requestID, err := idgen.New("req")
 	if err != nil {
+		s.logger.Error("observe request id generation failed", "error", err)
 		return ObserveResponse{}, err
 	}
 	// Step 2: 归一化——去空白、校验 event_type/source_channel/actor 合法性、设置默认值
 	if err := NormalizeObserve(s.cfg.Capture, &req); err != nil {
+		s.logger.Error("observe normalize failed", "request_id", requestID, "error", err)
 		return ObserveResponse{}, err
 	}
+	s.logger.Info("observe started",
+		"request_id", requestID,
+		"event_type", req.EventType,
+		"source_channel", req.SourceChannel,
+		"session_id", req.SessionID,
+		"agent_type", req.AgentType,
+	)
 	// Step 3: 内容边界检查——摘要长度、关键词数量、salient_span 数量；禁止 full_text/full_output/full_diff
 	if err := CheckMinimizedObserve(s.cfg.Capture, req); err != nil {
+		s.logger.Error("observe content boundary check failed",
+			"request_id", requestID,
+			"event_type", req.EventType,
+			"error", err,
+		)
 		// 内容超界时记录拒绝计数到 session 质量统计，然后返回错误
 		_ = s.recordContentBoundaryRejection(ctx, req)
 		return ObserveResponse{}, err
@@ -170,8 +186,14 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		RepoID:        req.RepoID,
 	}
 	if existing, ok, err := s.repo.FindDuplicateEvent(ctx, dedup); err != nil {
+		s.logger.Error("observe duplicate check failed", "request_id", requestID, "error", err)
 		return ObserveResponse{}, err
 	} else if ok {
+		s.logger.Info("observe deduped",
+			"request_id", requestID,
+			"existing_event_id", existing.ID,
+			"event_type", req.EventType,
+		)
 		// 重复事件：更新 session 质量统计（deduped 计数+1），返回已存在的事件 ID
 		if hasSession {
 			_ = s.updateQuality(ctx, req, true)
@@ -191,9 +213,16 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 	// Step 10: 构建并写入 raw_event——append-only 事实层，将关键词/salient_spans/source_refs 序列化为 JSON
 	event, err := buildRawEvent(req, occurredAt)
 	if err != nil {
+		s.logger.Error("observe build raw event failed", "request_id", requestID, "error", err)
 		return ObserveResponse{}, err
 	}
 	if err := s.repo.InsertRawEvent(ctx, event); err != nil {
+		s.logger.Error("observe insert raw event failed",
+			"request_id", requestID,
+			"event_id", event.ID,
+			"event_type", req.EventType,
+			"error", err,
+		)
 		return ObserveResponse{}, err
 	}
 	diagnostics := make([]string, 0, 2)
@@ -244,9 +273,27 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 	if s.enqueuer != nil {
 		if err := s.enqueuer.EnqueueRawEvent(ctx, event); err != nil {
 			// 入队失败不阻塞主流程，记录诊断信息返回给调用方
+			s.logger.Error("observe automation enqueue failed",
+				"request_id", requestID,
+				"event_id", event.ID,
+				"error", err,
+			)
 			diagnostics = append(diagnostics, "automation_enqueue_failed")
+		} else {
+			s.logger.Debug("observe automation enqueued",
+				"request_id", requestID,
+				"event_id", event.ID,
+			)
 		}
 	}
+	s.logger.Info("observe succeeded",
+		"request_id", requestID,
+		"event_id", event.ID,
+		"event_type", req.EventType,
+		"session_id", req.SessionID,
+		"task_id", req.TaskID,
+		"capture_level", captureLevel,
+	)
 	return ObserveResponse{
 		RequestID:    requestID,
 		RawEventID:   event.ID,
@@ -321,13 +368,9 @@ func (s *Service) Quality(ctx context.Context, req QualityRequest) (QualityRespo
 //
 // session.start 时会初始化 capture_capabilities 和 capture_quality_json。
 func (s *Service) resolveSession(ctx context.Context, req ObserveRequest, captureLevel int) (AgentSession, bool, error) {
-	// 场景 1: session.start 且无 session_id -> 生成新 session_id（首次创建会话）
+	// 场景 1: session.start 必须携带 session_id（由 SessionBinder / Driver 绑定，禁止服务端 idgen）
 	if req.EventType == EventSessionStart && req.SessionID == "" {
-		sessionID, err := idgen.New("sess")
-		if err != nil {
-			return AgentSession{}, false, err
-		}
-		req.SessionID = sessionID
+		return AgentSession{}, false, fmt.Errorf("SESSION_REQUIRED: session.start requires session_id")
 	}
 	// 场景 2: 无 session_id -> 返回 false（非会话级事件，如手动 CLI 写入）
 	if req.SessionID == "" {

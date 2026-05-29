@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 )
 
+// RuntimeState 兼容旧版混写结构；P1 迁移后仅用于读取 legacy session.json。
 type RuntimeState struct {
 	SessionID       string `json:"session_id"`
 	TaskID          string `json:"task_id"`
@@ -15,64 +16,53 @@ type RuntimeState struct {
 	LastTurnSig     string `json:"last_turn_sig"`
 }
 
+// StateStore 回合去重状态持久化（P1：仅 turn-dedup 字段）。
 type StateStore interface {
-	Load() (RuntimeState, error)
-	Save(state RuntimeState) error
+	Load() (TurnDedupState, error)
+	Save(state TurnDedupState) error
+	Clear() error
 }
 
+// FileStateStore 基于 turn-dedup.json 的去重存储。
 type FileStateStore struct {
 	dirPath  string
 	filePath string
 }
 
+// NewFileStateStore 创建去重状态存储并执行 P1 迁移。
 func NewFileStateStore(dirPath string) *FileStateStore {
+	_ = EnsureP1Migration(dirPath)
 	return &FileStateStore{
 		dirPath:  dirPath,
 		filePath: filepath.Join(dirPath, "turn-dedup.json"),
 	}
 }
 
-func (s *FileStateStore) Load() (RuntimeState, error) {
+// Load 读取 turn-dedup.json；缺失时返回空状态。
+func (s *FileStateStore) Load() (TurnDedupState, error) {
 	data, err := os.ReadFile(s.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return loadLegacyRuntimeState(s.dirPath)
+			return TurnDedupState{}, nil
 		}
-		return RuntimeState{}, fmt.Errorf("load runtime state: %w", err)
+		return TurnDedupState{}, fmt.Errorf("load turn dedup: %w", err)
 	}
-	var state RuntimeState
+	var state TurnDedupState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return RuntimeState{}, fmt.Errorf("decode runtime state: %w", err)
+		return TurnDedupState{}, fmt.Errorf("decode turn dedup: %w", err)
 	}
 	return state, nil
 }
 
-func loadLegacyRuntimeState(dirPath string) (RuntimeState, error) {
-	legacyPath := filepath.Join(dirPath, "session.json")
-	data, err := os.ReadFile(legacyPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return RuntimeState{}, nil
-		}
-		return RuntimeState{}, fmt.Errorf("load legacy runtime state: %w", err)
-	}
-	var state RuntimeState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return RuntimeState{}, fmt.Errorf("decode legacy runtime state: %w", err)
-	}
-	return state, nil
+// Save 仅写入去重字段。
+func (s *FileStateStore) Save(state TurnDedupState) error {
+	return writeTurnDedup(s.dirPath, state)
 }
 
-func (s *FileStateStore) Save(state RuntimeState) error {
+// Clear 清空回合去重状态（新 Composer 会话时调用）。
+func (s *FileStateStore) Clear() error {
 	if err := os.MkdirAll(s.dirPath, 0o755); err != nil {
 		return fmt.Errorf("create runtime state dir: %w", err)
 	}
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode runtime state: %w", err)
-	}
-	if err := os.WriteFile(s.filePath, data, 0o644); err != nil {
-		return fmt.Errorf("write runtime state: %w", err)
-	}
-	return nil
+	return writeTurnDedup(s.dirPath, TurnDedupState{})
 }

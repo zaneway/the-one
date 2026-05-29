@@ -18,6 +18,7 @@ func TestCaptureServiceObserveWithSQLiteRepository(t *testing.T) {
 	service := capture.NewService(cfg, store)
 
 	start, err := service.Observe(ctx, capture.ObserveRequest{
+		SessionID:     "sess_sqlite_integration_001",
 		EventType:     capture.EventSessionStart,
 		SourceChannel: capture.SourceChannelAgentSession,
 		WorkspaceID:   "ws",

@@ -22,6 +22,7 @@ func TestAppRegistersCaptureTools(t *testing.T) {
 	defer app.Close()
 
 	rawStart, toolErr := app.CallTool(ctx, "memory.observe", capture.ObserveRequest{
+		SessionID:     "sess_app_capture_tools_001",
 		EventType:     capture.EventSessionStart,
 		SourceChannel: capture.SourceChannelAgentSession,
 		WorkspaceID:   "ws",

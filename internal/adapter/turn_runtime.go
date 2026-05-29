@@ -9,12 +9,21 @@ import (
 	"github.com/zaneway/theone/internal/capture"
 )
 
+// TurnRuntime 负责将 Turn payload 展开为多个 ObserveRequest。
+// 设计约束：TurnRuntime 不直接写入 raw_event，只负责事件展开和去重状态管理。
 type TurnRuntime struct {
-	store StateStore
+	store      StateStore
+	expandMode string
 }
 
+// NewTurnRuntime 创建 Turn 运行时（legacy 展开）。
 func NewTurnRuntime(store StateStore) *TurnRuntime {
-	return &TurnRuntime{store: store}
+	return NewTurnRuntimeWithExpandMode(store, ExpandModeLegacy)
+}
+
+// NewTurnRuntimeWithExpandMode 创建带展开模式的 Turn 运行时。
+func NewTurnRuntimeWithExpandMode(store StateStore, expandMode string) *TurnRuntime {
+	return &TurnRuntime{store: store, expandMode: NormalizeExpandMode(expandMode)}
 }
 
 type ToolResultInput struct {
@@ -81,8 +90,8 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 	if err != nil {
 		return nil, err
 	}
-	sessionID := firstNonEmpty(strings.TrimSpace(payload.SessionID), strings.TrimSpace(state.SessionID))
-	taskID := firstNonEmpty(strings.TrimSpace(payload.TaskID), strings.TrimSpace(state.TaskID))
+	sessionID := strings.TrimSpace(payload.SessionID)
+	taskID := strings.TrimSpace(payload.TaskID)
 	if sessionID == "" {
 		return nil, fmt.Errorf("missing required session_id")
 	}
@@ -121,7 +130,8 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 		state.LastTaskSummary = payload.TaskSummary
 	}
 
-	hasHighSignal := len(payload.ToolResults) > 0 || len(payload.FileEdits) > 0 || strings.TrimSpace(payload.DecisionSummary) != ""
+	expandV2 := IsExpandModeV2(r.expandMode)
+	hasHighSignal := !expandV2 && (len(payload.ToolResults) > 0 || len(payload.FileEdits) > 0 || strings.TrimSpace(payload.DecisionSummary) != "")
 	signature := turnSignature(payload.TurnID, payload.UserSummary, payload.AgentSummary)
 	emitBaseTurn := !payload.SkipBaseTurn && (payload.IsSubstantive || hasHighSignal)
 	if emitBaseTurn && !(payload.TurnID != "" && payload.TurnID == state.LastTurnID && signature == state.LastTurnSig) {
@@ -156,41 +166,43 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 		state.LastTurnSig = signature
 	}
 
-	for _, item := range payload.ToolResults {
-		if strings.TrimSpace(item.ToolName) == "" {
-			continue
+	if !expandV2 {
+		for _, item := range payload.ToolResults {
+			if strings.TrimSpace(item.ToolName) == "" {
+				continue
+			}
+			toolReq := common
+			toolReq.EventType = capture.EventToolResultSummary
+			toolReq.Actor = capture.ActorTool
+			toolReq.ToolName = item.ToolName
+			toolReq.InputSummary = item.InputSummary
+			toolReq.OutputSummary = item.OutputSummary
+			toolReq.ContentSummary = "工具结果：" + item.ToolName
+			toolReq.SourceRefs = append(toolReq.SourceRefs, capture.SourceRef{
+				"source_type": "tool_output",
+				"exit_code":   item.ExitCode,
+			})
+			requests = append(requests, toolReq)
 		}
-		toolReq := common
-		toolReq.EventType = capture.EventToolResultSummary
-		toolReq.Actor = capture.ActorTool
-		toolReq.ToolName = item.ToolName
-		toolReq.InputSummary = item.InputSummary
-		toolReq.OutputSummary = item.OutputSummary
-		toolReq.ContentSummary = "工具结果：" + item.ToolName
-		toolReq.SourceRefs = append(toolReq.SourceRefs, capture.SourceRef{
-			"source_type": "tool_output",
-			"exit_code":   item.ExitCode,
-		})
-		requests = append(requests, toolReq)
-	}
 
-	for _, item := range payload.FileEdits {
-		if strings.TrimSpace(item.FilePath) == "" {
-			continue
+		for _, item := range payload.FileEdits {
+			if strings.TrimSpace(item.FilePath) == "" {
+				continue
+			}
+			editReq := common
+			editReq.EventType = capture.EventFileEditSummary
+			editReq.Actor = capture.ActorAgent
+			editReq.ContentSummary = firstNonEmpty(item.ContentSummary, "文件修改："+item.FilePath)
+			editReq.SourceRefs = append(editReq.SourceRefs, capture.SourceRef{
+				"source_type": "file_edit_summary",
+				"file_path":   item.FilePath,
+				"symbol":      item.Symbol,
+				"before_hash": item.BeforeHash,
+				"after_hash":  item.AfterHash,
+				"change_type": item.ChangeType,
+			})
+			requests = append(requests, editReq)
 		}
-		editReq := common
-		editReq.EventType = capture.EventFileEditSummary
-		editReq.Actor = capture.ActorAgent
-		editReq.ContentSummary = firstNonEmpty(item.ContentSummary, "文件修改："+item.FilePath)
-		editReq.SourceRefs = append(editReq.SourceRefs, capture.SourceRef{
-			"source_type": "file_edit_summary",
-			"file_path":   item.FilePath,
-			"symbol":      item.Symbol,
-			"before_hash": item.BeforeHash,
-			"after_hash":  item.AfterHash,
-			"change_type": item.ChangeType,
-		})
-		requests = append(requests, editReq)
 	}
 
 	if strings.TrimSpace(payload.DecisionSummary) != "" {
@@ -219,14 +231,14 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 		requests = append(requests, resultReq)
 	}
 
-	state.SessionID = sessionID
-	state.TaskID = taskID
 	if err := r.store.Save(state); err != nil {
 		return nil, err
 	}
 	return requests, nil
 }
 
+// isTerminalStatus 判断任务状态是否为终态。
+// 终态包括：succeeded、failed、interrupted、completed。
 func isTerminalStatus(status string) bool {
 	switch strings.TrimSpace(status) {
 	case capture.StatusSucceeded, capture.StatusFailed, capture.StatusInterrupted, capture.StatusCompleted:
@@ -236,15 +248,21 @@ func isTerminalStatus(status string) bool {
 	}
 }
 
+// turnSignature 计算 Turn 的内容签名（SHA256）。
+// 用于内容级去重：相同 turnID + userSummary + agentSummary 生成相同签名。
 func turnSignature(turnID, userSummary, agentSummary string) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{turnID, userSummary, agentSummary}, "|")))
 	return hex.EncodeToString(sum[:])
 }
 
+// normalize 归一化字符串：去除首尾空白，合并连续空白为单个空格。
+// 用于 task summary 的变更检测。
 func normalize(value string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
 
+// firstNonEmpty 返回第一个非空白字符串。
+// 用于优先使用 payload 中的值，回退到 state 中的值。
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -254,6 +272,9 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// appendRetrievalSourceRefs 将检索上下文信息追加到 source_refs。
+// 当 payload 包含 retrieval_trace_id、used_memory_ids 或 injected_to_prompt 时，
+// 构造 memory_context 类型的 source_ref 追加到列表中。
 func appendRetrievalSourceRefs(refs []capture.SourceRef, payload TurnPayload) []capture.SourceRef {
 	if strings.TrimSpace(payload.RetrievalTraceID) == "" && len(payload.UsedMemoryIDs) == 0 && !payload.InjectedToPrompt {
 		return refs

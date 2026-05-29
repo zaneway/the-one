@@ -36,7 +36,7 @@ func TestNormalizeObserveRequiresExplicitAgentTypeForAgentSession(t *testing.T) 
 	}
 }
 
-func TestNormalizeObserveAllowsSessionStartWithoutSessionID(t *testing.T) {
+func TestNormalizeObserveRequiresSessionIDOnSessionStart(t *testing.T) {
 	cfg := config.Default().Capture
 	req := ObserveRequest{
 		EventType:     EventSessionStart,
@@ -50,11 +50,9 @@ func TestNormalizeObserveAllowsSessionStartWithoutSessionID(t *testing.T) {
 		SourceRefs: []SourceRef{{"capture_method": "git_diff"}},
 	}
 
-	if err := NormalizeObserve(cfg, &req); err != nil {
-		t.Fatalf("NormalizeObserve() error = %v", err)
-	}
-	if req.Task.TaskSummary != "run capture tests" {
-		t.Fatalf("task summary = %q, want normalized summary", req.Task.TaskSummary)
+	err := NormalizeObserve(cfg, &req)
+	if err == nil || !strings.Contains(err.Error(), "SESSION_REQUIRED") {
+		t.Fatalf("NormalizeObserve() error = %v, want SESSION_REQUIRED", err)
 	}
 }
 

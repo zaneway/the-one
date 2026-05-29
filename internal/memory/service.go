@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -65,6 +66,7 @@ type Service struct {
 	orchestrator      RetrievalOrchestrator    // 检索编排器；为空时保持 FTS 路径
 	accessFeedback    AccessFeedbackWriter     // 质量闭环：review 等写入 access log
 	rememberAdmission RememberAdmissionDecider // 显式 remember 准入；运行时必须注入
+	logger            *slog.Logger             // 结构化日志
 }
 
 // RetrievalOrchestrator 定义 memory.Service 可选接入的检索编排接口。
@@ -103,10 +105,17 @@ func WithRememberAdmissionDecider(decider RememberAdmissionDecider) ServiceOptio
 	}
 }
 
+// WithLogger 注入结构化日志实例。
+func WithLogger(logger *slog.Logger) ServiceOption {
+	return func(s *Service) {
+		s.logger = logger
+	}
+}
+
 // NewService 创建 Memory 服务。
 // 默认只启用 FTS + metadata 检索路径；通过 WithRetrievalOrchestrator 可接入检索编排器。
 func NewService(cfg config.Config, repo Repository, opts ...ServiceOption) *Service {
-	service := &Service{cfg: cfg, repo: repo}
+	service := &Service{cfg: cfg, repo: repo, logger: slog.Default()}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(service)
@@ -122,12 +131,20 @@ func NewService(cfg config.Config, repo Repository, opts ...ServiceOption) *Serv
 // 幂等检测：按 scope + type + content + 所有隔离 ID 匹配，命中则返回已有记忆。
 func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberResponse, error) {
 	if s.rememberAdmission == nil {
+		s.logger.Error("remember admission decider not configured")
 		return RememberResponse{}, fmt.Errorf("ADMISSION_REQUIRED: remember admission decider is not configured")
 	}
 	// Step 1: 归一化请求参数，填充默认值（user_id、workspace_id、source_type、confidence、importance）
 	if err := NormalizeRemember(s.cfg.Memory, &req); err != nil {
+		s.logger.Error("remember normalize failed", "error", err)
 		return RememberResponse{}, err
 	}
+	s.logger.Info("remember started",
+		"memory_type", req.MemoryType,
+		"scope", req.Scope,
+		"source_type", req.SourceType,
+		"content_len", len([]rune(req.Content)),
+	)
 	// Step 2: 将 review_checkpoint 序列化为 JSON，用于后续内容边界检查
 	checkpointRaw := ""
 	if req.ReviewCheckpoint != nil {
@@ -164,16 +181,26 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 	}
 	// Step 5: 幂等检测——按 scope + type + content + 所有隔离 ID 匹配已有记忆
 	if existing, ok, err := s.repo.FindDuplicate(ctx, probe); err != nil {
+		s.logger.Error("remember duplicate check failed", "error", err)
 		return RememberResponse{}, err
 	} else if ok {
-		// 命中重复记忆，直接返回已有记忆的 ID 和状态，不重复写入
+		s.logger.Info("remember deduped",
+			"memory_id", existing.ID,
+			"existing_state", existing.State,
+			"existing_tier", existing.Tier,
+		)
 		return RememberResponse{MemoryID: existing.ID, State: existing.State, Tier: existing.Tier, Deduped: true}, nil
 	}
 	admission, err := s.rememberAdmission.DecideRemember(ctx, req)
 	if err != nil {
+		s.logger.Error("remember admission decision failed", "error", err)
 		return RememberResponse{}, err
 	}
 	if !admission.Allowed {
+		s.logger.Info("remember admission rejected",
+			"decision", admission.Decision,
+			"reason_codes", admission.ReasonCodes,
+		)
 		return RememberResponse{}, fmt.Errorf("ADMISSION_REJECTED: decision=%s reasons=%v", admission.Decision, admission.ReasonCodes)
 	}
 	state := admission.InitialState
@@ -282,8 +309,22 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 	}
 	// Step 12: 事务写入 memory_item + evidence + memory_evidence_link + FTS 索引
 	if err := s.repo.Remember(ctx, item, evidence, checkpoint); err != nil {
+		s.logger.Error("remember write failed",
+			"memory_id", memoryID,
+			"memory_type", req.MemoryType,
+			"scope", req.Scope,
+			"error", err,
+		)
 		return RememberResponse{}, err
 	}
+	s.logger.Info("remember succeeded",
+		"memory_id", memoryID,
+		"memory_type", req.MemoryType,
+		"scope", req.Scope,
+		"state", state,
+		"tier", tier,
+		"source_type", req.SourceType,
+	)
 	return RememberResponse{MemoryID: memoryID, State: state, Tier: tier, Deduped: false}, nil
 }
 
@@ -298,12 +339,14 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 // 诊断信息：返回 FTSHits、FilteredCount、LatencyMS 和 RetrievalTraceID，用于评估检索质量。
 func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse, error) {
 	if s.orchestrator != nil {
+		s.logger.Debug("search delegated to orchestrator")
 		return s.orchestrator.Search(ctx, req)
 	}
 	if strings.TrimSpace(req.Query) == "" {
 		return SearchResponse{}, fmt.Errorf("VALIDATION_FAILED: query is required")
 	}
 	if err := ValidateSearchScopes(req.Scope, req.WorkspaceID, req.ProjectID, req.RepoID, req.SessionID); err != nil {
+		s.logger.Error("search scope validation failed", "error", err)
 		return SearchResponse{}, err
 	}
 	if req.Limit <= 0 {
@@ -311,11 +354,20 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse
 	}
 	traceID, err := idgen.New("rt")
 	if err != nil {
+		s.logger.Error("search trace id generation failed", "error", err)
 		return SearchResponse{}, err
 	}
+	s.logger.Info("search started",
+		"trace_id", traceID,
+		"query_len", len([]rune(req.Query)),
+		"scopes", req.Scope,
+		"memory_types", req.MemoryTypes,
+		"limit", req.Limit,
+	)
 	startedAt := time.Now()
 	results, diag, err := s.repo.Search(ctx, req)
 	if err != nil {
+		s.logger.Error("search failed", "trace_id", traceID, "error", err, "latency_ms", time.Since(startedAt).Milliseconds())
 		return SearchResponse{}, err
 	}
 	diag.RetrievalTraceID = traceID
@@ -323,6 +375,13 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse
 	diag.RetrievalIntent = "general_search"
 	diag.RetrievalMode = "fts_metadata"
 	diag.UsedFTS = true
+	s.logger.Info("search completed",
+		"trace_id", traceID,
+		"result_count", len(results),
+		"fts_hits", diag.FTSHits,
+		"filtered_count", diag.FilteredCount,
+		"latency_ms", diag.LatencyMS,
+	)
 	return SearchResponse{RetrievalTraceID: traceID, Results: results, Diagnostics: diag}, nil
 }
 
@@ -340,13 +399,21 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse
 // 设计说明：使用字符数近似 token 数，后续可替换为 tokenizer；compress 使用 rune 计算，正确处理中文。
 func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextResponse, error) {
 	if s.orchestrator != nil {
+		s.logger.Debug("context delegated to orchestrator")
 		return s.orchestrator.Context(ctx, req)
 	}
 	startedAt := time.Now()
 	// Step 1: 参数校验——task 为必填，token_budget 使用配置默认值
 	if strings.TrimSpace(req.Task) == "" {
+		s.logger.Error("context task is empty")
 		return ContextResponse{}, fmt.Errorf("VALIDATION_FAILED: task is required")
 	}
+	s.logger.Info("context started",
+		"task_len", len([]rune(req.Task)),
+		"token_budget", req.TokenBudget,
+		"workspace_id", req.WorkspaceID,
+		"project_id", req.ProjectID,
+	)
 	if req.TokenBudget <= 0 {
 		req.TokenBudget = s.cfg.Retrieval.DefaultTokenBudget
 	}
@@ -446,6 +513,24 @@ func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextRespo
 	if len(memories) > 0 {
 		summary = memories[0].Compressed
 	}
+	return ContextResponse{
+		ContextPack: ContextPack{
+			Summary:     summary,
+			Memories:    memories,
+			Constraints: constraints,
+			CodeRefs:    []CodeRef{},
+		},
+		UsedMemoryIDs:    usedIDs,
+		RetrievalTraceID: searchResp.Diagnostics.RetrievalTraceID,
+		LatencyMS:        time.Since(startedAt).Milliseconds(),
+	}, nil
+	s.logger.Info("context completed",
+		"memory_count", len(memories),
+		"used_memory_count", len(usedIDs),
+		"constraint_count", len(constraints),
+		"retrieval_trace_id", searchResp.Diagnostics.RetrievalTraceID,
+		"latency_ms", time.Since(startedAt).Milliseconds(),
+	)
 	return ContextResponse{
 		ContextPack: ContextPack{
 			Summary:     summary,
@@ -565,6 +650,11 @@ func containsMemoryType(results []SearchResult, memoryType string) bool {
 //   - edit：原地更新内容，version+1，同步 FTS，记录编辑历史
 //   - delete：-> deleted，写入 tombstone，删除 FTS，记录审核历史
 func (s *Service) Review(ctx context.Context, req ReviewRequest) (ReviewResponse, error) {
+	s.logger.Info("review started",
+		"action", req.Action,
+		"memory_id", req.MemoryID,
+		"workspace_id", req.WorkspaceID,
+	)
 	switch req.Action {
 	// list: 查询 pending_review 状态的记忆，支持 scope 过滤和分页
 	case "list":
@@ -572,18 +662,29 @@ func (s *Service) Review(ctx context.Context, req ReviewRequest) (ReviewResponse
 			req.Limit = s.cfg.Retrieval.DefaultLimit
 		}
 		items, err := s.repo.ListReview(ctx, req)
+		if err != nil {
+			s.logger.Error("review list failed", "error", err)
+		} else {
+			s.logger.Debug("review list completed", "count", len(items))
+		}
 		return ReviewResponse{Results: items}, err
 	// approve: pending_review -> stable，记录 user_confirmed=true（用户确认的稳定记忆）
 	case "approve":
 		item, err := s.repo.Approve(ctx, req.MemoryID, req.Reviewer, req.Feedback)
-		if err == nil {
+		if err != nil {
+			s.logger.Error("review approve failed", "memory_id", req.MemoryID, "error", err)
+		} else {
+			s.logger.Info("review approved", "memory_id", item.ID, "new_state", item.State)
 			s.recordAccessFeedback(ctx, item.ID, "user_confirmed", item.SourceQuality)
 		}
 		return ReviewResponse{MemoryID: item.ID, State: item.State, UserConfirmed: item.UserConfirmed}, err
 	// reject/archive: -> archived，记录审核意见
 	case "reject", "archive":
 		item, err := s.repo.RejectOrArchive(ctx, req.MemoryID, req.Action, req.Reviewer, req.Feedback)
-		if err == nil {
+		if err != nil {
+			s.logger.Error("review reject/archive failed", "action", req.Action, "memory_id", req.MemoryID, "error", err)
+		} else {
+			s.logger.Info("review rejected/archived", "action", req.Action, "memory_id", item.ID, "new_state", item.State)
 			s.recordAccessFeedback(ctx, item.ID, "user_rejected", item.SourceQuality)
 		}
 		return ReviewResponse{MemoryID: item.ID, State: item.State, UserConfirmed: item.UserConfirmed}, err
@@ -597,11 +698,13 @@ func (s *Service) Review(ctx context.Context, req ReviewRequest) (ReviewResponse
 		if err := ingest.CheckMinimizedContent(s.cfg.Memory, ingest.MinimizationInput{
 			Content: req.EditContent,
 		}); err != nil {
+			s.logger.Error("review edit content check failed", "memory_id", req.MemoryID, "error", err)
 			return ReviewResponse{}, err
 		}
 		// 获取原记忆对象，用于继承 title 和构建新的 search_text
 		item, err := s.repo.Get(ctx, req.MemoryID)
 		if err != nil {
+			s.logger.Error("review edit get memory failed", "memory_id", req.MemoryID, "error", err)
 			return ReviewResponse{}, err
 		}
 		// 用新内容重建 FTS 文档（保留原 title，content/normalized_content 替换为编辑后的内容）
@@ -611,12 +714,23 @@ func (s *Service) Review(ctx context.Context, req ReviewRequest) (ReviewResponse
 			NormalizedContent: req.EditContent,
 		})
 		updated, err := s.repo.Edit(ctx, req.MemoryID, req.EditContent, req.Reviewer, req.Feedback, searchText)
+		if err != nil {
+			s.logger.Error("review edit failed", "memory_id", req.MemoryID, "error", err)
+		} else {
+			s.logger.Info("review edited", "memory_id", updated.ID, "new_version", updated.Version)
+		}
 		return ReviewResponse{MemoryID: updated.ID, State: updated.State, UserConfirmed: updated.UserConfirmed}, err
 	// delete: -> deleted，写入 tombstone，删除 FTS 条目，记录审核历史
 	case "delete":
 		item, err := s.repo.Delete(ctx, req.MemoryID, req.Reviewer, req.Feedback)
+		if err != nil {
+			s.logger.Error("review delete failed", "memory_id", req.MemoryID, "error", err)
+		} else {
+			s.logger.Info("review deleted", "memory_id", item.ID)
+		}
 		return ReviewResponse{MemoryID: item.ID, State: item.State, UserConfirmed: item.UserConfirmed}, err
 	default:
+		s.logger.Error("review unsupported action", "action", req.Action)
 		return ReviewResponse{}, fmt.Errorf("VALIDATION_FAILED: unsupported review action %q", req.Action)
 	}
 }

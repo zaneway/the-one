@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -74,6 +75,7 @@ type Service struct {
 	provider   processor.Provider
 	admission  AdmissionController
 	dispatcher JobDispatcher
+	logger     *slog.Logger
 }
 
 // NewService 创建自动记忆服务。provider 为空时使用 rule_based，保证默认本地可运行。
@@ -87,6 +89,7 @@ func NewService(cfg config.Config, repo Repository, provider processor.Provider)
 		repo:      repo,
 		provider:  provider,
 		admission: NewAdmissionController(),
+		logger:    slog.Default(),
 	}
 	service.dispatcher = NewJobDispatcher(
 		p3JobHandler{service: service},
@@ -103,9 +106,10 @@ func (s *Service) EnqueueRawEvent(ctx context.Context, rawEvent capture.RawEvent
 	}
 	jobID, err := idgen.New("job")
 	if err != nil {
+		s.logger.Error("enqueue raw event job id generation failed", "error", err)
 		return err
 	}
-	_, _, err = s.repo.EnqueueJob(ctx, AsyncJob{
+	_, enqueued, err := s.repo.EnqueueJob(ctx, AsyncJob{
 		ID:         jobID,
 		JobType:    JobTypeExtractEvidence,
 		TargetType: TargetTypeRawEvent,
@@ -114,6 +118,15 @@ func (s *Service) EnqueueRawEvent(ctx context.Context, rawEvent capture.RawEvent
 		MaxRetries: defaultMaxRetries,
 		DedupKey:   JobTypeExtractEvidence + ":" + rawEvent.ID,
 	})
+	if err != nil {
+		s.logger.Error("enqueue raw event failed", "raw_event_id", rawEvent.ID, "error", err)
+		return err
+	}
+	s.logger.Debug("enqueue raw event succeeded",
+		"job_id", jobID,
+		"raw_event_id", rawEvent.ID,
+		"enqueued", enqueued,
+	)
 	return err
 }
 
@@ -122,16 +135,33 @@ func (s *Service) EnqueueRawEvent(ctx context.Context, rawEvent capture.RawEvent
 // 设计约束：Provider 执行发生在 claim 事务之外，避免长时间持锁。
 func (s *Service) RunJob(ctx context.Context, job AsyncJob) error {
 	now := time.Now()
+	s.logger.Info("job started",
+		"job_id", job.ID,
+		"job_type", job.JobType,
+		"target_type", job.TargetType,
+		"target_id", job.TargetID,
+		"retry_count", job.RetryCount,
+	)
 	payload, err := s.dispatcher.RunJob(ctx, job)
 	if err != nil {
+		s.logger.Error("job failed",
+			"job_id", job.ID,
+			"job_type", job.JobType,
+			"error", err,
+		)
 		_ = s.repo.MarkJobFailed(ctx, job.ID, err.Error(), now)
 		return err
 	}
 	payloadJSON, err := jsonText(payload)
 	if err != nil {
+		s.logger.Error("job payload marshal failed", "job_id", job.ID, "error", err)
 		_ = s.repo.MarkJobFailed(ctx, job.ID, err.Error(), now)
 		return err
 	}
+	s.logger.Info("job succeeded",
+		"job_id", job.ID,
+		"job_type", job.JobType,
+	)
 	return s.repo.MarkJobSucceeded(ctx, job.ID, payloadJSON, now)
 }
 
@@ -145,8 +175,14 @@ func (s *Service) RunJob(ctx context.Context, job AsyncJob) error {
 func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[string]any, error) {
 	rawEvent, err := s.repo.GetRawEvent(ctx, job.TargetID)
 	if err != nil {
+		s.logger.Error("extract evidence get raw event failed", "job_id", job.ID, "target_id", job.TargetID, "error", err)
 		return nil, err
 	}
+	s.logger.Debug("extract evidence loaded raw event",
+		"job_id", job.ID,
+		"event_type", rawEvent.EventType,
+		"session_id", rawEvent.SessionID,
+	)
 	session, err := s.loadSession(ctx, rawEvent.SessionID)
 	if err != nil {
 		return nil, err
@@ -171,19 +207,36 @@ func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[str
 		Now:           time.Now(),
 	})
 	if err != nil {
+		s.logger.Error("extract evidence provider failed",
+			"job_id", job.ID,
+			"event_type", rawEvent.EventType,
+			"error", err,
+		)
 		return nil, err
 	}
+	s.logger.Debug("extract evidence provider returned",
+		"job_id", job.ID,
+		"draft_count", len(drafts),
+	)
 	written := 0
 	for _, draft := range drafts {
 		evidence, err := s.materializeEvidence(ctx, rawEvent.ID, draft)
 		if err != nil {
+			s.logger.Error("extract evidence materialize failed", "job_id", job.ID, "error", err)
 			return nil, err
 		}
 		written++
 		if err := s.enqueueNext(ctx, JobTypeGenerateMemoryCandidate, TargetTypeEvidence, evidence.ID, 4); err != nil {
+			s.logger.Error("extract evidence enqueue next failed", "job_id", job.ID, "evidence_id", evidence.ID, "error", err)
 			return nil, err
 		}
 	}
+	s.logger.Info("extract evidence completed",
+		"job_id", job.ID,
+		"event_type", rawEvent.EventType,
+		"draft_count", len(drafts),
+		"written_count", written,
+	)
 	return map[string]any{"evidence_count": written}, nil
 }
 
@@ -198,12 +251,20 @@ func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[str
 func (s *Service) runGenerateMemoryCandidate(ctx context.Context, job AsyncJob) (map[string]any, error) {
 	evidence, err := s.repo.GetEvidence(ctx, job.TargetID)
 	if err != nil {
+		s.logger.Error("generate candidate get evidence failed", "job_id", job.ID, "target_id", job.TargetID, "error", err)
 		return nil, err
 	}
 	rawEvent, err := s.repo.GetRawEvent(ctx, evidence.RawEventID)
 	if err != nil {
+		s.logger.Error("generate candidate get raw event failed", "job_id", job.ID, "evidence_id", evidence.ID, "error", err)
 		return nil, err
 	}
+	s.logger.Debug("generate candidate loaded context",
+		"job_id", job.ID,
+		"evidence_id", evidence.ID,
+		"source_type", evidence.SourceType,
+		"event_type", rawEvent.EventType,
+	)
 	related, err := s.repo.FindRelatedMemory(ctx, RelatedMemoryRequest{
 		WorkspaceID: rawEvent.WorkspaceID,
 		ProjectID:   rawEvent.ProjectID,
@@ -231,22 +292,40 @@ func (s *Service) runGenerateMemoryCandidate(ctx context.Context, job AsyncJob) 
 		Now:           time.Now(),
 	})
 	if err != nil {
+		s.logger.Error("generate candidate provider failed",
+			"job_id", job.ID,
+			"evidence_id", evidence.ID,
+			"error", err,
+		)
 		return nil, err
 	}
+	s.logger.Debug("generate candidate provider returned",
+		"job_id", job.ID,
+		"candidate_count", len(candidates),
+	)
 	written := 0
 	for _, candidate := range candidates {
 		record, err := s.materializeCandidate(candidate, evidence, rawEvent)
 		if err != nil {
+			s.logger.Error("generate candidate materialize failed", "job_id", job.ID, "error", err)
 			return nil, err
 		}
 		if err := s.repo.WriteCandidate(ctx, record); err != nil {
+			s.logger.Error("generate candidate write failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
 			return nil, err
 		}
 		written++
 		if err := s.enqueueNext(ctx, JobTypeComputeAdmission, TargetTypeMemoryCandidate, record.ID, 5); err != nil {
+			s.logger.Error("generate candidate enqueue next failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
 			return nil, err
 		}
 	}
+	s.logger.Info("generate candidate completed",
+		"job_id", job.ID,
+		"evidence_id", evidence.ID,
+		"candidate_count", len(candidates),
+		"written_count", written,
+	)
 	return map[string]any{"candidate_count": written}, nil
 }
 
@@ -263,13 +342,21 @@ func (s *Service) runGenerateMemoryCandidate(ctx context.Context, job AsyncJob) 
 func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[string]any, error) {
 	record, err := s.repo.GetCandidate(ctx, job.TargetID)
 	if err != nil {
+		s.logger.Error("compute admission get candidate failed", "job_id", job.ID, "target_id", job.TargetID, "error", err)
 		return nil, err
 	}
 	evidence, err := s.repo.GetEvidence(ctx, record.EvidenceID)
 	if err != nil {
+		s.logger.Error("compute admission get evidence failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
 		return nil, err
 	}
 	candidate := candidateFromRecord(record, evidence.SourceType)
+	s.logger.Debug("compute admission loaded candidate",
+		"job_id", job.ID,
+		"candidate_id", record.ID,
+		"memory_type", candidate.MemoryType,
+		"scope", candidate.Scope,
+	)
 	related, err := s.repo.FindRelatedMemory(ctx, RelatedMemoryRequest{
 		WorkspaceID: candidate.WorkspaceID,
 		ProjectID:   candidate.ProjectID,
@@ -280,28 +367,42 @@ func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[st
 		Limit:       10,
 	})
 	if err != nil {
+		s.logger.Error("compute admission find related memory failed", "job_id", job.ID, "error", err)
 		return nil, err
 	}
 	admission := s.admission.Decide(AdmissionInput{Candidate: candidate, RelatedMemory: related})
+	s.logger.Info("compute admission decided",
+		"job_id", job.ID,
+		"candidate_id", record.ID,
+		"decision", admission.Decision,
+		"admission_score", admission.AdmissionScore,
+		"memory_type", candidate.MemoryType,
+		"scope", candidate.Scope,
+	)
 	switch admission.Decision {
 	case DecisionDrop, DecisionWriteRawOnly:
 		if err := s.repo.UpdateCandidateAdmission(ctx, record.ID, admission, CandidateStatusDropped, ""); err != nil {
+			s.logger.Error("compute admission update dropped failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
 			return nil, err
 		}
 		return map[string]any{"admission_decision": admission.Decision}, nil
 	case DecisionWriteTemporary, DecisionWriteProvisional, DecisionWritePendingReview, DecisionWriteStable:
 		item, err := s.memoryItemFromAdmission(record, candidate, admission, evidence)
 		if err != nil {
+			s.logger.Error("compute admission build memory item failed", "job_id", job.ID, "error", err)
 			return nil, err
 		}
 		written, err := s.writeAdmittedMemory(ctx, record, candidate, admission, evidence, item, related)
 		if err != nil {
+			s.logger.Error("compute admission write memory failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
 			return nil, err
 		}
 		if err := s.applyCorrectionSupersedes(ctx, written, candidate, evidence, related); err != nil {
+			s.logger.Error("compute admission apply correction failed", "job_id", job.ID, "memory_id", written.ID, "error", err)
 			return nil, err
 		}
 		if err := s.repo.UpdateCandidateAdmission(ctx, record.ID, admission, CandidateStatusAdmitted, written.ID); err != nil {
+			s.logger.Error("compute admission update admitted failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
 			return nil, err
 		}
 		return map[string]any{"admission_decision": admission.Decision, "memory_id": written.ID}, nil

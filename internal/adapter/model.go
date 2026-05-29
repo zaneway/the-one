@@ -9,6 +9,8 @@ type IngestEnvelope struct {
 	IngestID        string         `json:"ingest_id"`
 	ProtocolVersion string         `json:"protocol_version"`
 	Producer        string         `json:"producer"`
+	AgentType       string         `json:"agent_type,omitempty"`
+	Kind            string         `json:"kind,omitempty"`
 	SessionID       string         `json:"session_id"`
 	TurnID          string         `json:"turn_id,omitempty"`
 	EventType       string         `json:"event_type"`

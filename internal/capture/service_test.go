@@ -16,6 +16,7 @@ func TestServiceObserveSessionStartCreatesRawEventAndDefaultTask(t *testing.T) {
 	service := NewService(config.Default(), repo)
 
 	resp, err := service.Observe(context.Background(), ObserveRequest{
+		SessionID:     "sess_codex_start_001",
 		EventType:     EventSessionStart,
 		SourceChannel: SourceChannelAgentSession,
 		WorkspaceID:   "ws",
@@ -56,6 +57,7 @@ func TestServiceObserveDedupesRawEvent(t *testing.T) {
 	repo := newFakeRepository()
 	service := NewService(config.Default(), repo)
 	start, err := service.Observe(context.Background(), ObserveRequest{
+		SessionID:     "sess_codex_dedup_001",
 		EventType:     EventSessionStart,
 		SourceChannel: SourceChannelAgentSession,
 		WorkspaceID:   "ws",
@@ -104,6 +106,7 @@ func TestServiceObserveEnqueuesAutomationForNewRawEventOnly(t *testing.T) {
 	enqueuer := &fakeJobEnqueuer{}
 	service := NewServiceWithAutomation(config.Default(), repo, enqueuer)
 	start, err := service.Observe(context.Background(), ObserveRequest{
+		SessionID:     "sess_cursor_auto_001",
 		EventType:     EventSessionStart,
 		SourceChannel: SourceChannelAgentSession,
 		WorkspaceID:   "ws",
@@ -202,6 +205,7 @@ func TestServiceObserveTracksContentBoundaryRejectionForSession(t *testing.T) {
 	repo := newFakeRepository()
 	service := NewService(config.Default(), repo)
 	start, err := service.Observe(context.Background(), ObserveRequest{
+		SessionID:     "sess_cursor_boundary_001",
 		EventType:     EventSessionStart,
 		SourceChannel: SourceChannelAgentSession,
 		WorkspaceID:   "ws",
