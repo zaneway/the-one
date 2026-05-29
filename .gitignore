@@ -1107,8 +1107,12 @@ fabric.properties
 .codex
 .claude
 
+# The One runtime / hook-generated (local only)
+.theone-data/
+.cursor/rules/theone-injected-context.mdc
+
 
 
 
 !/.codegraph/
-!/doc/
+
