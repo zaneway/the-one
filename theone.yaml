@@ -59,8 +59,15 @@ memory:
   # salient_spans 数组最大元素数
   max_salient_span_count: 10
 
+# ── 接入层（ingest / ExpandMode）──────────────────────────
+# P2：the-one dogfood 默认 v2；回滚设 legacy。环境变量 THEONE_EXPAND_MODE 优先。
+adapter:
+  expand_mode: v2
+  atomic_strip_turn_fields: false
+  prefetch_timeout_ms: 3000
+  max_inject_chars: 4000
+
 # ── 捕获配置 ──────────────────────────────────────────────
-# P2 observe 事件捕获的内容边界和默认值
 capture:
   # Agent 自动捕获事件是否要求绑定 session
   require_session_for_agent_events: true
@@ -101,27 +108,10 @@ retrieval:
   # 在线检索超时(毫秒)，外部模型调用不计入此预算
   online_timeout_ms: 100
 
-# ── 嵌入配置 ──────────────────────────────────────────────
-# embedding provider，默认 none，保证无外部依赖也能启动
-# 当 provider 为 none 时，检索降级为 FTS + metadata + relation
-embedding:
-  # 嵌入提供者: none | local | openai | deepseek
-  provider: "none"
-
-  # 嵌入模型名称，provider 为 none 时为空
-  model: ""
-
-# ── 保留策略配置 ──────────────────────────────────────────
-# 记忆生命周期管理，控制不同层级记忆的自动清理
+# ── 保留策略 ──────────────────────────────────────────────
+# memory.retention.run（cleanup_temporary）使用的 TTL；无后台 job
 retention:
-  # 是否启用后台 retention job
-  job_enabled: false
-
-  # temporary 层级记忆保留天数
   temporary_ttl_days: 5
-
-  # short_term 层级记忆保留天数
-  short_term_ttl_days: 90
 
 # ── 处理器配置 ────────────────────────────────────────────
 # P3 自动 evidence/candidate 抽取 Provider 和内容上限
