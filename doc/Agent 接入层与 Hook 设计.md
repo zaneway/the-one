@@ -7,8 +7,11 @@
 
 > **关联代码**（当前实现）：
 > - `internal/adapter/`（`TurnPayload`、`IngestEnvelope`、`TurnRuntime`、`FileStateStore`）
-> - `cmd/theone`（`observe` / `observe-turn` / `observe-envelope` / `context`）
-> - `.cursor/hooks/`、`doc/cursor/`（v1 Cursor Driver 模板）
+> - `cmd/theone`（`ingest` / `observe` / `observe-turn` / `observe-envelope`（= ingest）/ `context`）
+> - `.cursor/hooks/`、`doc/cursor/`（Cursor Driver 模板）
+> - `drivers/cursor/`、`drivers/claude_code/hooks/`、`drivers/shared/`（P4/P5 薄 Driver）
+> - `doc/claude/`（Claude Code 安装模板，对称 `doc/cursor/`）
+> - `doc/adapters/claude_code/`、`doc/cursor/hooks/`（映射与 Hook 转发，P4/P5）
 
 ---
 
@@ -51,11 +54,19 @@ Cursor Hook 方案验证了以下方向正确：
 | # | 目标 | 说明 |
 |---|------|------|
 | G1 | 多 Agent 一套接入语义 | Cursor、Claude Code、Codex wrapper 等共用 wire format |
-| G2 | 事件粒度正确 | 回合级（user+agent）与增量级（tool/file）分离 |
+| G2 | 事件粒度正确 | 回合级（user+agent）与增量级（tool/file）分离；**默认 `ExpandMode=legacy` 时不达成**，见 §2.3 |
 | G3 | Session 单一真相 | 全线程 canonical `session_id` / `task_id` 由 Go 维护 |
 | G4 | 读写路径分离 | 捕获（write）与召回注入（read）抽象为可选 Surface Adapter |
 | G5 | 失败不阻断 Agent | 保持 v1 的降级策略 |
 | G6 | 可验收、可追踪 | 每次 ingest 有 `ingest_id`，可 dead-letter、可对账 |
+
+### 2.3 目标达成阶段（避免误读默认配置）
+
+| 目标 | 默认配置下 | 显式切换后 |
+|------|------------|------------|
+| G2 事件粒度正确 | legacy 下未达成 | **P2 已落地（the-one dogfood）**：`adapter.expand_mode=v2` + Hook 仅 atomic/turn 分流 |
+| G3 Session 单一真相 | v1 由 `session.json` 各 Hook 各自解析，存在漂移 | **P1 已落地**：`SessionBinder` + `binding.{agent_type}.json` |
+| G6 ingest 条级幂等/对账 | v1 仅有 DB `content_hash` 兜底 | **P0 已落地**：`ingest-ledger.json` + dead_letter 含 `event_index` |
 
 ### 2.2 非目标（本阶段不做）
 
@@ -138,6 +149,8 @@ L0（ingest）与 L1（`memory_observe`）均可落库，但**同一事实不应
 
 **ingest 侧建议**：对 `producer` 含 `mcp:` 的包络**拒绝或仅审计**（MCP 应直连 `theone serve`，不经 ingest），避免与 L1 双路径混淆。
 
+> **与 Cursor `afterMCPExecution` 的边界**：Hook 捕获的 MCP 工具结果走 `producer=cursor_hook:afterMCPExecution`（`*_hook:` 通道），**不受** `mcp:` 拒绝规则约束。`mcp:` 仅指 Agent 经 MCP 协议直连 `theone serve` 的包络。Driver 应过滤 `theone` 自身 MCP 工具（如 `memory_observe`），避免自捕获循环（与 `theone-memory-observe.mdc` 一致）。
+
 ### 3.4 智能增强放置原则（LLM 与摘要）
 
 #### 3.4.1 两类 LLM 需求（不可混为一谈）
@@ -196,7 +209,7 @@ L0（ingest）与 L1（`memory_observe`）均可落库，但**同一事实不应
 - **增量扩展**：新字段均为可选；旧客户端无需修改即可继续工作。
 - **单一入口**：对外推荐 `theone ingest`；内部分发到现有实现直至 Phase 2 完成。
 - **显式优先于推断**：`capture.atomic` 必须带 `kind`（或满足 §4.4 的 atomic 推断条件）；禁止仅靠 `file_edits` / `tool_results` 数组触发 `turn.completed` 推断（见 §4.4）。
-- **实现态说明（P0 前）**：当前 `observe-envelope` **始终**走 `TurnPayloadFromEnvelope` → `BuildObserveRequests`，尚无 `kind` 分支；`theone ingest` 落地后 `observe-envelope` 成为其别名。
+- **实现态说明（P0 已落地）**：`theone ingest` 与 `observe-envelope`（别名）经 `IngestProcessor` + `InferKind` 路由；`ExpandMode` 默认 `legacy`（`THEONE_EXPAND_MODE`）。验收：`scripts/acceptance/p0_ingest.sh`。
 
 ### 4.2 单条包络（与现结构兼容）
 
@@ -345,12 +358,15 @@ type IngestEventItem struct {
 
 **缺省 `kind` 推断（兼容 v1，按优先级）**：
 
+> **前置**：根对象是否含 `events[]` 已在 §9.2 判别为 `BatchEnvelope`；进入本节的单条 `IngestEnvelope` **不会**再带批级 `events[]`。
+
 1. 若显式 `kind` 非空 → 使用该值（校验与形状表一致）。
 2. 若 `event_type` 为 `session.start` / `session.end` → `session.lifecycle`。
-3. 若存在批量 `events[]` → **不**对批根对象推断；`events[i]` 逐条执行步骤 1–6。
-4. 若 `event_type` 为 `tool.result.summary` / `file.edit.summary` 等**原子事件枚举** → `capture.atomic`（即使 payload 误带 Turn 字段，ingest 也应剥离数组字段或拒绝并 dead-letter）。
-5. 若 `payload` 含非空 `user_summary` **或** 非空 `agent_summary` → `turn.completed`（与现 `TurnPayloadFromEnvelope` 一致）。
-6. 否则 → `capture.atomic`（必须已有合法 `event_type`；否则校验失败）。
+3. 若 `event_type` 为 `tool.result.summary` / `file.edit.summary` 等**原子事件枚举** → `capture.atomic`。
+4. 若 `payload` 含非空 `user_summary` **或** 非空 `agent_summary` → `turn.completed`（与现 `TurnPayloadFromEnvelope` 一致）。
+5. 否则 → `capture.atomic`（必须已有合法 `event_type`；否则校验失败）。
+
+**步骤 3 形状冲突（默认行为）**：`event_type` 已属原子枚举，但 payload 误带 `file_edits[]` / `tool_results[]` / `user_summary` 等 Turn 字段时，**默认拒绝**该条并写入 `dead_letter.jsonl`（`error_code=INVALID_ATOMIC_SHAPE`），**不**静默剥离后入库。开发模式可配置 `adapter.atomic_strip_turn_fields=true` 改为剥离数组字段后继续（仅 dogfood，不计入验收默认路径）。
 
 > **v1 兼容说明**：旧客户端常把 `file_edits` 塞进 Turn 且无 `kind`；在 `ExpandMode=legacy` 下步骤 5 仍会判为 `turn.completed`（保留占位 user）。`ExpandMode=v2` 时 Driver **必须**对文件/工具 Hook 显式 `kind=capture.atomic`，不得依赖步骤 5。
 
@@ -408,6 +424,18 @@ kind=capture.atomic     → AtomicPayload → ObserveRequest（单条，不经 B
 
 P2 验收目标：`ExpandMode=v2` 且文件/工具 Hook 仅 atomic；`afterAgentResponse` 的 `turn.completed` **默认不带** `tool_results` / `file_edits`（见 §5.4）。
 
+**`ExpandMode=v2` 切换决议（Q3，已决）**：
+
+| 项 | 决议 |
+|----|------|
+| **时机** | **P2**（**P1** 验收通过后）；P0/P1 保持 `legacy` |
+| **方式** | 配置单开关：`THEONE_EXPAND_MODE=v2` 或 `theone.yaml` → `adapter.expand_mode: v2` |
+| **顺序** | **先**改 Cursor Driver（`mapping.yaml`：文件/工具仅 `capture.atomic`，`turn.completed` 不带 file/tool）→ **再**开 v2 开关 |
+| **过渡** | **不双写**（禁止 atomic + turn 内 `file_edits`/`tool_results` 同记一遍） |
+| **范围** | 先 **the-one 仓库** dogfood；Codex/别名 CLI 在改 mapping 前保持 `legacy` |
+| **默认配置** | P2 验收通过前：默认 `legacy`；通过后 **the-one 默认改为 `v2`** |
+| **回滚** | 设回 `legacy`；可临时恢复文件/工具 `observe-turn` 路径；DB schema 不变 |
+
 ### 5.2 去重策略（双层 + 跨 kind）
 
 | 层级 | 机制 | 键 | 适用范围 |
@@ -440,13 +468,42 @@ P2 验收目标：`ExpandMode=v2` 且文件/工具 Hook 仅 atomic；`afterAgent
 
 1. **写入分工**：文件/工具增量**只**走 `capture.atomic`；`turn.completed` 的 TurnPayload **不包含** `tool_results` / `file_edits`（Driver 与 `mapping.yaml` 强制）。
 2. **回合内关联**：atomic payload 可带 `turn_id`（与 Cursor 回合对齐），仅用于检索关联，不触发 turn 展开。
-3. **兜底**：若 legacy 双写，ingest 在 `ExpandMode=v2` 时对 `turn.completed` 内与 `atomic-dedup` 相同 fingerprint 的项**跳过**展开；DB 层仍靠 `content_hash`。
+3. **兜底（有限承诺）**：若 legacy 双写，且 `turn.completed` 内 `file_edits[]` / `tool_results[]` 与 atomic 侧 **fingerprint 输入字段完全一致**（见下表），ingest 可跳过重复展开；否则**不保证**接入层去重，仅依赖 DB `content_hash`。
+
+| `event_type` | atomic fingerprint 输入 | turn 内对应字段 | 对齐要求 |
+|--------------|-------------------------|-----------------|----------|
+| `tool.result.summary` | `tool_name` + `input_summary` + `output_summary` + `exit_code` | `tool_results[]` 同名字段 | 两侧截断规则一致（§5.2）时可兜底 |
+| `file.edit.summary` | `file_path` + `change_type` + `after_hash`（无则 `content_summary` 前 200 字） | `file_edits[]` 常缺 `after_hash` | **默认不对齐**；file.edit 跨 kind 兜底**不承诺**，仅靠 DB |
 
 Codex wrapper 若单包同时含 `user_summary` 与 `file_edits`：应拆为 **1× turn.completed + N× atomic** 批量提交，勿走单包 Turn 全量展开。
 
 ---
 
 ## 6. Session Binding（单一真相）
+
+### 6.0 Cursor Hook 会话/回合 ID 字段对照（事实核查，G3 前置）
+
+以下对照 **Cursor 官方 Hooks 文档**（[cursor.com/docs/hooks](https://cursor.com/docs/hooks)）与 v1 Driver 实测行为；实现前应在目标 Cursor 版本上复验一次。
+
+**约定**：
+
+- 官方 **Common schema** 向多数 Agent Hook 附加 `conversation_id`、`generation_id` 等；`workspaceOpen` 等 App 生命周期 Hook **不含**会话字段。
+- `sessionStart` / `sessionEnd` 使用字段名 **`session_id`**，文档注明其与 **`conversation_id` 同值**（canonical 应取其一，勿重复生成两套 id）。
+
+| Hook 事件 | 官方 payload 中的会话/回合 id | 说明 | v1 Driver（`.cursor/hooks/`） |
+|-----------|------------------------------|------|-------------------------------|
+| `sessionStart` | `session_id`（= `conversation_id`） | 新建 Composer 时触发；**无** `conversation_id` 字段名 | `pick(session_id, sessionId, conversation_id, conversationId)`；缺失时 **错误回退** `sess_cursor_auto_{YYYYMMDD}`（与本文 §6.2 禁止项冲突，P1 需改） |
+| `beforeSubmitPrompt` | Common：`conversation_id`、`generation_id`；特有：`prompt` | `generation_id` = 每条用户消息一代 | 写 `prompt-cache.json`；`generation_id` **未**持久化 |
+| `afterAgentResponse` | Common：`conversation_id`、`generation_id`；特有：`text` | 无原始 `prompt` 文本 | `turn_id` 由 `build_turn_id(session, user_summary, response, 时间戳)` 生成，**含时间戳**，与 beforeSubmit 不稳定对齐 |
+| `afterFileEdit` / `afterMCPExecution` | Common：`conversation_id`、`generation_id`；工具有 `tool_use_id` 等 | 可能早于首条 `beforeSubmitPrompt` | 经 `resolve_session_task` 读 `session.json` / `prompt-cache` |
+| `sessionEnd` | `session_id`（= `conversation_id`） | 关闭 Composer 时 | pick；**仅此**触发 `session.end` + 清 binding |
+| `stop` | Common：`conversation_id`、`generation_id`；`status` | **每轮** Agent 回复结束 | **禁止**绑 `session.end`（与 `afterAgentResponse` 分工）；可选 no-op 或 lint/`followup_message` |
+
+**对 §6.2 绑定的结论**：
+
+1. **canonical 可在 `sessionStart` 建立**：绑定应接受 `session_id`（来自 `sessionStart`）与 `conversation_id`（来自 Common schema）为**同一 external key**，写入 `binding.external_session_key`，禁止在官方已提供 `session_id` 时仍生成 `sess_*_{YYYYMMDD}`。
+2. **禁止仅认字段名 `conversation_id`**：否则 `sessionStart` 会被误判为「无 canonical」→ 合成 id → 后续真实 `conversation_id` 触发 `binding_mismatch.log` 且不可改绑（审查项 S1）。
+3. **`task_id` 与 `generation_id`**：`task_id` 表线程级任务（多轮共享）；`generation_id` 表单条用户消息（回合级）。`turn_id` / inject-cache 对齐应优先用 **`generation_id`**（见 §7.2），而非在 `afterAgentResponse` 重算 prompt 指纹。
 
 ### 6.1 运行时状态文件
 
@@ -458,40 +515,51 @@ Codex wrapper 若单包同时含 `user_summary` 与 `file_edits`：应拆为 **1
 | `turn-dedup.json` | EventExpander | **仅** `last_turn_id`、`last_turn_sig`、`last_task_summary`（**不**再存 `session_id` / `task_id`） |
 | `atomic-dedup.json`（可选） | EventExpander | 近期 `atomic_fingerprint` 集合或 LRU（§5.2） |
 | `prefetch.json` | prefetch-context | 最近一次 context 摘要、`retrieval_trace_id`（可选） |
-| `prompt-cache.json` | Cursor Driver（beforeSubmit） | 本轮用户摘要、`turn_id`（过渡，最终可并入 binding） |
-| `inject-cache.json` | Surface Adapter | **按回合**：`turn_id`、`used_memory_ids`、`injected_to_prompt`、`retrieval_trace_id` |
+| `prompt-cache.json` | Cursor Driver（beforeSubmit） | 本轮 `user_summary`、`generation_id`、`conversation_id`（过渡；`turn_id` 可由 `generation_id` 派生） |
+| `inject-cache.json` | Surface Adapter | **按回合**：`generation_id`（权威）、`turn_id`（可选）、`used_memory_ids`、`injected_to_prompt`、`retrieval_trace_id` |
+| `ingest-ledger.json` | Ingest | 已处理的 `(ingest_id, event_index)` 集合（或带 TTL 的 LRU）；用于 §9.2 重试幂等 |
+| `binding_mismatch.log` | SessionBinder | append-only；payload 与已绑定 `external_session_key` 不一致时记录，不改绑 |
 
-**禁止** Hook 脚本直接覆盖 `turn-dedup.json` / `binding.*.json`。  
+**禁止** Hook 脚本直接覆盖 `turn-dedup.json` / `binding.*.json` / `ingest-ledger.json`。  
 **禁止** `binding` 与 `turn-dedup` 混写（解决 v1 `session.json` 问题）。
 
 **读取顺序（ingest 强制）**：`SessionBinder` 从 `binding.{agent_type}.json` 解析 `session_id` / `task_id` → 注入每条 `ObserveRequest` → `EventExpander` 只读 `turn-dedup.json` 做回合去重。不得从 `turn-dedup` 回填 session（P1 迁移时从 legacy `session.json` 一次性导入 binding）。
 
 ### 6.2 绑定规则
 
-**时机**：
-
-1. `session.lifecycle` + `session.start`：建立/更新 binding，并**必须先**成功写入 Capture（DB 存在 session）。
-2. 其他 ingest：仅读取 binding，不改 `session_id`（除非步骤 1 的重绑定策略触发）。
-
 **`session_id` 优先级（Cursor 默认）**：
 
-1. `conversation_id` / `conversationId`（canonical，推荐）
-2. `session_id` / `sessionId`（Hook payload，仅当尚未 binding）
-3. **禁止**静默长期使用 `sess_*_{YYYYMMDD}` 作为 canonical id（同日多会话会碰撞）。仅当 1、2 均缺失时：
+1. `conversation_id` / `conversationId`（Common schema，canonical）
+2. `session_id` / `sessionId`（`sessionStart` / `sessionEnd` 等；与 1 **同值**，见 §6.0）
+3. **禁止**静默长期使用 `sess_*_{YYYYMMDD}` 作为 canonical id（同日多会话会碰撞；v1 回退行为，P1 移除）。仅当 1、2 均缺失时：
    - 生成 `sess_{agent_type}_{workspace_hash}_{unix_nano}` 或
-   - 拒绝 ingest 并 `degraded` + stderr 提示配置 `conversation_id`（**推荐默认：拒绝**，Driver 开发模式可配置允许生成）
+   - 拒绝 ingest 并 `degraded` + stderr 提示（**推荐默认：拒绝**；`THEONE_ALLOW_SYNTHETIC_SESSION=1` 开发模式可生成）
 
-绑定写入 `binding.{agent_type}.json` 后 **`session_id` 不可变**；若 Cursor 后续 payload 出现不同 `conversation_id`，记录 `binding_mismatch.log`，**不**自动改绑（避免链断裂）。
+**绑定时机**（同一 `agent_type` 同时只跟踪**一个活跃 Composer 会话**，见 §6.4）：
 
-**`task_id`**：
+| 时机 | 行为 |
+|------|------|
+| `session.lifecycle` + `session.start`，且 `external_session_key` 与当前 binding **不同** | **新会话**：重置 binding（§6.4），用 1/2 写入 `session_id` / `external_session_key`，`task_id` 见下表 |
+| 同一会话的后续 ingest | **只读** binding；payload 的 1/2 与 binding 不一致 → `binding_mismatch.log`，不改 `session_id`（合成 id 例外见 §6.2.2） |
+| 乱序：尚无 binding，先来了 atomic/turn（§6.2.1 bootstrap） | 用 payload 的 1/2 建 binding + bootstrap DB；`task_id=task_{agent}_auto`，`task_from_prompt_pending=true`（§6.2.2） |
 
-1. 显式 payload / 已有 binding
-2. **首次** `beforeSubmitPrompt` 见到非空用户 prompt 时计算指纹：`task_{sha1(prompt_normalized)[:16]}`，写入 binding 后全线程不变
-3. 兜底 `task_{agent_type}_auto`（仅当从未有过 prompt 且未显式指定）
+**`session_id` 稳定性**：在同一 `external_session_key` 下不变；仅在新 `session.start`（新 Chat）或 §6.2.2 合成→官方 id **一次性升级**时改变。
 
-`prompt-cache.json` 仅作 beforeSubmit 输入缓冲，**不**作为 task_id 的权威来源。
+**`task_id` 语义（满足 G3 / 检索 scope）**：
 
-**重绑定**：仅当显式 `session.lifecycle` 且 `event_type=session.start` 且 `external_session_key` 变化（或配置 `allow_rebind=true`）时允许；禁止在 `beforeSubmitPrompt` 用 payload 覆盖已绑定 id。
+| 概念 | 含义 |
+|------|------|
+| **Composer 会话** | `conversation_id` / `session_id`，对应 binding.`external_session_key` |
+| **`task_id`** | 该会话内**用户当前工作目标**的稳定 id；默认取**本会话第一条非空用户 prompt** 的指纹，全会话内不变 |
+| **`generation_id`** | 单轮用户消息 id（回合级），**不是** `task_id`（见 §7.2） |
+
+**`task_id` 取值优先级**：
+
+1. payload / binding 中已有**非** `task_{agent}_auto` 的显式 `task_id` → 沿用，且 `task_from_prompt_pending=false`
+2. binding.`task_from_prompt_pending=true` 且收到**首条非空用户 prompt** → `task_{sha1(normalized_prompt)[:16]}`，并置 `task_from_prompt_pending=false`（§6.2.2、§7.1）
+3. 否则 → `task_{agent_type}_auto`（占位，允许后续走规则 2 升级）
+
+`prompt-cache.json` 只缓存 prompt 文本；**指纹在 `prefetch-context` / `SessionBinder` 内计算**，不以 cache 为权威来源。
 
 #### 6.2.1 Session 就绪与乱序事件（`require_session`）
 
@@ -502,11 +570,60 @@ Capture 默认 `require_session_for_agent_events=true`：非 `session.start` 要
 | 步骤 | 行为 |
 |------|------|
 | 1 | 每条 ingest 先 `SessionBinder.Resolve`（内存 + `binding.*.json`） |
-| 2 | 若 DB 无 session 且事件非 `session.start` → **自动合成**一条 `session.start`（`producer` 追加 `:auto_bootstrap`，`content_summary` 注明 bootstrap），使用**同一** `session_id` |
+| 2 | 若 DB 无 session 且事件非 `session.start` → **自动合成**一条 `session.start`（`producer` 追加 `:auto_bootstrap`），`session_id` 与 Resolve 一致；binding 设 `task_{agent}_auto` + **`task_from_prompt_pending=true`**（§6.2.2） |
 | 3 | 若自动 bootstrap 失败 → 该条入 `dead_letter.jsonl`，`failures[]` 记录 `SESSION_NOT_READY`；Hook 仍 exit 0 |
 | 4 | Driver 推荐顺序仍为 `sessionStart` → 其他；验收用例覆盖「仅 afterFileEdit、无 sessionStart」仍能落库 |
 
-自动 bootstrap **不**覆盖已有 binding 的 `session_id`；仅补齐 DB session 行。
+自动 bootstrap **不**覆盖已有 binding 的 `session_id`；仅补齐 DB session 行（`task_id` 见 §6.2.2）。
+
+#### 6.2.2 乱序 bootstrap 与 `task_id` 升级（无歧义规则）
+
+**场景**：用户尚未发 prompt，先触发了 `afterFileEdit` 等 → ingest 必须先 bootstrap DB，此时还没有 prompt 指纹。
+
+**做法**：用 binding 上的布尔标志 **`task_from_prompt_pending`** 区分「占位 task」与「已用 prompt 定 task」，**不要**用「库里有没有 `raw_event`」判断能否升级（bootstrap 也会产生 `raw_event`，用事件条数会误判）。
+
+| 步骤 | 谁触发 | binding / DB |
+|------|--------|----------------|
+| 1 | bootstrap 合成 `session.start`（`producer` 含 `:auto_bootstrap`） | `task_id=task_{agent}_auto`，**`task_from_prompt_pending=true`**；DB 有 session 行 |
+| 2 | 其间可有任意条 `capture.atomic`（文件/工具） | **不改变** `task_from_prompt_pending`（仍为 true） |
+| 3 | 用户**第一次**非空 prompt（`beforeSubmitPrompt`） | `prefetch-context` 内调 `SessionBinder.BindTaskFromPrompt` → `task_id=task_{sha1...}`，**`task_from_prompt_pending=false`**；同步更新 DB task |
+| 4 | 同会话后续 prompt / ingest | `task_id` **不再改变** |
+
+**`BindTaskFromPrompt` 前置条件（全部满足才执行）**：
+
+1. `binding.task_from_prompt_pending == true`
+2. `normalized_prompt` 非空
+3. 可选：`binding.external_session_key` 与本次 hook 的 `conversation_id` 一致（防止误用上一轮 cache）
+
+**明确禁止的实现方式**：
+
+- 用 `captured_event_count == 0` 作为升级条件（bootstrap 后恒为 ≥1，会导致 **永远停在 `task_*_auto`**）
+- 在 `beforeSubmit` 里改 binding 却不走 `SessionBinder`（读写分裂）
+
+**与 bootstrap 的关系（一句话）**：bootstrap 只负责「让 DB 有 session + 占位 task」；**不占用**「用 prompt 定 task」的机会；定 task 只发生在规则 2 的第一次 `beforeSubmit`。
+
+**`session_id` 一次性升级（合成 → 官方 id）**：
+
+- 条件：`binding.session_id` 为合成 `sess_{agent}_*`，且随后 ingest 收到带官方 1/2 的 `session.start`。
+- 默认：允许升级 binding + DB，并 `UPDATE raw_event.session_id`（或 alias 表）；审计 `binding_mismatch.log`（`action=session_upgraded`）。
+- `adapter.binding.strict_no_upgrade=true`：仅记 mismatch，不升级（非 Cursor 默认）。
+
+#### 6.2.3 `SessionBinder.Resolve`（ingest 与 prefetch 共用）
+
+```text
+输入：agent_type, envelope_session_id, payload 中的 conversation_id/session_id
+输出：session_id, task_id（供注入 ObserveRequest / memory.context）
+
+1. 读 binding.{agent_type}.json；若无文件 → 仅使用本次 payload 的 1/2（须非空，否则 INVALID_SESSION）
+2. 若本次为 session.start 且 external_session_key ≠ binding.external_session_key
+     → 新会话：ResetBinding（§6.4），写入新 session_id；task_id=显式值或 auto + task_from_prompt_pending=true
+3. 若已有 binding 且 payload 1/2 ≠ binding.external_session_key
+     → 记 mismatch；ingest 仍用 binding.session_id 注入（不改绑）
+4. 若 binding 存在 → session_id = binding.session_id；task_id = binding.task_id
+5. session.start 禁止 session_id 为空（禁止 Capture 自行 idgen，与 G3 一致）
+```
+
+`BindTaskFromPrompt` 仅由 **`theone prefetch-context`** 调用（§7.1），不在 ingest 批处理里隐式触发，避免与包络 `task_id` 冲突。
 
 ### 6.3 多 Agent 并存
 
@@ -520,6 +637,7 @@ Capture 默认 `require_session_for_agent_events=true`：非 `session.start` 要
   "session_id": "02c3c964-…",
   "task_id": "task_…",
   "external_session_key": "02c3c964-…",
+  "task_from_prompt_pending": false,
   "workspace_id": "local_default_workspace",
   "project_id": "the-one",
   "repo_id": "the-one",
@@ -527,7 +645,24 @@ Capture 默认 `require_session_for_agent_events=true`：非 `session.start` 要
 }
 ```
 
-`external_session_key` 取 canonical `conversation_id`（或该 Agent 等价物）。ingest 入口必须带顶层或 payload 内 `agent_type`，以选择对应 binding 文件。
+- `external_session_key`：canonical `conversation_id`（或 Agent 等价物）。
+- `task_from_prompt_pending`：`true` 表示仍为 `task_{agent}_auto` 占位，等待首条用户 prompt 绑定（§6.2.2）。
+- ingest / prefetch 必须带 `agent_type`，以选择 `binding.{agent_type}.json`。
+
+### 6.4 Binding 生命周期（多 Chat、会话切换）
+
+**范围**：每个 `agent_type` 一个 binding 文件 = 该 IDE 进程内**当前活跃**的一条 Composer 会话（满足「多数场景 G3 单一真相」；并行双 Chat 属边缘，见下）。
+
+| 事件 | binding | `turn-dedup.json` | `prompt-cache` / `inject-cache` |
+|------|---------|-------------------|----------------------------------|
+| 新 `session.start`（`external_session_key` 变化） | **ResetBinding**：新 `session_id`；`task_id`→auto 或显式；`task_from_prompt_pending=true` | **清空** `last_turn_*` | 清空或下一轮 beforeSubmit 覆盖 |
+| `sessionEnd` | 删除 binding 文件（推荐） | 清空 | 清空（`theone-session-end.sh`） |
+| `stop`（Cursor） | **不**删 binding | **不**清空 | 回合结束事件；记忆由 `afterAgentResponse` 入库 |
+| 同会话内各 Hook | 只读 binding（`BindTaskFromPrompt` 例外） | 仅 EventExpander 读写 | Surface 按回合覆盖 inject-cache |
+
+**并行两个 Composer（边缘）**：后触发的 `session.start` 会 ResetBinding，先打开的 Chat 后续事件可能 mismatch 进 `binding_mismatch.log`。**不**在本阶段做多 binding 槽位；若需支持，后续改为 `binding.{agent_type}.{external_session_key}.json`。
+
+**ingest 注入**：只要 binding 存在，**强制**用 `binding.session_id` / `binding.task_id` 覆盖 envelope payload 中的同名字段（避免 Driver 传错 id）。
 
 ---
 
@@ -559,6 +694,21 @@ theone prefetch-context -config theone.yaml -data-dir .theone-data < request.jso
 
 **超时**：建议默认 3s 子超时；超时返回 `ok=false, degraded=true`，不阻断 Agent 提交。
 
+**与 SessionBinder 的衔接（写清「谁定 task_id」）**：
+
+```text
+beforeSubmitPrompt (Driver)
+  → 写 prompt-cache（含 conversation_id、generation_id、user_summary）
+  → theone prefetch-context
+       1. SessionBinder.Resolve（读 binding，校验 conversation_id）
+       2. 若 task_from_prompt_pending 且 task 非空
+            → BindTaskFromPrompt → 更新 binding + DB task_id
+       3. memory.context（使用 binding 的 session_id / task_id）
+       4. 写 inject-cache（generation_id、retrieval_trace_id、…）
+```
+
+读路径与写路径共用同一 binding，避免「capture 用一套 id、召回用另一套 id」。
+
 ### 7.2 Surface Adapter
 
 | Agent | 注入方式 |
@@ -567,11 +717,18 @@ theone prefetch-context -config theone.yaml -data-dir .theone-data < request.jso
 | Claude Code | 写入 `.claude/theone-context.md` 或 hook 返回字段（以实现时官方 API 为准） |
 | Codex | stdout / 文件供 wrapper 读入下一轮 prompt |
 
-**`inject-cache.json` 回合隔离（避免串轮）**：
+**`inject-cache.json` 回合隔离（避免串轮，审查项 M2）**：
 
-- `beforeSubmitPrompt` 写入时带 `turn_id`（与 prompt 指纹或 Cursor 提供的回合 id 一致）。
-- `afterAgentResponse` 读取时仅当 `inject-cache.turn_id` 与当前回合一致才合并 `retrieval_trace_id` / `used_memory_ids` 到 `agent.response.summary` 的 `source_refs`。
-- 新一轮 beforeSubmit **覆盖** cache；不匹配则忽略 cache（不写错 trace）。
+| 字段 | 写入方 | 用途 |
+|------|--------|------|
+| `generation_id` | `beforeSubmitPrompt`（来自 Hook Common schema） | **权威回合键**；与 Cursor 每条用户消息对齐 |
+| `prompt_fingerprint` | 同上（`sha1(normalized_prompt)[:16]`） | 无 `generation_id` 时的回退键 |
+| `turn_id` | 可选；默认 `turn_{generation_id}` 或与 `turn-dedup` 一致 | 展开 `turn.completed` 时写入 envelope |
+
+- `beforeSubmitPrompt`：将 `generation_id`（及 `conversation_id`）写入 `prompt-cache.json` 与 `inject-cache.json`。
+- `afterAgentResponse`：**不得**依赖 hook 特有字段重算 prompt；从 `prompt-cache.json` 读取 `generation_id`，与 `inject-cache.generation_id` 比较，一致才 `merge_inject_fields`。
+- 若 `inject-cache.generation_id` 缺失，回退比较 `prompt_fingerprint`（与 v1 `inject-cache` 字段兼容）。
+- 不匹配则忽略 cache（不写错 trace）；新一轮 beforeSubmit **覆盖** inject-cache。
 
 ### 7.3 与 MCP 的关系
 
@@ -584,14 +741,15 @@ theone prefetch-context -config theone.yaml -data-dir .theone-data < request.jso
 
 ### 8.1 能力对照
 
-| 能力 | Cursor | Claude Code | Codex wrapper |
-|------|--------|-------------|---------------|
-| 会话生命周期 | `sessionStart` / `sessionEnd` / `stop` | 待对照官方 hook | wrapper 首末包 |
-| 用户 prompt 前召回 | `beforeSubmitPrompt` | PrePrompt 类 hook（待确认） | wrapper 拼 prompt |
-| 回合结束 | `afterAgentResponse` | Stop / SubagentEnd 等 | 每轮结束 ingest |
-| 工具结果 | `afterMCPExecution`（偏 MCP） | PostToolUse 等 | 日志解析 |
-| 文件编辑 | `afterFileEdit` | 同类 hook | git diff / 日志 |
-| MCP theone | 有 | 可配置 | 通常无 |
+| 能力 | Cursor | Claude Code（P4，**Hooks 全量**，Q4 已决） | Codex wrapper |
+|------|--------|--------------------------------------------------|---------------|
+| 会话生命周期 | `sessionStart` / `sessionEnd` | `session.lifecycle` | Cursor `stop`≠会话结束，见 §6.0 |
+| 回合结束 | `afterAgentResponse`（Cursor）；`Stop`（Claude） | `turn.completed` | v2 不含 tool/file 数组 |
+| 用户 prompt 前召回 | `beforeSubmitPrompt` | PrePrompt / UserPromptSubmit 类 → `prefetch-context` | wrapper 拼 prompt |
+| 回合结束 | `afterAgentResponse` | Stop / SubagentStop 等 → `turn.completed` | 每轮结束 ingest |
+| 工具结果 | `afterMCPExecution` | `PostToolUse` / `PostToolUseFailure` → `capture.atomic` | 日志解析 |
+| 文件编辑 | `afterFileEdit` | PostToolUse（Write/Edit）或专用 hook → `capture.atomic` | git diff / 日志 |
+| MCP theone | 有 | 有（L1 补高信号；**不**替代 L0 Hook） | 通常无 |
 
 ### 8.2 Driver 映射配置（建议）
 
@@ -634,6 +792,11 @@ doc/adapters/
   claude_code/mapping.yaml
   codex/mapping.yaml
 
+doc/claude/                   # Claude Code 安装模板（对称 doc/cursor/）
+  README.md
+  settings.hooks.example.json
+  hooks/、mcp.json、CLAUDE.md
+
 drivers/
   cursor/entry.sh             # 统一入口：读 HOOK_EVENT，调 theone ingest
   claude_code/entry.sh
@@ -666,14 +829,15 @@ stdin JSON
        否则            → IngestEnvelope + ValidateIngestEnvelope（单条，必填 event_type）
   → SessionBinder.Resolve(agent_type)（读/写 binding.{agent_type}.json）
   → 对每条待处理事件：
+       0. 若 ingest-ledger 已有 (ingest_id, event_index) → 记 deduped，跳过
        1. 解析 kind（§4.4，显式优先）
        2. EnsureSessionReady（§6.2.1：必要时 auto session.start）
-       3. 注入 binding 的 session_id / task_id 到 payload
+       3. 用 binding **覆盖** payload 的 session_id / task_id（§6.4）
        4. 分支：
             session.lifecycle → ObserveRequest → observe（单条）
             turn.completed    → TurnPayload → EventExpander(ExpandMode, §5.4) → observe batch
             capture.atomic    → AtomicPayload → atomic 去重(§5.2) → ObserveRequest → observe（单条）
-       5. 单条失败 → 记入 failures[] + dead_letter（不中断同批其余条）
+       5. observe 成功 → 写入 ingest-ledger（§9.2.1）；失败 → failures[] + dead_letter（不中断同批其余条）
   → 写 ingest.jsonl 审计（可选）
   → stdout JSON：
        {
@@ -691,14 +855,25 @@ stdin JSON
 | 项 | 约定 |
 |----|------|
 | 原子性 | **无**跨条事务；已成功的 observe 不回滚 |
-| 幂等 | 同一 `ingest_id` 重试：已处理条目标为 `deduped`（ingest 层记录 `(ingest_id, event_index)`） |
+| 幂等 | 同一 `ingest_id` 重试：已处理条目标为 `deduped`；ingest 在 **`ingest-ledger.json`** 持久化 `(ingest_id, event_index)`（批内 `event_index` 从 0 起，单条包络视为 `0`） |
 | 空批 | `events: []` → `ok=true, accepted=0` |
 | MCP 包络 | `producer` 以 `mcp:` 开头 → 拒绝，`error_code=WRONG_TRANSPORT` |
+
+#### 9.2.1 幂等账本与 observe 顺序（G6）
+
+| 步骤 | 顺序 | 说明 |
+|------|------|------|
+| 重试入口 | 先查 `ingest-ledger` | 命中 `(ingest_id, event_index)` → 本条 `deduped`，**不**调 observe |
+| 首次处理 | observe **成功** 后写 ledger | 避免「ledger 有记录但 DB 无事件」导致重试永远跳过 |
+| observe 成功、ledger 写失败 | 允许重试 | 依赖 DB `content_hash` 二次 dedup；ledger 补写 |
+| `deduped` 统计 | 区分 `ledger_deduped` 与 `content_hash_deduped`（响应字段可选） | 验收时不混淆 |
+
+`ingest_id` 由 **Driver 每 Hook 触发生成**（建议 `ing_{producer}_{unix_nano}`），重试**必须复用**同一 `ingest_id`。
 
 **`observe-turn` / `observe-envelope`（P0）**：
 
 - 作为 `ingest` 别名；缺省 `kind` 按 §4.4 推断。
-- P0 完成前：`observe-envelope` 可仍走旧路径（全 Turn 展开）；`ingest` 落地后统一为新分支。
+- P0 起：`observe-envelope` = `ingest` 别名，统一 `IngestProcessor` 分支（`legacy` 默认）。
 
 ### 9.3 可观测性
 
@@ -707,7 +882,8 @@ stdin JSON
 | `THEONE_HOOK_DEBUG=1` | Driver / ingest 保留 stderr，不丢弃 |
 | `runtime-state/ingest.jsonl` | 可选：每次 ingest 一行审计 |
 | 现有 `context-cache.error.log` | prefetch 失败保留 |
-| `dead_letter.jsonl` | 已有 `FailureQueue`，补充 `ingest_id` 字段 |
+| `dead_letter.jsonl` | `FailureQueue`；每条含 `ingest_id`、**`event_index`**（批内下标，单条为 `0`）、`error_code`、`session_id` 等，支持条级重放 |
+| `ingest-ledger.json` | 已成功的 `(ingest_id, event_index)`；重试时命中则计入 `deduped` 且不再 observe |
 
 ---
 
@@ -732,7 +908,8 @@ stdin JSON
 - Envelope 增加可选 `kind`、`events[]`、顶层 `agent_type`；
 - 拆分 `binding.{agent_type}.json` / `turn-dedup.json`，`FileStateStore` 仅读写 dedup 字段；
 - 新增 `ValidateBatchEnvelope`、`EnsureSessionReady`、`AtomicPayload` 映射；
-- 新增 `SessionBinder`、`ExpandMode` 配置（环境变量或 `theone.yaml`）。
+- 新增 `SessionBinder`、`IngestLedger`、`ExpandMode` 配置（环境变量或 `theone.yaml`）；
+- `FailureRecord` 增加可选 `event_index`（JSON 字段，向后兼容）。
 
 ### 10.3 行为变更（DB schema 不变，事件分布变）
 
@@ -757,10 +934,10 @@ atomic 增量捕获         ✓                  ✗ 需 Go + Driver        ✗ 
 
 配置项 `adapter.expand_mode` 或环境变量 `THEONE_EXPAND_MODE`：
 
-- `legacy`（默认）：与 v1 行为一致；
-- `v2`：启用 `capture.atomic` 与 Session 强绑定。
+- `legacy`（**P0–P1 默认**）：与 v1 行为一致；
+- `v2`（**P2 起在 the-one dogfood**，P3 起建议为仓库默认）：启用 `capture.atomic` 与 Session 强绑定（§5.1）。
 
-便于 dogfood 渐进切换。
+便于 dogfood 渐进切换；回滚时设回 `legacy` 即可，无需迁移 DB。
 
 ---
 
@@ -768,70 +945,51 @@ atomic 增量捕获         ✓                  ✗ 需 Go + Driver        ✗ 
 
 | 阶段 | 内容 | 验收 |
 |------|------|------|
-| **P0** | `theone ingest` 分发；`BatchEnvelope`；`kind` 路由（`legacy` 默认）；`EnsureSessionReady` | `p2_envelope.sh`、现有 Cursor 流程通过；乱序 file hook 仍能落库 |
-| **P1** | `binding.{agent_type}.json` + `turn-dedup` 拆分；迁移 `session.json`；SessionBinder 注入 session/task | 同会话多 Hook `session_id` 一致 |
-| **P2** | `ExpandMode=v2`；Cursor Driver 仅 atomic；`turn.completed` 不带 file/tool；`atomic-dedup` | raw_event 占位 conversation 减少；无同文件双写 |
-| **P3** | `prefetch-context`；Surface 拆分；Cursor shell 瘦身 | beforeSubmit 超时可控、可观测 |
-| **P4** | Claude Code driver + mapping | Claude 会话 ingest 与检索闭环 |
-| **P5** | 废弃 shell 内 Python 业务逻辑；文档与模板同步 | `doc/cursor` 仅薄 Driver |
+| **P0** | `theone ingest`；`BatchEnvelope`；`kind` 路由（`legacy` 默认）；**最小 SessionBinder**（Resolve、bootstrap、`task_from_prompt_pending`）；`ingest-ledger`；dead_letter 含 `event_index` | 乱序 file hook 落库；ingest 重试 `deduped`；bootstrap 后首条 beforeSubmit 能把 `task_*_auto` 升为 prompt 指纹 |
+| **P1** | `binding` / `turn-dedup` 拆文件；迁移 `session.json`；§6.4 新会话 Reset；禁止 Capture 空 `session_id` 自生成 | **已落地**；验收 `scripts/acceptance/p1_binding.sh` |
+| **P2** | **ExpandMode=v2**（§5.1 决议）：`doc/adapters/cursor/mapping.yaml`；Hook → `theone ingest`；`atomic-dedup.json`；**不双写** | **已落地**；验收 `scripts/acceptance/p2_expand_v2.sh`；`theone.yaml` 默认 `v2` |
+| **P3** | `prefetch-context` 含 `BindTaskFromPrompt`；Surface 瘦身；持久化 `generation_id`；the-one **默认 `v2`** | **已落地**；验收 `scripts/acceptance/p3_prefetch.sh` |
+| **P4** | **Claude Code Hooks 全量**（Q4）：`drivers/claude_code` + `doc/adapters/claude_code/mapping.yaml`（会话 / prefetch / atomic 工具·文件 / turn.completed）；`binding.claude_code.json`；Surface → `.claude/theone-context.md`；与 Cursor 共用 `drivers/shared/theone-build-ingest.py` | **已落地**；验收 `scripts/acceptance/p4_claude_hooks.sh`；安装 `scripts/install-claude-hooks.sh` |
+| **P5** | 废弃 shell 内 Python 业务逻辑；`drivers/cursor/entry.sh` + `drivers/shared/theone-hook-*.py`；`doc/cursor/hooks` 仅 `exec` 转发 | **已落地**；验收 `scripts/acceptance/p5_thin_driver.sh`；v1 脚本见 `doc/archive/v1-hook-scripts/` |
 
 > **说明**：LLM 能力不纳入 P0–P5 Hook 改造范围；摘要增强与记忆价值分析由 [后续完善规划.md](./后续完善规划.md) F-001 / F-002 在 `internal/processor` 独立排期。
 
 ---
 
-## 12. 已定建议（待你确认后可改为「已决」）
+## 12. 已决建议
 
-| 议题 | 建议默认 |
-|------|----------|
+| 议题 | 决议 |
+|------|------|
 | 统一 CLI | `theone ingest` 为主入口，`observe-*` 保留别名 |
-| Cursor canonical session | 优先 `conversation_id`，bind 后不可变 |
-| 文件/工具 Hook | 仅 `capture.atomic`（`ExpandMode=v2`） |
+| Cursor canonical session | `conversation_id` / `sessionStart.session_id`；新 Chat 时 ResetBinding（§6.4） |
+| 文件/工具 Hook | 仅 `capture.atomic`（`ExpandMode=v2`，P2 启用，§5.1） |
 | **LLM 放置** | **不在 Hook**；捕获期仅截断；F-001 / 可选 enrich 在 Go `async_job`（§3.4） |
-| Claude 优先级 | Cursor P2 完成后上 Claude driver；可并行 MCP-only 验证 |
-| Claude 注入表面 | 优先仓库内 markdown 片段 |
+| Claude 接入 | **Hooks 全量**（Q4）；**P4** 在 Cursor **P2** 完成后实施；MCP 仅作 L1 补充，不作 P4 主交付 |
+| Claude 注入表面 | 优先仓库内 `.claude/theone-context.md`（或官方 hook 返回字段，以实现时 API 为准） |
 | project/repo | `theone.yaml` 默认 + 环境变量覆盖，Driver 不硬编码 `the-one` |
-| 切换策略 | 默认 `legacy`，配置切换 `v2` |
+| 切换策略 | P0–P1 默认 `legacy`；P2 dogfood `v2`；P3 起 the-one 默认 `v2`（§5.1） |
 | L0/L1 分工 | 见 §3.3.1；工具/文件以 L0 atomic 为主 |
 | Session 乱序 | `EnsureSessionReady` 自动 bootstrap（§6.2.1） |
 | 多 Agent binding | `binding.{agent_type}.json`（§6.3） |
 | 无 conversation_id | 优先拒绝 ingest；开发模式可生成 `sess_*_{nano}` |
-| inject-cache | 按 `turn_id` 隔离（§7.2） |
+| inject-cache | 按 `generation_id` 隔离（§7.2）；`task_id` 由 prefetch 内 `BindTaskFromPrompt` 定 |
 | 批量 ingest | best-effort 逐条 + 条级 dead_letter（§9.2） |
 
-### 12.1 待确认项（定稿前）
+### 12.1 议题决议一览（均已闭合）
 
-- [x] Q1：是否采纳 `theone ingest` 为唯一对外推荐入口？→ **是**（`observe-*` 保留别名）
-- [x] Q2：Cursor 无 `conversation_id` 时是否允许回退 `sessionId`？→ **允许一次绑定**；禁止静默 `sess_*_{YYYYMMDD}`；长期建议强制 `conversation_id`
-- [ ] Q3：`ExpandMode=v2` 切换时间点与是否双写一段过渡期？（建议：P2 单开关，不双写 file_edits）
-- [ ] Q4：Claude Code 首版目标：hooks 全量还是 MCP-only？
-- [x] Q5：`binding` 单文件多 agent 还是分文件？→ **`binding.{agent_type}.json`**
-
----
-
-## 13. 与 v1 文档关系
-
-| 文档 | 关系 |
-|------|------|
-| [Cursor Hooks 捕获适配设计.md](./Cursor%20Hooks%20捕获适配设计.md) | v1 实现说明；**不被本文替代**，v2 落地后标注「Driver 已迁移」 |
-| [Cursor 适配与安装后配置说明.md](./Cursor%20适配与安装后配置说明.md) | 安装步骤需随 P3 更新路径与命令 |
-| [后续完善规划.md](./后续完善规划.md) | **F-001**（Go 异步 LLM 记忆价值分析）、**F-002**（信号词可配置化）；与 §3.4、`is_substantive` 协同；**不**在 Hook 实现 |
+- [x] **Q1**：是否采纳 `theone ingest` 为唯一对外推荐入口？→ **是**（`observe-*` 保留别名）
+- [x] **Q2**：Cursor 无 `conversation_id` 时是否允许回退 `sessionId`？→ **允许**；`sessionStart.session_id` 与 `conversation_id` 同值（§6.0）；禁止 `sess_*_{YYYYMMDD}`
+- [x] **Q3**：`ExpandMode=v2` 何时、怎么切？→ **P2** 单开关；**先改 Cursor Driver 再开 v2**；**不双写**；P3 起 the-one 默认 `v2`；详见 §5.1
+- [x] **Q4**：Claude Code 首版目标？→ **Hooks 全量**（非 MCP-only）；**P4**、Cursor **P2** 后启动；详见 §8.1、§11
+- [x] **Q5**：`binding` 单文件多 agent 还是分文件？→ **`binding.{agent_type}.json`**
+- [x] **Q6**：bootstrap 与 `task_id` 升级？→ **`task_from_prompt_pending`**（§6.2.2）
+- [x] **Q7**：ingest 幂等账本？→ **`ingest-ledger.json`** + dead_letter **`event_index`**（§9.2.1）
 
 ---
 
-## 14. 附录 A：v1 → v2 对照
-
-| v1 | v2 |
-|----|-----|
-| `.cursor/hooks/theone-build-turn.py` | `drivers/cursor/entry.sh` + `theone ingest` |
-| `theone observe-turn` | `ingest` + `kind=turn.completed` |
-| `session.json` 混写 | `binding.{agent_type}.json` + `turn-dedup.json` |
-| 文件 Hook 占位 user 消息 | `capture.atomic` only |
-| `theone-before-submit-prompt.sh` 内联 context | `prefetch-context` + Surface |
-| 仅 Cursor | Cursor + Claude + Codex 共用 ingest |
-
 ---
 
-## 15. 附录 B：参考代码索引
+## 13. 附录 B：参考代码索引
 
 | 主题 | 路径 |
 |------|------|
@@ -844,11 +1002,3 @@ atomic 增量捕获         ✓                  ✗ 需 Go + Driver        ✗ 
 | v1 Cursor 模板 | `doc/cursor/hooks/` |
 
 ---
-
-## 16. 修订记录
-
-| 日期 | 版本 | 说明 |
-|------|------|------|
-| 2026-05-29 | v2.0-draft | 初稿：架构、协议、兼容性、实施阶段 |
-| 2026-05-29 | v2.0-draft | §3.4 智能增强放置原则：明确 LLM 不在 Hook，归属 Go 异步 processor（F-001） |
-| 2026-05-29 | v2.0-draft | 架构审查修订：§3.3.1 L0/L1 分工；§4.3 BatchEnvelope；§4.4 kind 推断与路由；§5 跨 kind/atomic 去重；§6 Session 就绪与 binding 分文件；§7 inject-cache 回合隔离；§9.2 批量语义与 ingest 流程 |
