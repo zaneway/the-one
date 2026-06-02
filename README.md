@@ -323,6 +323,13 @@ P5 synthetic 验收只验证 Engine MVP，不启动真实 Agent。三 Agent 真�
 - 不保存完整源码、完整工具输出、完整 diff、完整历史对话。
 - token savings 是本地近似估算口径。
 - Level4 全量捕获依赖各 Agent 侧配置，v1.0.0 后置完善（核心 MCP 与记忆链路已本地验收）。
+## 记忆模型
+
+- 12 种记忆类型: preference, decision, constraint, failure, project_fact, procedure, requirement, assumption, open_issue, temporary_state, session_summary, review_checkpoint
+- 4 级作用域: user_global, project_local, repo_local, session
+- 5 种状态: provisional → pending_review → stable → archived → deleted
+- 5 种层级: temporary(5天) → short_term → reinforced_short(90天) → long_term(365天) → durable
+
 
 ## 展望
 
