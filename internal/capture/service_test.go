@@ -16,13 +16,14 @@ func TestServiceObserveSessionStartCreatesRawEventAndDefaultTask(t *testing.T) {
 	service := NewService(config.Default(), repo)
 
 	resp, err := service.Observe(context.Background(), ObserveRequest{
-		SessionID:     "sess_codex_start_001",
-		EventType:     EventSessionStart,
-		SourceChannel: SourceChannelAgentSession,
-		WorkspaceID:   "ws",
-		ProjectID:     "project_a",
-		AgentType:     "codex",
-		Actor:         ActorAdapter,
+		SessionID:      "sess_codex_start_001",
+		EventType:      EventSessionStart,
+		SourceChannel:  SourceChannelAgentSession,
+		WorkspaceID:    "ws",
+		ProjectID:      "project_a",
+		AgentType:      "codex",
+		Actor:          ActorAdapter,
+		ContentSummary: "【事件】会话生命周期：session.start\n【事实】开始实现 capture",
 		CaptureCapabilities: CaptureCapabilities{
 			SessionLifecycle:  true,
 			ToolCallCapture:   true,
@@ -57,11 +58,12 @@ func TestServiceObserveDedupesRawEvent(t *testing.T) {
 	repo := newFakeRepository()
 	service := NewService(config.Default(), repo)
 	start, err := service.Observe(context.Background(), ObserveRequest{
-		SessionID:     "sess_codex_dedup_001",
-		EventType:     EventSessionStart,
-		SourceChannel: SourceChannelAgentSession,
-		WorkspaceID:   "ws",
-		AgentType:     "codex",
+		SessionID:      "sess_codex_dedup_001",
+		EventType:      EventSessionStart,
+		SourceChannel:  SourceChannelAgentSession,
+		WorkspaceID:    "ws",
+		AgentType:      "codex",
+		ContentSummary: "【事件】会话生命周期：session.start",
 		CaptureCapabilities: CaptureCapabilities{
 			SessionLifecycle: true,
 			MCPObserve:       true,
@@ -72,15 +74,16 @@ func TestServiceObserveDedupesRawEvent(t *testing.T) {
 	}
 
 	req := ObserveRequest{
-		SessionID:     start.SessionID,
-		EventType:     EventToolResultSummary,
-		SourceChannel: SourceChannelAgentSession,
-		WorkspaceID:   "ws",
-		AgentType:     "codex",
-		Actor:         ActorTool,
-		ToolName:      "go test",
-		OutputSummary: "测试通过",
-		ContentHash:   "sha256:same",
+		SessionID:      start.SessionID,
+		EventType:      EventToolResultSummary,
+		SourceChannel:  SourceChannelAgentSession,
+		WorkspaceID:    "ws",
+		AgentType:      "codex",
+		Actor:          ActorTool,
+		ToolName:       "go test",
+		OutputSummary:  "测试通过",
+		ContentSummary: "【事件】工具执行结果：go test\n【事实】测试通过",
+		ContentHash:    "sha256:same",
 		CaptureCapabilities: CaptureCapabilities{
 			ToolCallCapture:   true,
 			ToolOutputCapture: true,
@@ -106,11 +109,12 @@ func TestServiceObserveEnqueuesAutomationForNewRawEventOnly(t *testing.T) {
 	enqueuer := &fakeJobEnqueuer{}
 	service := NewServiceWithAutomation(config.Default(), repo, enqueuer)
 	start, err := service.Observe(context.Background(), ObserveRequest{
-		SessionID:     "sess_cursor_auto_001",
-		EventType:     EventSessionStart,
-		SourceChannel: SourceChannelAgentSession,
-		WorkspaceID:   "ws",
-		AgentType:     "cursor",
+		SessionID:      "sess_cursor_auto_001",
+		EventType:      EventSessionStart,
+		SourceChannel:  SourceChannelAgentSession,
+		WorkspaceID:    "ws",
+		AgentType:      "cursor",
+		ContentSummary: "【事件】会话生命周期：session.start",
 		CaptureCapabilities: CaptureCapabilities{
 			SessionLifecycle: true,
 			MCPObserve:       true,
@@ -130,7 +134,7 @@ func TestServiceObserveEnqueuesAutomationForNewRawEventOnly(t *testing.T) {
 		WorkspaceID:    "ws",
 		AgentType:      "cursor",
 		Actor:          ActorUser,
-		ContentSummary: "以后推进 automation 时先写测试。",
+		ContentSummary: "【事实】以后推进 automation 时先写测试。",
 		ContentHash:    "sha256:p3-c3",
 		CaptureCapabilities: CaptureCapabilities{
 			SessionLifecycle: true,
@@ -164,7 +168,7 @@ func TestServiceObserveKeepsRawEventWhenAutomationEnqueueFails(t *testing.T) {
 		WorkspaceID:    "ws",
 		AgentType:      "cursor",
 		Actor:          ActorUser,
-		ContentSummary: "以后推进 automation 时先写测试。",
+		ContentSummary: "【事实】以后推进 automation 时先写测试。",
 		ContentHash:    "sha256:p3-c3-enqueue-failed",
 		CaptureCapabilities: CaptureCapabilities{
 			MCPObserve: true,
@@ -205,11 +209,12 @@ func TestServiceObserveTracksContentBoundaryRejectionForSession(t *testing.T) {
 	repo := newFakeRepository()
 	service := NewService(config.Default(), repo)
 	start, err := service.Observe(context.Background(), ObserveRequest{
-		SessionID:     "sess_cursor_boundary_001",
-		EventType:     EventSessionStart,
-		SourceChannel: SourceChannelAgentSession,
-		WorkspaceID:   "ws",
-		AgentType:     "cursor",
+		SessionID:      "sess_cursor_boundary_001",
+		EventType:      EventSessionStart,
+		SourceChannel:  SourceChannelAgentSession,
+		WorkspaceID:    "ws",
+		AgentType:      "cursor",
+		ContentSummary: "【事件】会话生命周期：session.start",
 		CaptureCapabilities: CaptureCapabilities{
 			SessionLifecycle: true,
 			MCPObserve:       true,

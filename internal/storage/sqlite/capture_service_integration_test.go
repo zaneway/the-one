@@ -18,14 +18,15 @@ func TestCaptureServiceObserveWithSQLiteRepository(t *testing.T) {
 	service := capture.NewService(cfg, store)
 
 	start, err := service.Observe(ctx, capture.ObserveRequest{
-		SessionID:     "sess_sqlite_integration_001",
-		EventType:     capture.EventSessionStart,
-		SourceChannel: capture.SourceChannelAgentSession,
-		WorkspaceID:   "ws",
-		ProjectID:     "project_a",
-		RepoID:        "repo_a",
-		AgentType:     "codex",
-		Actor:         capture.ActorAdapter,
+		SessionID:      "sess_sqlite_integration_001",
+		EventType:      capture.EventSessionStart,
+		SourceChannel:  capture.SourceChannelAgentSession,
+		WorkspaceID:    "ws",
+		ProjectID:      "project_a",
+		RepoID:         "repo_a",
+		AgentType:      "codex",
+		Actor:          capture.ActorAdapter,
+		ContentSummary: "【事件】会话生命周期：session.start\n【事实】sqlite observe integration",
 		CaptureCapabilities: capture.CaptureCapabilities{
 			SessionLifecycle:  true,
 			ToolCallCapture:   true,
@@ -42,17 +43,18 @@ func TestCaptureServiceObserveWithSQLiteRepository(t *testing.T) {
 	}
 
 	req := capture.ObserveRequest{
-		SessionID:     start.SessionID,
-		EventType:     capture.EventToolResultSummary,
-		SourceChannel: capture.SourceChannelAgentSession,
-		WorkspaceID:   "ws",
-		ProjectID:     "project_a",
-		RepoID:        "repo_a",
-		AgentType:     "codex",
-		Actor:         capture.ActorTool,
-		ToolName:      "go test",
-		OutputSummary: "测试通过",
-		ContentHash:   "sha256:sqlite-service",
+		SessionID:      start.SessionID,
+		EventType:      capture.EventToolResultSummary,
+		SourceChannel:  capture.SourceChannelAgentSession,
+		WorkspaceID:    "ws",
+		ProjectID:      "project_a",
+		RepoID:         "repo_a",
+		AgentType:      "codex",
+		Actor:          capture.ActorTool,
+		ToolName:       "go test",
+		OutputSummary:  "测试通过",
+		ContentSummary: "【事件】工具执行结果：go test\n【事实】测试通过",
+		ContentHash:    "sha256:sqlite-service",
 		CaptureCapabilities: capture.CaptureCapabilities{
 			SessionLifecycle:  true,
 			ToolCallCapture:   true,
@@ -87,15 +89,16 @@ func TestCaptureServiceObserveWithSQLiteRepository(t *testing.T) {
 	}
 
 	end, err := service.Observe(ctx, capture.ObserveRequest{
-		SessionID:     start.SessionID,
-		EventType:     capture.EventSessionEnd,
-		SourceChannel: capture.SourceChannelAgentSession,
-		WorkspaceID:   "ws",
-		ProjectID:     "project_a",
-		RepoID:        "repo_a",
-		AgentType:     "codex",
-		Actor:         capture.ActorAdapter,
-		Session:       &capture.SessionInput{Status: capture.StatusCompleted},
+		SessionID:      start.SessionID,
+		EventType:      capture.EventSessionEnd,
+		SourceChannel:  capture.SourceChannelAgentSession,
+		WorkspaceID:    "ws",
+		ProjectID:      "project_a",
+		RepoID:         "repo_a",
+		AgentType:      "codex",
+		Actor:          capture.ActorAdapter,
+		ContentSummary: "【结论/决策】sqlite observe integration 会话结束\n【状态】completed",
+		Session:        &capture.SessionInput{Status: capture.StatusCompleted},
 		CaptureCapabilities: capture.CaptureCapabilities{
 			SessionLifecycle:  true,
 			ToolCallCapture:   true,
@@ -133,7 +136,7 @@ func TestCaptureServiceObserveEnqueuesAutomationJobWithSQLiteRepository(t *testi
 		ProjectID:      "project_a",
 		AgentType:      "cursor",
 		Actor:          capture.ActorUser,
-		ContentSummary: "以后推进 automation 时先按详细设计拆分任务。",
+		ContentSummary: "【事实】以后推进 automation 时先按详细设计拆分任务。",
 		ContentHash:    "sha256:p3-c3-sqlite",
 		CaptureCapabilities: capture.CaptureCapabilities{
 			MCPObserve: true,

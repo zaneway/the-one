@@ -22,13 +22,14 @@ func TestAppRegistersCaptureTools(t *testing.T) {
 	defer app.Close()
 
 	rawStart, toolErr := app.CallTool(ctx, "memory.observe", capture.ObserveRequest{
-		SessionID:     "sess_app_capture_tools_001",
-		EventType:     capture.EventSessionStart,
-		SourceChannel: capture.SourceChannelAgentSession,
-		WorkspaceID:   "ws",
-		ProjectID:     "project_a",
-		AgentType:     "cursor",
-		Actor:         capture.ActorAdapter,
+		SessionID:      "sess_app_capture_tools_001",
+		EventType:      capture.EventSessionStart,
+		SourceChannel:  capture.SourceChannelAgentSession,
+		WorkspaceID:    "ws",
+		ProjectID:      "project_a",
+		AgentType:      "cursor",
+		Actor:          capture.ActorAdapter,
+		ContentSummary: "【事件】会话生命周期：session.start\n【事实】验证 capture 工具注册",
 		CaptureCapabilities: capture.CaptureCapabilities{
 			SessionLifecycle: true,
 			MCPObserve:       true,

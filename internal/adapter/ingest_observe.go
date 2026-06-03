@@ -33,8 +33,9 @@ func observeFromLifecycle(env IngestEnvelope, sessionID, taskID string) (capture
 		req.Task = t
 	}
 	if req.ContentSummary == "" {
-		req.ContentSummary = "session lifecycle: " + req.EventType
+		req.ContentSummary = "会话生命周期：" + req.EventType
 	}
+	req.ContentSummary = capture.EnsureStructuredContentSummary(req.EventType, req.ContentSummary)
 	return req, nil
 }
 
@@ -63,7 +64,7 @@ func observeFromAtomic(env IngestEnvelope, sessionID, taskID string) (capture.Ob
 	case capture.EventToolResultSummary:
 		req.Actor = capture.ActorTool
 		if req.ContentSummary == "" && req.ToolName != "" {
-			req.ContentSummary = "工具结果：" + req.ToolName
+			req.ContentSummary = "工具执行结果：" + req.ToolName
 		}
 	case capture.EventFileEditSummary:
 		req.Actor = capture.ActorAgent
@@ -85,6 +86,7 @@ func observeFromAtomic(env IngestEnvelope, sessionID, taskID string) (capture.Ob
 	if req.ContentSummary == "" {
 		req.ContentSummary = eventType
 	}
+	req.ContentSummary = capture.EnsureStructuredContentSummary(req.EventType, req.ContentSummary)
 	return req, nil
 }
 
@@ -107,7 +109,7 @@ func bootstrapObserveRequest(env IngestEnvelope, sessionID, taskID, producer str
 		EventType:           capture.EventSessionStart,
 		SourceChannel:       capture.SourceChannelAgentSession,
 		Actor:               capture.ActorAdapter,
-		ContentSummary:      "ingest auto bootstrap session",
+		ContentSummary:      capture.EnsureStructuredContentSummary(capture.EventSessionStart, "会话生命周期：ingest 自动 bootstrap session"),
 		CaptureCapabilities: defaultCaptureCapabilities(),
 		SourceRefs:          defaultSourceRefs(prod),
 		Session: &capture.SessionInput{

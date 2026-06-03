@@ -121,7 +121,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 		taskReq := common
 		taskReq.EventType = capture.EventTaskStart
 		taskReq.Actor = capture.ActorAdapter
-		taskReq.ContentSummary = "任务开始：" + payload.TaskSummary
+		taskReq.ContentSummary = capture.EnsureStructuredContentSummary(taskReq.EventType, "任务开始："+payload.TaskSummary)
 		taskReq.Task = &capture.TaskInput{
 			TaskSummary: payload.TaskSummary,
 			Status:      capture.StatusActive,
@@ -139,26 +139,26 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 			userReq := common
 			userReq.EventType = capture.EventUserCorrection
 			userReq.Actor = capture.ActorUser
-			userReq.ContentSummary = payload.UserCorrectionSummary
+			userReq.ContentSummary = capture.EnsureStructuredContentSummary(userReq.EventType, payload.UserCorrectionSummary)
 			requests = append(requests, userReq)
 		} else if strings.TrimSpace(payload.UserDeclarationSummary) != "" {
 			userReq := common
 			userReq.EventType = capture.EventUserDeclaration
 			userReq.Actor = capture.ActorUser
-			userReq.ContentSummary = payload.UserDeclarationSummary
+			userReq.ContentSummary = capture.EnsureStructuredContentSummary(userReq.EventType, payload.UserDeclarationSummary)
 			requests = append(requests, userReq)
 		} else if strings.TrimSpace(payload.UserSummary) != "" {
 			userReq := common
 			userReq.EventType = capture.EventConversationMessage
 			userReq.Actor = capture.ActorUser
-			userReq.ContentSummary = payload.UserSummary
+			userReq.ContentSummary = capture.EnsureStructuredContentSummary(userReq.EventType, payload.UserSummary)
 			requests = append(requests, userReq)
 		}
 		if strings.TrimSpace(payload.AgentSummary) != "" {
 			agentReq := common
 			agentReq.EventType = capture.EventAgentResponseSummary
 			agentReq.Actor = capture.ActorAgent
-			agentReq.ContentSummary = payload.AgentSummary
+			agentReq.ContentSummary = capture.EnsureStructuredContentSummary(agentReq.EventType, payload.AgentSummary)
 			agentReq.SourceRefs = appendRetrievalSourceRefs(agentReq.SourceRefs, payload)
 			requests = append(requests, agentReq)
 		}
@@ -177,7 +177,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 			toolReq.ToolName = item.ToolName
 			toolReq.InputSummary = item.InputSummary
 			toolReq.OutputSummary = item.OutputSummary
-			toolReq.ContentSummary = "工具结果：" + item.ToolName
+			toolReq.ContentSummary = capture.EnsureStructuredContentSummary(toolReq.EventType, "工具执行结果："+item.ToolName)
 			toolReq.SourceRefs = append(toolReq.SourceRefs, capture.SourceRef{
 				"source_type": "tool_output",
 				"exit_code":   item.ExitCode,
@@ -192,7 +192,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 			editReq := common
 			editReq.EventType = capture.EventFileEditSummary
 			editReq.Actor = capture.ActorAgent
-			editReq.ContentSummary = firstNonEmpty(item.ContentSummary, "文件修改："+item.FilePath)
+			editReq.ContentSummary = capture.EnsureStructuredContentSummary(editReq.EventType, firstNonEmpty(item.ContentSummary, "文件修改："+item.FilePath))
 			editReq.SourceRefs = append(editReq.SourceRefs, capture.SourceRef{
 				"source_type": "file_edit_summary",
 				"file_path":   item.FilePath,
@@ -209,7 +209,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 		decisionReq := common
 		decisionReq.EventType = capture.EventAgentDecision
 		decisionReq.Actor = capture.ActorAgent
-		decisionReq.ContentSummary = payload.DecisionSummary
+		decisionReq.ContentSummary = capture.EnsureStructuredContentSummary(decisionReq.EventType, payload.DecisionSummary)
 		decisionReq.SourceRefs = append(decisionReq.SourceRefs, capture.SourceRef{
 			"source_type":      "agent_decision",
 			"decision_summary": payload.DecisionSummary,
@@ -222,7 +222,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 		resultReq := common
 		resultReq.EventType = capture.EventTaskResult
 		resultReq.Actor = capture.ActorAdapter
-		resultReq.ContentSummary = payload.OutcomeSummary
+		resultReq.ContentSummary = capture.EnsureStructuredContentSummary(resultReq.EventType, payload.OutcomeSummary)
 		resultReq.Task = &capture.TaskInput{
 			TaskSummary:    firstNonEmpty(payload.TaskSummary, state.LastTaskSummary),
 			Status:         payload.TaskStatus,

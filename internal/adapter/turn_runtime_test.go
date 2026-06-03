@@ -83,6 +83,35 @@ func TestTurnRuntimeDebounceSameTurn(t *testing.T) {
 	}
 }
 
+func TestTurnRuntimeWrapsLegacyAgentSummaryAsStructuredContent(t *testing.T) {
+	store := NewFileStateStore(filepath.Join(t.TempDir(), "runtime-state"))
+	runtime := NewTurnRuntime(store)
+	requests, err := runtime.BuildObserveRequests(TurnPayload{
+		WorkspaceID:   "ws",
+		ProjectID:     "project_a",
+		RepoID:        "repo_a",
+		AgentType:     "cursor",
+		SessionID:     "sess_structured",
+		TaskID:        "task_structured",
+		TurnID:        "turn_structured",
+		UserSummary:   "用户要求调整摘要",
+		AgentSummary:  "已完成捕获规则更新",
+		IsSubstantive: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildObserveRequests() error = %v", err)
+	}
+	for _, req := range requests {
+		if req.EventType == capture.EventAgentResponseSummary {
+			if !capture.HasStructuredContentSummaryTag(req.ContentSummary) {
+				t.Fatalf("agent content_summary = %q, want structured tag", req.ContentSummary)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing agent.response.summary event: %+v", requests)
+}
+
 func TestTurnRuntimeRequiresScope(t *testing.T) {
 	store := NewFileStateStore(filepath.Join(t.TempDir(), "runtime-state"))
 	runtime := NewTurnRuntime(store)

@@ -10,9 +10,10 @@ import (
 func TestCheckMinimizedObserveRejectsFullOutputSourceRef(t *testing.T) {
 	cfg := config.Default().Capture
 	req := ObserveRequest{
-		EventType:     EventToolResultSummary,
-		SourceChannel: SourceChannelMCPTool,
-		OutputSummary: "测试失败摘要",
+		EventType:      EventToolResultSummary,
+		SourceChannel:  SourceChannelMCPTool,
+		OutputSummary:  "测试失败摘要",
+		ContentSummary: "【事件】工具执行结果：go test\n【事实】测试失败摘要",
 		SourceRefs: []SourceRef{
 			{
 				"source_type": "tool_output",
@@ -30,14 +31,59 @@ func TestCheckMinimizedObserveRejectsFullOutputSourceRef(t *testing.T) {
 func TestCheckMinimizedObserveRejectsLongSalientSpan(t *testing.T) {
 	cfg := config.Default().Capture
 	req := ObserveRequest{
-		EventType:     EventConversationMessage,
-		SourceChannel: SourceChannelMCPTool,
-		SalientSpans:  []string{strings.Repeat("x", cfg.MaxSalientSpanChars+1)},
+		EventType:      EventConversationMessage,
+		SourceChannel:  SourceChannelMCPTool,
+		ContentSummary: "【事件】用户消息摘要\n【事实】用户补充需求",
+		SalientSpans:   []string{strings.Repeat("x", cfg.MaxSalientSpanChars+1)},
 	}
 
 	err := CheckMinimizedObserve(cfg, req)
 	if err == nil || !strings.Contains(err.Error(), "salient_span exceeds") {
 		t.Fatalf("CheckMinimizedObserve() error = %v, want salient span length error", err)
+	}
+}
+
+func TestCheckMinimizedObserveRejectsUnstructuredContentSummary(t *testing.T) {
+	cfg := config.Default().Capture
+	req := ObserveRequest{
+		EventType:      EventConversationMessage,
+		SourceChannel:  SourceChannelAgentSession,
+		ContentSummary: "用户要求调整记忆捕获摘要格式",
+	}
+
+	err := CheckMinimizedObserve(cfg, req)
+	if err == nil || !strings.Contains(err.Error(), "CONTENT_QUALITY") {
+		t.Fatalf("CheckMinimizedObserve() error = %v, want CONTENT_QUALITY", err)
+	}
+}
+
+func TestCheckMinimizedObserveRejectsLongConversationWithoutSalientSpans(t *testing.T) {
+	cfg := config.Default().Capture
+	req := ObserveRequest{
+		EventType:     EventConversationMessage,
+		SourceChannel: SourceChannelAgentSession,
+		ContentSummary: "【结论/决策】采用结构化索引卡作为 content_summary。\n" +
+			"【事实】" + strings.Repeat("这是较长的对话事实摘要，需要用 salient_spans 承载原子事实。", 80),
+	}
+
+	err := CheckMinimizedObserve(cfg, req)
+	if err == nil || !strings.Contains(err.Error(), "CONTENT_QUALITY: content_summary too long without salient_spans") {
+		t.Fatalf("CheckMinimizedObserve() error = %v, want long summary without salient spans quality error", err)
+	}
+}
+
+func TestCheckMinimizedObserveAcceptsStructuredShortContentSummary(t *testing.T) {
+	cfg := config.Default().Capture
+	req := ObserveRequest{
+		EventType:      EventAgentResponseSummary,
+		SourceChannel:  SourceChannelAgentSession,
+		ContentSummary: "【结论/决策】统一三端 content_summary 为结构化索引卡。\n【约束】不新增 DB 字段，不修改 retrieval 截断策略。",
+		Keywords:       []string{"content_summary", "structured", "memory"},
+		SalientSpans:   []string{"结构化摘要必须高价值信息前置"},
+	}
+
+	if err := CheckMinimizedObserve(cfg, req); err != nil {
+		t.Fatalf("CheckMinimizedObserve() error = %v, want nil", err)
 	}
 }
 

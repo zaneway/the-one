@@ -68,6 +68,9 @@ func CheckMinimizedObserve(cfg config.CaptureConfig, req ObserveRequest) error {
 	if containsForbiddenRawField(string(sourceRefsJSON)) {
 		return fmt.Errorf("CONTENT_TOO_LARGE: source_refs must not contain full_text/full_output/full_diff")
 	}
+	if err := checkStructuredContentSummaryQuality(req); err != nil {
+		return err
+	}
 	return nil
 }
 

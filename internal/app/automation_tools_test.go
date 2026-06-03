@@ -32,7 +32,7 @@ func TestAppRegistersAutomationDiagnosticsTools(t *testing.T) {
 		ProjectID:      "project_a",
 		AgentType:      "cursor",
 		Actor:          capture.ActorUser,
-		ContentSummary: "以后推进 automation 时先补 MCP 诊断测试。",
+		ContentSummary: "【事实】以后推进 automation 时先补 MCP 诊断测试。",
 		ContentHash:    "sha256:p3-c4-diagnostics",
 	})
 	if toolErr != nil {
