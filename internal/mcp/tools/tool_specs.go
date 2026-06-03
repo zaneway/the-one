@@ -286,7 +286,7 @@ func captureEventsSpec(handler mcp.Handler) mcp.ToolSpec {
 // 参数:
 //   - handler: MCP 调用处理器，执行采集质量评估逻辑。
 func captureQualitySpec(handler mcp.Handler) mcp.ToolSpec {
-	return diagnosticListSpec("memory.capture.quality", "Get capture quality", "Get capture capability and quality report for a session.", handler, map[string]any{
+	return diagnosticSpecWithRequired("memory.capture.quality", "Get capture quality", "Get capture capability and quality report for one captured session.", handler, []string{"session_id"}, map[string]any{
 		"session_id": mcp.StringProp("Session id."),
 	})
 }
@@ -302,11 +302,11 @@ func captureQualitySpec(handler mcp.Handler) mcp.ToolSpec {
 // 参数:
 //   - handler: MCP 调用处理器，执行作业列表的查询逻辑。
 func automationListJobsSpec(handler mcp.Handler) mcp.ToolSpec {
-	return diagnosticListSpec("memory.jobs.list", "List automation jobs", "List async automation jobs by status, type, target, and scope.", handler, map[string]any{
+	return diagnosticListSpec("memory.jobs.list", "List automation jobs", "List async automation jobs by status, type, target, and scope. Provide workspace_id for scoped listing or target_id for a specific target.", handler, map[string]any{
 		"status":       mcp.EnumStringProp("Job status filter.", "pending", "running", "succeeded", "failed", "cancelled"),
 		"job_type":     mcp.StringProp("Job type filter."),
 		"target_type":  mcp.StringProp("Target type filter."),
-		"target_id":    mcp.StringProp("Target id filter."),
+		"target_id":    mcp.StringProp("Target id filter. Required when workspace_id is omitted."),
 		"workspace_id": mcp.StringProp("Workspace id filter."),
 		"project_id":   mcp.StringProp("Project id filter."),
 		"repo_id":      mcp.StringProp("Repository id filter."),
@@ -323,7 +323,7 @@ func automationListJobsSpec(handler mcp.Handler) mcp.ToolSpec {
 // 参数:
 //   - handler: MCP 调用处理器，执行单条作业的查询逻辑。
 func automationGetJobSpec(handler mcp.Handler) mcp.ToolSpec {
-	return diagnosticListSpec("memory.jobs.get", "Get automation job", "Get one async automation job diagnostic record.", handler, map[string]any{
+	return diagnosticSpecWithRequired("memory.jobs.get", "Get automation job", "Get one async automation job diagnostic record by job_id.", handler, []string{"job_id"}, map[string]any{
 		"job_id": mcp.StringProp("Async job id."),
 	})
 }
@@ -360,7 +360,7 @@ func automationListCandidatesSpec(handler mcp.Handler) mcp.ToolSpec {
 // 参数:
 //   - handler: MCP 调用处理器，执行单条候选的查询逻辑。
 func automationGetCandidateSpec(handler mcp.Handler) mcp.ToolSpec {
-	return diagnosticListSpec("memory.candidates.get", "Get memory candidate", "Get one generated memory candidate diagnostic record.", handler, map[string]any{
+	return diagnosticSpecWithRequired("memory.candidates.get", "Get memory candidate", "Get one generated memory candidate diagnostic record by candidate_id.", handler, []string{"candidate_id"}, map[string]any{
 		"candidate_id": mcp.StringProp("Memory candidate id."),
 	})
 }
@@ -392,7 +392,7 @@ func automationReconcileSpec(handler mcp.Handler) mcp.ToolSpec {
 	return mcp.ToolSpec{
 		Name:        "memory.jobs.reconcile",
 		Title:       "Reconcile automation jobs",
-		Description: "Find orphan raw events and optionally enqueue missing automation jobs.",
+		Description: "Find orphan raw events and optionally enqueue missing automation jobs; use dry_run=true to inspect before modifying the queue.",
 		InputSchema: mcp.ObjectSchema([]string{"workspace_id", "mode", "dry_run"}, map[string]any{
 			"workspace_id": mcp.StringProp("Workspace id."),
 			"project_id":   mcp.StringProp("Project id filter."),
@@ -414,7 +414,7 @@ func automationReconcileSpec(handler mcp.Handler) mcp.ToolSpec {
 // 该工具用于手动触发记忆保留策略的维护作业。设计思路是：
 //   - 记忆保留策略负责两个关键任务：清理过期的临时记忆（cleanup_temporary）
 //     和重新计算保留分数（recompute_scores），后者影响记忆在检索中的排序权重。
-//   - DestructiveHint 为 true，因为 cleanup_temporary 模式会永久删除过期记忆。
+//   - DestructiveHint 为 true，因为 cleanup_temporary 模式会归档过期记忆。
 //   - dry_run 支持预览模式，先查看哪些记忆会被清理/重算，确认后再执行。
 //   - 正常情况下保留策略由自动化调度器定期执行，此工具用于紧急手动干预。
 //
@@ -424,7 +424,7 @@ func retentionRunSpec(handler mcp.Handler) mcp.ToolSpec {
 	return mcp.ToolSpec{
 		Name:        "memory.retention.run",
 		Title:       "Run retention job",
-		Description: "Manually run retention maintenance for temporary cleanup or retention score recomputation; supports dry_run.",
+		Description: "Manually run retention maintenance: archive expired temporary memories or recompute retention scores; use dry_run=true to preview.",
 		InputSchema: mcp.ObjectSchema([]string{"mode", "dry_run"}, map[string]any{
 			"workspace_id": mcp.StringProp("Workspace id filter."),
 			"project_id":   mcp.StringProp("Project id filter."),
@@ -593,7 +593,7 @@ func mvpComputeMetricsSpec(handler mcp.Handler) mcp.ToolSpec {
 // 参数:
 //   - handler: MCP 调用处理器，执行报告生成逻辑。
 func mvpReportSpec(handler mcp.Handler) mcp.ToolSpec {
-	return diagnosticListSpec("memory.mvp.report", "Generate MVP report", "Generate an MVP report for a run.", handler, map[string]any{
+	return diagnosticSpecWithRequired("memory.mvp.report", "Generate MVP report", "Generate an in-memory MVP report for a run by run_id.", handler, []string{"run_id"}, map[string]any{
 		"run_id":           mcp.StringProp("MVP run id."),
 		"format":           mcp.EnumStringProp("Report format.", "markdown", "json"),
 		"include_failures": mcp.BooleanProp("Whether failure details should be included."),
@@ -607,7 +607,7 @@ func mvpReportSpec(handler mcp.Handler) mcp.ToolSpec {
 //     此构造器将这些共同模式抽取出来，避免重复代码。
 //   - 所有通过此构造器创建的工具都标记为 ReadOnlyHint=true 和 OpenWorldHint=false，
 //     表明它们是安全的只读查询操作，不会产生副作用也不会访问外部资源。
-//   - required 参数传 nil，表示诊断工具的所有输入参数都是可选的过滤条件。
+//   - 默认不声明 required 字段，表示诊断列表工具的输入参数都是可选过滤条件。
 //
 // 参数:
 //   - name: 工具的唯一标识名称，采用 "memory.xxx.yyy" 的命名空间格式。
@@ -616,11 +616,17 @@ func mvpReportSpec(handler mcp.Handler) mcp.ToolSpec {
 //   - handler: MCP 调用处理器，执行实际的查询逻辑。
 //   - properties: 输入参数的 JSON Schema 属性定义，均为可选的过滤条件。
 func diagnosticListSpec(name, title, description string, handler mcp.Handler, properties map[string]any) mcp.ToolSpec {
+	return diagnosticSpecWithRequired(name, title, description, handler, nil, properties)
+}
+
+// diagnosticSpecWithRequired 构建带 required 字段的只读诊断工具规格。
+// 用于 get/report/quality 这类只读但必须提供目标 ID 的工具。
+func diagnosticSpecWithRequired(name, title, description string, handler mcp.Handler, required []string, properties map[string]any) mcp.ToolSpec {
 	return mcp.ToolSpec{
 		Name:          name,
 		Title:         title,
 		Description:   description,
-		InputSchema:   mcp.ObjectSchema(nil, properties),
+		InputSchema:   mcp.ObjectSchema(required, properties),
 		OutputSchema:  mcp.RawObjectSchema(),
 		ReadOnlyHint:  true,
 		OpenWorldHint: mcp.BoolPtr(false),

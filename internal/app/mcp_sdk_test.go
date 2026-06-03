@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -80,6 +81,55 @@ func TestSDKServerCallsHealthTool(t *testing.T) {
 	if content["ok"] != true {
 		t.Fatalf("health ok = %v, want true", content["ok"])
 	}
+}
+
+func TestRegistryToolSpecsExposeRequiredIdentifiers(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
+	app, err := New(ctx, cfg, "test")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer app.Close()
+
+	requiredByTool := map[string][]string{
+		"memory.jobs.get":        {"job_id"},
+		"memory.candidates.get":  {"candidate_id"},
+		"memory.capture.quality": {"session_id"},
+		"memory.mvp.report":      {"run_id"},
+	}
+	specs := make(map[string]mcp.ToolSpec, len(app.registry.Tools()))
+	for _, spec := range app.registry.Tools() {
+		specs[spec.Name] = spec
+	}
+	for toolName, wantFields := range requiredByTool {
+		spec, ok := specs[toolName]
+		if !ok {
+			t.Fatalf("tool %s not registered", toolName)
+		}
+		required := schemaRequiredSet(t, spec.InputSchema)
+		for _, field := range wantFields {
+			if !required[field] {
+				t.Fatalf("tool %s required = %+v, want %s", toolName, required, field)
+			}
+		}
+	}
+}
+
+func schemaRequiredSet(t *testing.T, raw json.RawMessage) map[string]bool {
+	t.Helper()
+	var schema struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("unmarshal input schema: %v", err)
+	}
+	out := make(map[string]bool, len(schema.Required))
+	for _, field := range schema.Required {
+		out[field] = true
+	}
+	return out
 }
 
 func connectSDKTestSession(t *testing.T, ctx context.Context, app *App) (*mcpsdk.ClientSession, *mcpsdk.ServerSession) {

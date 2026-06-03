@@ -132,7 +132,7 @@ type MemoryConfig struct {
 	DefaultWorkspace string `yaml:"default_workspace" json:"default_workspace"`
 
 	// MaxContentChars 最大内容字符数
-	// content字段的长度限制，默认4000
+	// content字段的长度限制，默认20000
 	MaxContentChars int `yaml:"max_content_chars" json:"max_content_chars"`
 
 	// MaxEvidenceChars 最大证据字符数
@@ -179,7 +179,7 @@ type CaptureConfig struct {
 	MaxOutputSummaryChars int `yaml:"max_output_summary_chars" json:"max_output_summary_chars"`
 
 	// MaxContentSummaryChars 最大内容摘要字符数
-	// content_summary字段的长度限制，默认2000
+	// content_summary字段的长度限制，默认6000
 	MaxContentSummaryChars int `yaml:"max_content_summary_chars" json:"max_content_summary_chars"`
 
 	// MaxSourceRefsChars 最大来源引用字符数
@@ -419,7 +419,7 @@ func Default() Config {
 		Memory: MemoryConfig{
 			DefaultUserID:       "local_default_user",
 			DefaultWorkspace:    "local_default_workspace",
-			MaxContentChars:     4000,
+			MaxContentChars:     20000,
 			MaxEvidenceChars:    1200,
 			MaxKeywordCount:     30,
 			MaxSalientSpanCount: 10,
@@ -433,7 +433,7 @@ func Default() Config {
 			RequireSessionForAgentEvents: true,
 			MaxInputSummaryChars:         1200,
 			MaxOutputSummaryChars:        2000,
-			MaxContentSummaryChars:       2000,
+			MaxContentSummaryChars:       6000,
 			MaxSourceRefsChars:           4000,
 			MaxSalientSpanChars:          500,
 			MaxSalientSpanCount:          10,

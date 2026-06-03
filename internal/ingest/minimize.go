@@ -20,7 +20,7 @@ type MinimizationInput struct {
 
 // CheckMinimizedContent 执行内容最小化硬边界检查
 // 校验规则：
-// 1. content 字符数不超过 max_content_chars（默认4000）
+// 1. content 字符数不超过 max_content_chars（默认20000）
 // 2. evidence.interpreted_statement 字符数不超过 max_evidence_chars（默认1200）
 // 3. keywords 数组长度不超过 max_keyword_count（默认30）
 // 4. salient_spans 数组长度不超过 max_salient_span_count（默认10）

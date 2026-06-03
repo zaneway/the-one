@@ -18,7 +18,7 @@ var forbiddenRawFields = []string{"full_text", "full_output", "full_diff"}
 // 校验规则：
 // 1. input_summary 字符数不超过 max_input_summary_chars（默认1200）
 // 2. output_summary 字符数不超过 max_output_summary_chars（默认2000）
-// 3. content_summary 字符数不超过 max_content_summary_chars（默认2000）
+// 3. content_summary 字符数不超过 max_content_summary_chars（默认6000）
 // 4. keywords 数组长度不超过 max_keyword_count（默认30）
 // 5. salient_spans 数组长度不超过 max_salient_span_count（默认10）
 // 6. 单个 salient_span 字符数不超过 max_salient_span_chars（默认500）
