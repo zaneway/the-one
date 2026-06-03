@@ -48,7 +48,7 @@ memory:
   default_workspace: "local_default_workspace"
 
   # content 字段最大字符数
-  max_content_chars: 4000
+  max_content_chars: 20000
 
   # evidence.interpreted_statement 最大字符数
   max_evidence_chars: 1200
@@ -79,7 +79,7 @@ capture:
   max_output_summary_chars: 2000
 
   # content_summary 字段最大字符数
-  max_content_summary_chars: 2000
+  max_content_summary_chars: 6000
 
   # source_refs_json 字段最大字符数
   max_source_refs_chars: 4000
