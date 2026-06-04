@@ -42,8 +42,8 @@ func (RuleBasedProvider) ExtractEvidence(ctx context.Context, input EvidenceInpu
 	event := input.RawEvent
 	// eventStatement 按优先级从多个字段中提取最佳描述文本
 	statement := eventStatement(event, input.Task, input.Session)
-	keywords := decodeStringSlice(event.KeywordsJSON)
-	spans := decodeStringSlice(event.SalientSpansJSON)
+	keywords := semanticKeywords(decodeStringSlice(event.KeywordsJSON))
+	spans := semanticSalientSpans(decodeStringSlice(event.SalientSpansJSON), statement)
 	sourceRef := baseSourceRef(event)
 
 	switch event.EventType {
@@ -113,6 +113,7 @@ func (RuleBasedProvider) GenerateCandidates(ctx context.Context, input Candidate
 	if len(keywords) == 0 {
 		keywords = decodeStringSlice(input.RawEvent.KeywordsJSON)
 	}
+	keywords = semanticKeywords(keywords)
 	evidenceIDs := []string{}
 	if input.Evidence.ID != "" {
 		evidenceIDs = append(evidenceIDs, input.Evidence.ID)
@@ -178,7 +179,7 @@ func (RuleBasedProvider) GenerateCandidates(ctx context.Context, input Candidate
 
 func evidenceIfStatement(sourceType, statement string, keywords, spans []string, sourceRef map[string]any, input EvidenceInput, ambiguous bool) []EvidenceDraft {
 	statement = strings.TrimSpace(statement)
-	if statement == "" {
+	if statement == "" || isLowValueStatement(statement) {
 		return nil
 	}
 	return []EvidenceDraft{{
@@ -189,6 +190,74 @@ func evidenceIfStatement(sourceType, statement string, keywords, spans []string,
 		SourceRef:            sourceRef,
 		Confidence:           evidenceConfidence(sourceType, input, sourceRef, ambiguous),
 	}}
+}
+
+func semanticKeywords(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		keyword := strings.TrimSpace(value)
+		if keyword == "" || isCaptureMetadataKeyword(keyword) {
+			continue
+		}
+		if _, ok := seen[keyword]; ok {
+			continue
+		}
+		seen[keyword] = struct{}{}
+		out = append(out, keyword)
+	}
+	return out
+}
+
+func semanticSalientSpans(values []string, statement string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		span := strings.TrimSpace(value)
+		if span == "" || isLowValueStatement(span) {
+			continue
+		}
+		if _, ok := seen[span]; ok {
+			continue
+		}
+		seen[span] = struct{}{}
+		out = append(out, span)
+	}
+	return out
+}
+
+func isCaptureMetadataKeyword(keyword string) bool {
+	lower := strings.ToLower(strings.TrimSpace(keyword))
+	switch lower {
+	case "hook", "turn-completed", "trace", "memory-context", "file-edit", "tool-result":
+		return true
+	default:
+		return strings.HasPrefix(lower, "trace:") || strings.HasPrefix(lower, "mem:")
+	}
+}
+
+func isLowValueStatement(value string) bool {
+	normalized := normalizeSemanticText(value)
+	if normalized == "" {
+		return true
+	}
+	if normalized == "claude 已完成本轮响应" || normalized == "agent 已完成本轮响应" || normalized == "codex 已完成本轮响应" || normalized == "用户输入摘要未直接可见" {
+		return true
+	}
+	if strings.Contains(normalized, "已完成本轮响应") && len([]rune(normalized)) <= 24 {
+		return true
+	}
+	return hasAnySignal(normalized, "完整任务提示词", "可直接复制给", "```", "# 任务：")
+}
+
+func normalizeSemanticText(value string) string {
+	text := strings.TrimSpace(value)
+	replacements := []string{"【结论/决策】", "【事件】", "【事实】", "【约束】", "【关联】", "【状态】"}
+	for _, replacement := range replacements {
+		text = strings.ReplaceAll(text, replacement, " ")
+	}
+	text = strings.ReplaceAll(text, "\n", " ")
+	return strings.Join(strings.Fields(text), " ")
 }
 
 // evidenceConfidence 计算 evidence 的置信度分数（0~1）。

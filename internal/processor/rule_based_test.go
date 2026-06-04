@@ -3,6 +3,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,6 +113,36 @@ func TestRuleBasedToolSuccessNoEvidence(t *testing.T) {
 	}
 	if len(evidence) != 0 {
 		t.Fatalf("evidence count = %d, want 0", len(evidence))
+	}
+}
+
+func TestRuleBasedAgentResponseBoilerplateNoEvidence(t *testing.T) {
+	provider := NewRuleBasedProvider()
+	event := rawEvent(capture.EventAgentResponseSummary, "【结论/决策】Claude 已完成本轮响应")
+	event.KeywordsJSON = jsonArray("claude_code", "hook", "turn-completed", "trace:rt_bad")
+	event.SalientSpansJSON = jsonArray("Claude 已完成本轮响应", "用户提出真实需求")
+
+	evidence, err := provider.ExtractEvidence(context.Background(), EvidenceInput{RawEvent: event})
+	if err != nil {
+		t.Fatalf("ExtractEvidence() error = %v", err)
+	}
+	if len(evidence) != 0 {
+		t.Fatalf("evidence count = %d, want 0: %+v", len(evidence), evidence)
+	}
+}
+
+func TestRuleBasedFiltersCaptureMetadataKeywordsAndNoisySpans(t *testing.T) {
+	provider := NewRuleBasedProvider()
+	event := rawEvent(capture.EventAgentResponseSummary, "【结论/决策】Codex hooks 作为主接入路径，wrapper 仅作为兼容入口。")
+	event.KeywordsJSON = jsonArray("codex", "hook", "turn-completed", "trace:rt_bad", "mem:mem_bad", "wrapper")
+	event.SalientSpansJSON = jsonArray("Claude 已完成本轮响应", "Codex hooks 是主接入路径")
+
+	evidence := extractOne(t, provider, event)
+	if got := strings.Join(decodeStringSlice(evidence.KeywordsJSON), "|"); got != "codex|wrapper" {
+		t.Fatalf("evidence keywords = %q, want semantic keywords only", got)
+	}
+	if got := strings.Join(decodeStringSlice(evidence.SalientSpansJSON), "|"); got != "Codex hooks 是主接入路径" {
+		t.Fatalf("evidence spans = %q, want noisy spans removed", got)
 	}
 }
 
@@ -251,11 +282,16 @@ func extractOne(t *testing.T, provider RuleBasedProvider, event capture.RawEvent
 	if err != nil {
 		t.Fatalf("marshal keywords: %v", err)
 	}
+	spansJSON, err := json.Marshal(drafts[0].SalientSpans)
+	if err != nil {
+		t.Fatalf("marshal salient spans: %v", err)
+	}
 	return memory.Evidence{
 		ID:                   "ev_001",
 		SourceType:           drafts[0].SourceType,
 		InterpretedStatement: drafts[0].InterpretedStatement,
 		KeywordsJSON:         string(keywordsJSON),
+		SalientSpansJSON:     string(spansJSON),
 		SourceRefJSON:        string(sourceRefJSON),
 		Confidence:           drafts[0].Confidence,
 		CreatedAt:            time.Now().UTC(),
@@ -279,6 +315,14 @@ func generate(t *testing.T, provider RuleBasedProvider, event capture.RawEvent, 
 
 func refsJSON(ref map[string]any) string {
 	data, err := json.Marshal([]map[string]any{ref})
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
+}
+
+func jsonArray(values ...string) string {
+	data, err := json.Marshal(values)
 	if err != nil {
 		panic(err)
 	}

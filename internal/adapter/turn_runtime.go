@@ -66,10 +66,14 @@ type TurnPayload struct {
 	DecisionSummary        string `json:"decision_summary"`
 	ReasonSummary          string `json:"reason_summary"`
 
-	Keywords     []string          `json:"keywords"`
-	SalientSpans []string          `json:"salient_spans"`
-	ToolResults  []ToolResultInput `json:"tool_results"`
-	FileEdits    []FileEditInput   `json:"file_edits"`
+	Keywords          []string          `json:"keywords"`
+	SalientSpans      []string          `json:"salient_spans"`
+	UserKeywords      []string          `json:"user_keywords"`
+	UserSalientSpans  []string          `json:"user_salient_spans"`
+	AgentKeywords     []string          `json:"agent_keywords"`
+	AgentSalientSpans []string          `json:"agent_salient_spans"`
+	ToolResults       []ToolResultInput `json:"tool_results"`
+	FileEdits         []FileEditInput   `json:"file_edits"`
 
 	RetrievalTraceID string   `json:"retrieval_trace_id"`
 	UsedMemoryIDs    []string `json:"used_memory_ids"`
@@ -105,7 +109,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 		RepoID:        payload.RepoID,
 		SourceChannel: capture.SourceChannelAgentSession,
 		OccurredAt:    firstNonEmpty(payload.CompletedAt, payload.StartedAt),
-		Keywords:      payload.Keywords,
+		Keywords:      semanticKeywords(payload.Keywords),
 		SalientSpans:  payload.SalientSpans,
 		SourceRefs: []capture.SourceRef{
 			{
@@ -139,18 +143,24 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 			userReq := common
 			userReq.EventType = capture.EventUserCorrection
 			userReq.Actor = capture.ActorUser
+			userReq.Keywords = semanticKeywords(firstNonEmptySlice(payload.UserKeywords, payload.Keywords))
+			userReq.SalientSpans = firstNonEmptySlice(payload.UserSalientSpans, payload.SalientSpans)
 			userReq.ContentSummary = capture.EnsureStructuredContentSummary(userReq.EventType, payload.UserCorrectionSummary)
 			requests = append(requests, userReq)
 		} else if strings.TrimSpace(payload.UserDeclarationSummary) != "" {
 			userReq := common
 			userReq.EventType = capture.EventUserDeclaration
 			userReq.Actor = capture.ActorUser
+			userReq.Keywords = semanticKeywords(firstNonEmptySlice(payload.UserKeywords, payload.Keywords))
+			userReq.SalientSpans = firstNonEmptySlice(payload.UserSalientSpans, payload.SalientSpans)
 			userReq.ContentSummary = capture.EnsureStructuredContentSummary(userReq.EventType, payload.UserDeclarationSummary)
 			requests = append(requests, userReq)
 		} else if strings.TrimSpace(payload.UserSummary) != "" {
 			userReq := common
 			userReq.EventType = capture.EventConversationMessage
 			userReq.Actor = capture.ActorUser
+			userReq.Keywords = semanticKeywords(firstNonEmptySlice(payload.UserKeywords, payload.Keywords))
+			userReq.SalientSpans = firstNonEmptySlice(payload.UserSalientSpans, payload.SalientSpans)
 			userReq.ContentSummary = capture.EnsureStructuredContentSummary(userReq.EventType, payload.UserSummary)
 			requests = append(requests, userReq)
 		}
@@ -158,6 +168,8 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 			agentReq := common
 			agentReq.EventType = capture.EventAgentResponseSummary
 			agentReq.Actor = capture.ActorAgent
+			agentReq.Keywords = semanticKeywords(firstNonEmptySlice(payload.AgentKeywords, payload.Keywords))
+			agentReq.SalientSpans = firstNonEmptySlice(payload.AgentSalientSpans, payload.SalientSpans)
 			agentReq.ContentSummary = capture.EnsureStructuredContentSummary(agentReq.EventType, payload.AgentSummary)
 			agentReq.SourceRefs = appendRetrievalSourceRefs(agentReq.SourceRefs, payload)
 			requests = append(requests, agentReq)
@@ -270,6 +282,42 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstNonEmptySlice(values ...[]string) []string {
+	for _, value := range values {
+		if len(value) > 0 {
+			return value
+		}
+	}
+	return nil
+}
+
+func semanticKeywords(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		keyword := strings.TrimSpace(value)
+		if keyword == "" || isCaptureMetadataKeyword(keyword) {
+			continue
+		}
+		if _, ok := seen[keyword]; ok {
+			continue
+		}
+		seen[keyword] = struct{}{}
+		out = append(out, keyword)
+	}
+	return out
+}
+
+func isCaptureMetadataKeyword(keyword string) bool {
+	lower := strings.ToLower(strings.TrimSpace(keyword))
+	switch lower {
+	case "hook", "turn-completed", "trace", "memory-context", "file-edit", "tool-result":
+		return true
+	default:
+		return strings.HasPrefix(lower, "trace:") || strings.HasPrefix(lower, "mem:")
+	}
 }
 
 // appendRetrievalSourceRefs 将检索上下文信息追加到 source_refs。

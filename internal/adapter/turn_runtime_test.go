@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/zaneway/theone/internal/capture"
@@ -112,6 +113,46 @@ func TestTurnRuntimeWrapsLegacyAgentSummaryAsStructuredContent(t *testing.T) {
 	t.Fatalf("missing agent.response.summary event: %+v", requests)
 }
 
+func TestTurnRuntimeUsesActorSpecificKeywordsAndSpans(t *testing.T) {
+	store := NewFileStateStore(filepath.Join(t.TempDir(), "runtime-state"))
+	runtime := NewTurnRuntime(store)
+	requests, err := runtime.BuildObserveRequests(TurnPayload{
+		WorkspaceID:       "ws",
+		ProjectID:         "project_a",
+		RepoID:            "repo_a",
+		AgentType:         "codex",
+		SessionID:         "sess_actor_fields",
+		TaskID:            "task_actor_fields",
+		TurnID:            "turn_actor_fields",
+		UserSummary:       "【事件】用户要求修复 Codex hook 记忆污染",
+		AgentSummary:      "【结论/决策】修复 TurnRuntime 按 actor 分离 spans",
+		IsSubstantive:     true,
+		Keywords:          []string{"hook", "turn-completed", "trace:rt_bad"},
+		SalientSpans:      []string{"legacy mixed span"},
+		UserKeywords:      []string{"codex", "用户需求"},
+		UserSalientSpans:  []string{"用户要求修复 Codex hook 记忆污染"},
+		AgentKeywords:     []string{"TurnRuntime", "salient_spans"},
+		AgentSalientSpans: []string{"TurnRuntime 按 actor 分离 spans"},
+	})
+	if err != nil {
+		t.Fatalf("BuildObserveRequests() error = %v", err)
+	}
+	userReq := findEvent(t, requests, capture.EventConversationMessage)
+	agentReq := findEvent(t, requests, capture.EventAgentResponseSummary)
+	if strings.Join(userReq.SalientSpans, "|") != "用户要求修复 Codex hook 记忆污染" {
+		t.Fatalf("user salient_spans = %+v", userReq.SalientSpans)
+	}
+	if strings.Join(agentReq.SalientSpans, "|") != "TurnRuntime 按 actor 分离 spans" {
+		t.Fatalf("agent salient_spans = %+v", agentReq.SalientSpans)
+	}
+	if strings.Join(userReq.Keywords, "|") != "codex|用户需求" {
+		t.Fatalf("user keywords = %+v", userReq.Keywords)
+	}
+	if strings.Join(agentReq.Keywords, "|") != "TurnRuntime|salient_spans" {
+		t.Fatalf("agent keywords = %+v", agentReq.Keywords)
+	}
+}
+
 func TestTurnRuntimeRequiresScope(t *testing.T) {
 	store := NewFileStateStore(filepath.Join(t.TempDir(), "runtime-state"))
 	runtime := NewTurnRuntime(store)
@@ -124,6 +165,17 @@ func TestTurnRuntimeRequiresScope(t *testing.T) {
 	if err == nil {
 		t.Fatalf("BuildObserveRequests() error = nil, want missing scope")
 	}
+}
+
+func findEvent(t *testing.T, requests []capture.ObserveRequest, eventType string) capture.ObserveRequest {
+	t.Helper()
+	for _, req := range requests {
+		if req.EventType == eventType {
+			return req
+		}
+	}
+	t.Fatalf("missing event_type %s in %+v", eventType, requests)
+	return capture.ObserveRequest{}
 }
 
 func assertHasEvent(t *testing.T, requests []capture.ObserveRequest, eventType string) {
