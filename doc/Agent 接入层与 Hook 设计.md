@@ -53,7 +53,7 @@ Cursor Hook 方案验证了以下方向正确：
 
 | # | 目标 | 说明 |
 |---|------|------|
-| G1 | 多 Agent 一套接入语义 | Cursor、Claude Code、Codex wrapper 等共用 wire format |
+| G1 | 多 Agent 一套接入语义 | Cursor、Claude Code、Codex hooks / wrapper 等共用 wire format |
 | G2 | 事件粒度正确 | 回合级（user+agent）与增量级（tool/file）分离；**默认 `ExpandMode=legacy` 时不达成**，见 §2.3 |
 | G3 | Session 单一真相 | 全线程 canonical `session_id` / `task_id` 由 Go 维护 |
 | G4 | 读写路径分离 | 捕获（write）与召回注入（read）抽象为可选 Surface Adapter |
@@ -85,13 +85,13 @@ Cursor Hook 方案验证了以下方向正确：
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ Agent 产品层（能力各异）                                                  │
-│  Cursor hooks.json │ Claude Code hooks │ Codex wrapper │ 手动 CLI        │
+│  Cursor hooks.json │ Claude Code hooks │ Codex hooks / wrapper │ 手动 CLI    │
 └────────────┬────────────────┬──────────────────┬───────────────┬────────┘
              │ 原生 JSON       │ 原生 JSON         │ 日志/子进程      │
              v                 v                   v                v
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ Driver 层（薄：map + 调 CLI，建议单脚本入口 per agent）                      │
-│  driver=cursor │ driver=claude_code │ driver=codex_wrapper               │
+│  driver=cursor │ driver=claude_code │ driver=codex_hook / codex_wrapper  │
 └───────────────────────────────┬─────────────────────────────────────────┘
                                 │ IngestEnvelope（单条或批量）
                                 v
@@ -113,7 +113,7 @@ Cursor Hook 方案验证了以下方向正确：
   将 memory.context 结果注入用户可见上下文
   Cursor: beforeSubmit stdout + theone-injected-context.mdc
   Claude: 仓库内 markdown 片段 / hook 附加文本（按产品 API 选型）
-  Codex:  wrapper 拼接下一轮 prompt
+  Codex:  UserPromptSubmit.hookSpecificOutput.additionalContext 注入；wrapper 仅作兼容入口
 ```
 
 ### 3.2 与总体架构的映射
@@ -240,6 +240,7 @@ type IngestEnvelope struct {
 | 模式 | 示例 | 走 ingest？ |
 |------|------|-------------|
 | `{agent_type}_hook:{hook_name}` | `cursor_hook:afterFileEdit` | 是 |
+| `{agent_type}_hook:{HookEvent}` | `codex_hook:Stop` | 是 |
 | `{agent_type}_wrapper` | `codex_wrapper` | 是 |
 | `mcp:memory_observe` | 审计/排障用标签 | **否**（MCP 直连 Capture，见 §3.3.1） |
 
@@ -380,7 +381,7 @@ kind=capture.atomic     → AtomicPayload → ObserveRequest（单条，不经 B
 
 ### 4.5 `turn.completed` 载荷
 
-与现有 `adapter.TurnPayload` 对齐（`internal/adapter/turn_runtime.go`），作为 `kind=turn.completed` 时 `payload` 的形状。Codex wrapper 与 Cursor `afterAgentResponse` 继续使用该结构。
+与现有 `adapter.TurnPayload` 对齐（`internal/adapter/turn_runtime.go`），作为 `kind=turn.completed` 时 `payload` 的形状。Codex `Stop` hook、Codex wrapper 与 Cursor `afterAgentResponse` 继续使用该结构。
 
 ### 4.6 `capture.atomic` 载荷
 
@@ -475,7 +476,7 @@ P2 验收目标：`ExpandMode=v2` 且文件/工具 Hook 仅 atomic；`afterAgent
 | `tool.result.summary` | `tool_name` + `input_summary` + `output_summary` + `exit_code` | `tool_results[]` 同名字段 | 两侧截断规则一致（§5.2）时可兜底 |
 | `file.edit.summary` | `file_path` + `change_type` + `after_hash`（无则 `content_summary` 前 200 字） | `file_edits[]` 常缺 `after_hash` | **默认不对齐**；file.edit 跨 kind 兜底**不承诺**，仅靠 DB |
 
-Codex wrapper 若单包同时含 `user_summary` 与 `file_edits`：应拆为 **1× turn.completed + N× atomic** 批量提交，勿走单包 Turn 全量展开。
+Codex hook / wrapper 若单包同时含 `user_summary` 与 `file_edits`：应拆为 **1× turn.completed + N× atomic** 批量提交，勿走单包 Turn 全量展开。
 
 ---
 
@@ -741,15 +742,14 @@ beforeSubmitPrompt (Driver)
 
 ### 8.1 能力对照
 
-| 能力 | Cursor | Claude Code（P4，**Hooks 全量**，Q4 已决） | Codex wrapper |
-|------|--------|--------------------------------------------------|---------------|
-| 会话生命周期 | `sessionStart` / `sessionEnd` | `session.lifecycle` | Cursor `stop`≠会话结束，见 §6.0 |
-| 回合结束 | `afterAgentResponse`（Cursor）；`Stop`（Claude） | `turn.completed` | v2 不含 tool/file 数组 |
-| 用户 prompt 前召回 | `beforeSubmitPrompt` | PrePrompt / UserPromptSubmit 类 → `prefetch-context` | wrapper 拼 prompt |
-| 回合结束 | `afterAgentResponse` | Stop / SubagentStop 等 → `turn.completed` | 每轮结束 ingest |
-| 工具结果 | `afterMCPExecution` | `PostToolUse` / `PostToolUseFailure` → `capture.atomic` | 日志解析 |
-| 文件编辑 | `afterFileEdit` | PostToolUse（Write/Edit）或专用 hook → `capture.atomic` | git diff / 日志 |
-| MCP theone | 有 | 有（L1 补高信号；**不**替代 L0 Hook） | 通常无 |
+| 能力 | Cursor | Claude Code（P4，**Hooks 全量**，Q4 已决） | Codex hooks（主）/ wrapper（兼容） |
+|------|--------|--------------------------------------------------|-------------------------------|
+| 会话生命周期 | `sessionStart` / `sessionEnd` | `SessionStart` / `SessionEnd` → `session.lifecycle` | `SessionStart` → `session.start`；wrapper 可手动提交 lifecycle |
+| 用户 prompt 前召回 | `beforeSubmitPrompt` | `UserPromptSubmit` → `prefetch-context` | `UserPromptSubmit` → `hookSpecificOutput.additionalContext`；wrapper 可拼接 prompt |
+| 回合结束 | `afterAgentResponse` | `Stop` / `SubagentStop` → `turn.completed` | `Stop` → `turn.completed`；wrapper 可直接提交 turn envelope |
+| 工具结果 | `afterMCPExecution` | `PostToolUse` / `PostToolUseFailure` → `capture.atomic` | `PostToolUse` 覆盖 Bash / `apply_patch` / MCP；wrapper 可直接提交 atomic |
+| 文件编辑 | `afterFileEdit` | PostToolUse（Write/Edit）或专用 hook → `capture.atomic` | `apply_patch` 经 `PostToolUse` 尽量归一为 `file.edit.summary` |
+| MCP theone | 有 | 有（L1 补高信号；**不**替代 L0 Hook） | 可用；Hook 是默认 L0 采集路径 |
 
 ### 8.2 Driver 映射配置（建议）
 
