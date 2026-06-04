@@ -258,7 +258,7 @@ func (b *SessionBinder) BindTaskFromPrompt(in BindTaskFromPromptInput) (bound bo
 			EventType:      capture.EventTaskStart,
 			SourceChannel:  capture.SourceChannelAgentSession,
 			Actor:          capture.ActorAdapter,
-			ContentSummary: "任务开始：" + summary,
+			ContentSummary: capture.EnsureStructuredContentSummary(capture.EventTaskStart, "任务开始："+summary),
 			Task: &capture.TaskInput{
 				TaskSummary: summary,
 				Status:      capture.StatusActive,

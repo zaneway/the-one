@@ -21,6 +21,19 @@ func TestBuildSearchTextIncludesRetrievalFields(t *testing.T) {
 	}
 }
 
+func TestBuildSearchTextDeduplicatesContentAndNormalizedContent(t *testing.T) {
+	content := "【结论/决策】Codex hooks 作为主路径，wrapper 仅作为兼容入口。"
+	text := BuildSearchText(SearchTextInput{
+		Title:             "Codex hooks",
+		Content:           content,
+		NormalizedContent: content,
+		Keywords:          []string{"codex", "hooks"},
+	})
+	if got := strings.Count(text, content); got != 1 {
+		t.Fatalf("content occurrence count = %d, want 1; text=%q", got, text)
+	}
+}
+
 func TestCheckMinimizedContentRejectsLargeContent(t *testing.T) {
 	cfg := config.Default().Memory
 	err := CheckMinimizedContent(cfg, MinimizationInput{Content: strings.Repeat("x", cfg.MaxContentChars+1)})

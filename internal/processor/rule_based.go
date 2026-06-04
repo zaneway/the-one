@@ -455,14 +455,36 @@ func scopeForProject(event capture.RawEvent) string {
 }
 
 func candidateTitle(memoryType, content string) string {
-	content = strings.TrimSpace(content)
-	if len([]rune(content)) > 32 {
-		content = string([]rune(content)[:32])
-	}
-	if content == "" {
+	title := conciseTitleText(content, 96)
+	if title == "" {
 		return memoryType
 	}
-	return fmt.Sprintf("%s: %s", memoryType, content)
+	return fmt.Sprintf("%s: %s", memoryType, title)
+}
+
+func conciseTitleText(content string, maxRunes int) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	for _, sep := range []string{"\n", "。", "！", "？", ". ", "! ", "? "} {
+		if idx := strings.Index(content, sep); idx > 0 {
+			end := idx + len(sep)
+			if strings.HasPrefix(sep, "\n") {
+				end = idx
+			}
+			candidate := strings.TrimSpace(content[:end])
+			if candidate != "" {
+				content = candidate
+				break
+			}
+		}
+	}
+	runes := []rune(content)
+	if maxRunes > 0 && len(runes) > maxRunes {
+		return strings.TrimSpace(string(runes[:maxRunes])) + "..."
+	}
+	return content
 }
 
 // defaultImportance 根据 memoryType 返回默认重要性分数。

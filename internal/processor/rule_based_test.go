@@ -42,6 +42,23 @@ func TestRuleBasedUserDeclarationConstraintCandidate(t *testing.T) {
 	}
 }
 
+func TestRuleBasedCandidateTitleKeepsCompleteShortStatement(t *testing.T) {
+	provider := NewRuleBasedProvider()
+	statement := "Codex hooks 作为主路径，wrapper 仅作为兼容入口。"
+	event := rawEvent(capture.EventUserDeclaration, statement)
+	event.ProjectID = "proj_001"
+
+	evidence := extractOne(t, provider, event)
+	candidates := generate(t, provider, event, evidence)
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count = %d, want 1", len(candidates))
+	}
+	want := memory.TypeProjectFact + ": " + statement
+	if candidates[0].Title != want {
+		t.Fatalf("title = %q, want %q", candidates[0].Title, want)
+	}
+}
+
 func TestRuleBasedUserCorrectionCandidate(t *testing.T) {
 	provider := NewRuleBasedProvider()
 	event := rawEvent(capture.EventUserCorrection, "当前数据库已经从 MySQL 改为 PostgreSQL。")
