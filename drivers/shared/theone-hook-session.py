@@ -27,6 +27,7 @@ def _load_runtime():
 _rt = _load_runtime()
 pick = _rt.pick
 runtime_cache_name = _rt.runtime_cache_name
+format_structured_content_summary = _rt.format_structured_content_summary
 
 
 def _read_stdin_json() -> dict:
@@ -68,6 +69,12 @@ def cmd_start(args: argparse.Namespace) -> int:
         default_task = f"task_{agent}_auto"
         content = "Claude Code session start"
         producer = f"{agent}_hook:sessionStart"
+    elif agent == "codex":
+        source = pick(data, ["source"], "startup")
+        goal = f"Codex session ({source})"
+        default_task = "task_codex_auto"
+        content = "Codex session start"
+        producer = "codex_hook:SessionStart"
     else:
         goal = pick(data, ["goal", "goal_summary", "summary"], "Cursor session start")
         default_task = "task_cursor_auto"
@@ -75,6 +82,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         producer = "cursor_hook:sessionStart"
 
     task_id = pick(data, ["task_id", "taskId"], default_task)
+    content_summary, _ = format_structured_content_summary(
+        "session.start",
+        f"会话生命周期：{content}",
+        status_text="active",
+    )
     envelope = {
         "ingest_id": "ing_" + uuid.uuid4().hex[:16],
         "protocol_version": "v1",
@@ -91,7 +103,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                     "project_id": "the-one",
                     "repo_id": "the-one",
                     "conversation_id": session_id,
-                    "content_summary": content,
+                    "content_summary": content_summary,
                     "capture_capabilities": {
                         "conversation_capture": True,
                         "tool_call_capture": True,
@@ -134,9 +146,20 @@ def cmd_end(args: argparse.Namespace) -> int:
         reason = pick(data, ["reason"], "other")
         summary = f"Claude Code 会话结束（{reason}）"
         producer = f"{agent}_hook:sessionEnd"
+    elif agent == "codex":
+        reason = pick(data, ["reason"], "stop")
+        summary = f"Codex 会话结束（{reason}）"
+        producer = "codex_hook:SessionEnd"
     else:
         summary = pick(data, ["summary", "result", "message"], "Cursor 会话结束")
         producer = "cursor_hook:sessionEnd"
+    content_summary, spans = format_structured_content_summary(
+        "session.end",
+        summary,
+        status_text="completed",
+        max_chars=800,
+        max_spans=2,
+    )
 
     envelope = {
         "ingest_id": "ing_" + uuid.uuid4().hex[:16],
@@ -154,12 +177,13 @@ def cmd_end(args: argparse.Namespace) -> int:
                     "project_id": "the-one",
                     "repo_id": "the-one",
                     "conversation_id": session_id,
-                    "content_summary": summary[:1600],
+                    "content_summary": content_summary,
+                    "salient_spans": spans,
                     "session": {"status": "completed"},
                     "task": {
                         "task_summary": task_id,
                         "status": "completed",
-                        "outcome_summary": summary[:1600],
+                        "outcome_summary": content_summary,
                     },
                 },
             }
@@ -201,9 +225,9 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     if not surface_file:
         return 0
     os.makedirs(os.path.dirname(surface_file), exist_ok=True)
-    if agent == "claude_code":
+    if agent in {"claude_code", "codex"}:
         body = (
-            "# The One 记忆上下文（Claude Code 自动注入）\n\n"
+            f"# The One 记忆上下文（{agent} 自动注入）\n\n"
             "_（暂无命中记忆；新会话或 prefetch 后将自动更新。）_\n"
         )
     else:

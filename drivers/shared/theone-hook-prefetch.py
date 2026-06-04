@@ -45,7 +45,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     data = _read_stdin_json()
     agent = (args.agent or "cursor").strip() or "cursor"
 
-    if agent == "claude_code":
+    if agent in {"claude_code", "codex"}:
         prompt = pick(data, ["prompt"], "")
         conversation_id = pick(
             data, ["session_id", "sessionId", "conversation_id", "conversationId"], ""
@@ -61,7 +61,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     generation_id = pick(data, ["generation_id", "generationId"], "")
     user_summary = prompt[:1000] if prompt else "用户输入摘要未直接可见"
     prompt_fp = prompt_fingerprint(prompt)
-    if agent == "claude_code" and not generation_id and prompt_fp:
+    if agent in {"claude_code", "codex"} and not generation_id and prompt_fp:
         generation_id = "gen_" + prompt_fp
 
     turn_id = ""
@@ -117,11 +117,23 @@ def cmd_format_response(args: argparse.Namespace) -> int:
 
 def _print_hook_output(agent: str, data: dict) -> None:
     text = (data.get("inject_markdown") or "").strip()
-    if agent == "claude_code":
+    if agent in {"claude_code", "codex"}:
         if not text:
-            print("{}")
+            print(
+                json.dumps(
+                    {
+                        "continue": True,
+                        "hookSpecificOutput": {
+                            "hookEventName": "UserPromptSubmit",
+                            "additionalContext": "",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            )
             return
         out = {
+            "continue": True,
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
                 "additionalContext": text,

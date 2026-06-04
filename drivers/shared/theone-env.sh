@@ -28,6 +28,10 @@ if [[ "${THEONE_AGENT_TYPE}" == "cursor" ]]; then
   PROMPT_CACHE_FILE="${STATE_DIR}/prompt-cache.json"
   INJECT_CACHE_FILE="${STATE_DIR}/inject-cache.json"
   SURFACE_FILE="${ROOT_DIR}/.cursor/rules/theone-injected-context.mdc"
+elif [[ "${THEONE_AGENT_TYPE}" == "codex" ]]; then
+  PROMPT_CACHE_FILE="${STATE_DIR}/prompt-cache.codex.json"
+  INJECT_CACHE_FILE="${STATE_DIR}/inject-cache.codex.json"
+  SURFACE_FILE="${ROOT_DIR}/.codex/theone-context.md"
 else
   PROMPT_CACHE_FILE="${STATE_DIR}/prompt-cache.${THEONE_AGENT_TYPE}.json"
   INJECT_CACHE_FILE="${STATE_DIR}/inject-cache.${THEONE_AGENT_TYPE}.json"
@@ -35,4 +39,4 @@ else
 fi
 export PROMPT_CACHE_FILE INJECT_CACHE_FILE SURFACE_FILE
 
-mkdir -p "${STATE_DIR}" "${ROOT_DIR}/.claude" 2>/dev/null || true
+mkdir -p "${STATE_DIR}" "${ROOT_DIR}/.claude" "${ROOT_DIR}/.codex" 2>/dev/null || true
