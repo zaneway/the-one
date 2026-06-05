@@ -218,10 +218,36 @@ func (p *IngestProcessor) buildRequests(env IngestEnvelope, kind, sessionID, tas
 			}
 		}
 		runtime := NewTurnRuntimeWithExpandMode(p.StateStore, p.ExpandMode)
-		return runtime.BuildObserveRequests(payload)
+		requests, err := runtime.BuildObserveRequests(payload)
+		if err != nil {
+			return nil, err
+		}
+		return attachEnvelopeProducer(requests, env.Producer), nil
 	default:
 		return nil, fmt.Errorf("unknown kind %q", kind)
 	}
+}
+
+func attachEnvelopeProducer(requests []capture.ObserveRequest, producer string) []capture.ObserveRequest {
+	producer = strings.TrimSpace(producer)
+	if producer == "" {
+		return requests
+	}
+	for i := range requests {
+		if len(requests[i].SourceRefs) == 0 {
+			requests[i].SourceRefs = defaultSourceRefs(producer)
+			continue
+		}
+		target := 0
+		for idx, ref := range requests[i].SourceRefs {
+			if ref["source_type"] == "agent_session" {
+				target = idx
+				break
+			}
+		}
+		requests[i].SourceRefs[target]["producer"] = producer
+	}
+	return requests
 }
 
 func (p *IngestProcessor) failItem(ingestID string, item IngestWorkItem, sessionID, taskID, code, summary string, result *IngestResult) {

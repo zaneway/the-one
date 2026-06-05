@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/zaneway/theone/internal/automation"
+	"github.com/zaneway/theone/internal/idgen"
 	"github.com/zaneway/theone/internal/memory"
 )
 
@@ -212,10 +213,95 @@ func (s *Store) WriteAutomatedMemory(ctx context.Context, input automation.Autom
 			return memory.MemoryItem{}, err
 		}
 	}
+	if input.Provenance != nil {
+		provenance := *input.Provenance
+		provenance.MemoryID = item.ID
+		if provenance.ID == "" {
+			provenanceID, err := idgen.New("prov")
+			if err != nil {
+				_ = tx.Rollback()
+				return memory.MemoryItem{}, err
+			}
+			provenance.ID = provenanceID
+		}
+		if provenance.CreatedAt.IsZero() {
+			provenance.CreatedAt = now
+		}
+		if provenance.HookPhase == "" {
+			provenance.HookPhase = automation.HookPhaseUnknown
+		}
+		if err := insertMemoryProvenance(ctx, tx, provenance); err != nil {
+			_ = tx.Rollback()
+			return memory.MemoryItem{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return memory.MemoryItem{}, storageErr(err)
 	}
 	return s.Get(ctx, item.ID)
+}
+
+// GetMemoryProvenance 按 memory_id 读取最新 provenance，用于诊断和展示记忆来源。
+func (s *Store) GetMemoryProvenance(ctx context.Context, memoryID string) (automation.MemoryProvenance, bool, error) {
+	if strings.TrimSpace(memoryID) == "" {
+		return automation.MemoryProvenance{}, false, fmt.Errorf("VALIDATION_FAILED: memory_id is required")
+	}
+	row := s.db.QueryRowContext(ctx, baseMemoryProvenanceSelect()+`
+		where memory_id = ?
+		order by created_at desc
+		limit 1`, memoryID)
+	provenance, err := scanMemoryProvenance(row)
+	if err == sql.ErrNoRows {
+		return automation.MemoryProvenance{}, false, nil
+	}
+	if err != nil {
+		return automation.MemoryProvenance{}, false, storageErr(err)
+	}
+	return provenance, true, nil
+}
+
+func insertMemoryProvenance(ctx context.Context, tx *sql.Tx, provenance automation.MemoryProvenance) error {
+	if provenance.ID == "" || provenance.MemoryID == "" {
+		return fmt.Errorf("VALIDATION_FAILED: provenance id and memory_id are required")
+	}
+	_, err := tx.ExecContext(ctx, `insert into memory_provenance(
+		id, memory_id, raw_event_id, evidence_id, candidate_id,
+		agent_type, source_channel, source_producer, hook_name, hook_phase, event_type, capture_method,
+		pipeline, provider, derivation_stage, admission_decision, admission_score,
+		trace_json, created_at
+	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		provenance.ID, provenance.MemoryID, nullString(provenance.RawEventID), nullString(provenance.EvidenceID),
+		nullString(provenance.CandidateID), nullString(provenance.AgentType), nullString(provenance.SourceChannel),
+		nullString(provenance.SourceProducer), nullString(provenance.HookName), nullString(provenance.HookPhase),
+		nullString(provenance.EventType), nullString(provenance.CaptureMethod), nullString(provenance.Pipeline),
+		nullString(provenance.Provider), nullString(provenance.DerivationStage), nullString(provenance.AdmissionDecision),
+		provenance.AdmissionScore, nullString(provenance.TraceJSON), provenance.CreatedAt.Format(time.RFC3339Nano),
+	)
+	return storageErr(err)
+}
+
+func baseMemoryProvenanceSelect() string {
+	return `select id, memory_id, coalesce(raw_event_id, ''), coalesce(evidence_id, ''), coalesce(candidate_id, ''),
+		coalesce(agent_type, ''), coalesce(source_channel, ''), coalesce(source_producer, ''),
+		coalesce(hook_name, ''), coalesce(hook_phase, ''), coalesce(event_type, ''), coalesce(capture_method, ''),
+		coalesce(pipeline, ''), coalesce(provider, ''), coalesce(derivation_stage, ''),
+		coalesce(admission_decision, ''), coalesce(admission_score, 0), coalesce(trace_json, ''), created_at
+		from memory_provenance`
+}
+
+func scanMemoryProvenance(row rowScanner) (automation.MemoryProvenance, error) {
+	var provenance automation.MemoryProvenance
+	var createdAt string
+	err := row.Scan(&provenance.ID, &provenance.MemoryID, &provenance.RawEventID, &provenance.EvidenceID,
+		&provenance.CandidateID, &provenance.AgentType, &provenance.SourceChannel, &provenance.SourceProducer,
+		&provenance.HookName, &provenance.HookPhase, &provenance.EventType, &provenance.CaptureMethod,
+		&provenance.Pipeline, &provenance.Provider, &provenance.DerivationStage, &provenance.AdmissionDecision,
+		&provenance.AdmissionScore, &provenance.TraceJSON, &createdAt)
+	if err != nil {
+		return automation.MemoryProvenance{}, err
+	}
+	provenance.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	return provenance, nil
 }
 
 // OverwriteMemoryWithCorrection 将用户纠正结果原地覆盖到旧 memory。

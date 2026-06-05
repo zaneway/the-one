@@ -26,7 +26,7 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	status := store.Status()
-	wantVersion := 8
+	wantVersion := 10
 	if status.Migrations.CurrentVersion != wantVersion {
 		t.Fatalf("current version = %d, want %d", status.Migrations.CurrentVersion, wantVersion)
 	}
@@ -49,6 +49,7 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		"memory_embedding",
 		"doc_snapshot",
 		"doc_section_snapshot",
+		"memory_provenance",
 		"mvp_acceptance_run",
 		"mvp_acceptance_task",
 		"mvp_metric_sample",
@@ -71,6 +72,7 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		"memory_embedding":     {"memory_id", "embedding_model", "embedding_dim", "embedding"},
 		"doc_snapshot":         {"workspace_id", "project_id", "repo_id", "doc_path", "content_hash", "section_count"},
 		"doc_section_snapshot": {"snapshot_id", "section_id", "heading_path_json", "content_hash", "summary"},
+		"memory_provenance":    {"memory_id", "raw_event_id", "evidence_id", "candidate_id", "source_producer", "hook_phase", "provider", "derivation_stage", "admission_decision"},
 		"mvp_acceptance_run":   {"name", "mode", "workspace_id", "baseline_type", "candidate_type", "status", "summary_json", "report_path"},
 		"mvp_acceptance_task": {
 			"run_id", "scenario_id", "round", "agent_type", "baseline", "retrieval_trace_id",
@@ -103,6 +105,77 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 	defer reopened.Close()
 	if reopened.Status().Migrations.CurrentVersion != wantVersion {
 		t.Fatalf("current version after reopen = %d, want %d", reopened.Status().Migrations.CurrentVersion, wantVersion)
+	}
+}
+
+func TestOpenBackfillsMissingMemoryProvenance(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "memory.db")
+	logger := slog.New(slog.DiscardHandler)
+
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	legacy := &Store{db: db, logger: logger}
+	if _, err := db.ExecContext(ctx, migrationTableDDL); err != nil {
+		t.Fatalf("create migration table: %v", err)
+	}
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatalf("loadMigrations() error = %v", err)
+	}
+	for _, item := range migrations {
+		if item.version > 9 {
+			continue
+		}
+		if item.name == "init_fts" && !legacy.canCreateFTS5(ctx) {
+			continue
+		}
+		if err := legacy.applyMigration(ctx, item); err != nil {
+			t.Fatalf("apply migration %d %s: %v", item.version, item.name, err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `insert into raw_event(
+		id, session_id, task_id, workspace_id, project_id, repo_id, agent_type, event_type, source_channel, occurred_at,
+		actor, content_summary, source_refs_json, content_hash, created_at
+	) values (
+		'evt_backfill', 'sess_backfill', 'task_backfill', 'ws', 'project', 'repo', 'claude_code', 'agent.response.summary', 'agent_session', '2026-06-05T12:00:00Z',
+		'agent', '【结论/决策】完成 provenance backfill', '[{"source_type":"agent_session","capture_method":"adapter_hook","protocol_version":"v1"}]', 'sha256:backfill', '2026-06-05T12:00:01Z'
+	);
+	insert into evidence(id, raw_event_id, source_type, interpreted_statement, source_ref_json, confidence, created_at)
+	values ('ev_backfill', 'evt_backfill', 'agent_summary', '完成 provenance backfill', '{"raw_event_id":"evt_backfill","capture_method":"adapter_hook"}', 0.8, '2026-06-05T12:00:02Z');
+	insert into memory_provenance(
+		id, memory_id, raw_event_id, evidence_id, candidate_id, hook_phase, event_type, capture_method, provider, derivation_stage, admission_decision, admission_score, created_at
+	) values (
+		'prov_backfill', 'mem_backfill', 'evt_backfill', 'ev_backfill', 'cand_backfill', 'unknown', 'agent.response.summary', 'adapter_hook', 'rule_based', 'compute_admission', 'write_provisional', 0.7, '2026-06-05T12:00:03Z'
+	);`); err != nil {
+		t.Fatalf("insert legacy provenance fixtures: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	cfg := config.StorageConfig{
+		Backend:          "sqlite",
+		Path:             dbPath,
+		SQLiteVecEnabled: "auto",
+		BusyTimeoutMS:    1000,
+	}
+	store, err := Open(ctx, cfg, logger)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	var producer, phase, agentType, sourceChannel string
+	err = store.db.QueryRowContext(ctx, `select coalesce(source_producer, ''), hook_phase, agent_type, source_channel
+		from memory_provenance where id = 'prov_backfill'`).Scan(&producer, &phase, &agentType, &sourceChannel)
+	if err != nil {
+		t.Fatalf("query backfilled provenance: %v", err)
+	}
+	if producer != "claude_code_hook:Stop" || phase != "turn_end" || agentType != "claude_code" || sourceChannel != "agent_session" {
+		t.Fatalf("backfilled provenance = producer=%q phase=%q agent=%q channel=%q, want claude Stop turn_end", producer, phase, agentType, sourceChannel)
 	}
 }
 

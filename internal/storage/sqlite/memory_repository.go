@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/zaneway/theone/internal/automation"
 	"github.com/zaneway/theone/internal/idgen"
 	"github.com/zaneway/theone/internal/memory"
 )
@@ -92,6 +93,28 @@ func (s *Store) Remember(ctx context.Context, item memory.MemoryItem, evidence m
 			_ = tx.Rollback()
 			return err
 		}
+	}
+	provenanceID, err := idgen.New("prov")
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := insertMemoryProvenance(ctx, tx, automation.MemoryProvenance{
+		ID:                provenanceID,
+		MemoryID:          item.ID,
+		EvidenceID:        evidence.ID,
+		SourceChannel:     "memory_remember",
+		HookPhase:         automation.HookPhaseManualObserve,
+		EventType:         "memory.remember",
+		Pipeline:          "memory_remember->memory",
+		Provider:          "memory.remember",
+		DerivationStage:   "memory_remember",
+		AdmissionDecision: item.State,
+		AdmissionScore:    item.RetentionScore,
+		CreatedAt:         time.Now(),
+	}); err != nil {
+		_ = tx.Rollback()
+		return err
 	}
 	return storageErr(tx.Commit())
 }

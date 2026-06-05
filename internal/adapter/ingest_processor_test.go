@@ -70,6 +70,89 @@ func TestIngestProcessorRejectsMCPProducer(t *testing.T) {
 	}
 }
 
+func TestObserveFromAtomicFileEditCarriesChangeMetadata(t *testing.T) {
+	req, err := observeFromAtomic(IngestEnvelope{
+		Producer:  "cursor_hook:afterFileEdit",
+		AgentType: "cursor",
+		EventType: capture.EventFileEditSummary,
+		Payload: map[string]any{
+			"workspace_id":    "ws",
+			"project_id":      "project",
+			"repo_id":         "repo",
+			"content_summary": "【事实】调整 token 过期判断边界",
+			"file_path":       "internal/auth/middleware.go",
+			"change_type":     "modify",
+			"symbol":          "ValidateToken",
+			"before_hash":     "sha256:before",
+			"after_hash":      "sha256:after",
+			"keywords":        []any{"auth", "token"},
+			"salient_spans":   []any{"调整 token 过期判断边界"},
+		},
+	}, "sess_test", "task_test")
+	if err != nil {
+		t.Fatalf("observeFromAtomic() error = %v", err)
+	}
+	if req.EventType != capture.EventFileEditSummary || req.Actor != capture.ActorAgent {
+		t.Fatalf("request event/actor = %s/%s, want file.edit.summary/agent", req.EventType, req.Actor)
+	}
+	for _, ref := range req.SourceRefs {
+		if ref["source_type"] != "file_edit_summary" {
+			continue
+		}
+		if ref["file_path"] != "internal/auth/middleware.go" || ref["symbol"] != "ValidateToken" {
+			t.Fatalf("file source ref missing path/symbol: %+v", ref)
+		}
+		if ref["before_hash"] != "sha256:before" || ref["after_hash"] != "sha256:after" {
+			t.Fatalf("file source ref missing hashes: %+v", ref)
+		}
+		return
+	}
+	t.Fatalf("missing file_edit_summary source ref: %+v", req.SourceRefs)
+}
+
+func TestBuildRequestsCarriesEnvelopeProducerForTurnCompleted(t *testing.T) {
+	dir := t.TempDir()
+	p := &IngestProcessor{
+		StateStore: NewFileStateStore(dir),
+		ExpandMode: ExpandModeV2,
+	}
+	requests, err := p.buildRequests(IngestEnvelope{
+		Producer:  "claude_code_hook:Stop",
+		AgentType: "claude_code",
+		Kind:      KindTurnCompleted,
+		EventType: capture.EventAgentResponseSummary,
+		Payload: map[string]any{
+			"workspace_id":   "ws",
+			"project_id":     "project",
+			"repo_id":        "repo",
+			"agent_type":     "claude_code",
+			"user_summary":   "用户要求检查 provenance",
+			"agent_summary":  "已完成 provenance 检查",
+			"is_substantive": true,
+			"completed_at":   "2026-06-05T12:00:00Z",
+			"started_at":     "2026-06-05T11:59:00Z",
+			"turn_id":        "turn_provenance",
+			"session_id":     "sess_provenance",
+			"task_id":        "task_provenance",
+			"keywords":       []any{"provenance"},
+			"salient_spans":  []any{"producer must be preserved"},
+		},
+	}, KindTurnCompleted, "sess_provenance", "task_provenance")
+	if err != nil {
+		t.Fatalf("buildRequests() error = %v", err)
+	}
+	req := findRequestByEvent(requests, capture.EventAgentResponseSummary)
+	if req.EventType == "" {
+		t.Fatalf("missing agent.response.summary in %+v", requests)
+	}
+	for _, ref := range req.SourceRefs {
+		if ref["producer"] == "claude_code_hook:Stop" {
+			return
+		}
+	}
+	t.Fatalf("source_refs = %+v, want envelope producer", req.SourceRefs)
+}
+
 func TestSessionBinderBootstrapTaskPending(t *testing.T) {
 	dir := t.TempDir()
 	b := NewSessionBinder(dir)
@@ -97,4 +180,13 @@ func TestSessionBinderBootstrapTaskPending(t *testing.T) {
 	if state.TaskID != "task_cursor_auto" || !state.TaskFromPromptPending {
 		t.Fatalf("state = %+v", state)
 	}
+}
+
+func findRequestByEvent(requests []capture.ObserveRequest, eventType string) capture.ObserveRequest {
+	for _, req := range requests {
+		if req.EventType == eventType {
+			return req
+		}
+	}
+	return capture.ObserveRequest{}
 }

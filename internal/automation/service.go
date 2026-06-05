@@ -350,6 +350,11 @@ func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[st
 		s.logger.Error("compute admission get evidence failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
 		return nil, err
 	}
+	rawEvent, err := s.repo.GetRawEvent(ctx, evidence.RawEventID)
+	if err != nil {
+		s.logger.Error("compute admission get raw event failed", "job_id", job.ID, "candidate_id", record.ID, "raw_event_id", evidence.RawEventID, "error", err)
+		return nil, err
+	}
 	candidate := candidateFromRecord(record, evidence.SourceType)
 	s.logger.Debug("compute admission loaded candidate",
 		"job_id", job.ID,
@@ -392,7 +397,7 @@ func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[st
 			s.logger.Error("compute admission build memory item failed", "job_id", job.ID, "error", err)
 			return nil, err
 		}
-		written, err := s.writeAdmittedMemory(ctx, record, candidate, admission, evidence, item, related)
+		written, err := s.writeAdmittedMemory(ctx, record, candidate, admission, evidence, rawEvent, item, related)
 		if err != nil {
 			s.logger.Error("compute admission write memory failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
 			return nil, err
@@ -418,7 +423,7 @@ func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[st
 // 特殊处理：如果候选记忆是用户纠正（user_correction），执行原地覆盖语义——
 // 保留旧 memory_id，更新内容和检索字段，并追加新 evidence/review 轨迹。
 // 非纠正场景：写入新的 memory_item + evidence 关联 + 可选的 review_checkpoint。
-func (s *Service) writeAdmittedMemory(ctx context.Context, record MemoryCandidateRecord, candidate processor.MemoryCandidate, admission AdmissionResult, evidence memory.Evidence, item memory.MemoryItem, related []memory.MemoryItem) (memory.MemoryItem, error) {
+func (s *Service) writeAdmittedMemory(ctx context.Context, record MemoryCandidateRecord, candidate processor.MemoryCandidate, admission AdmissionResult, evidence memory.Evidence, rawEvent capture.RawEvent, item memory.MemoryItem, related []memory.MemoryItem) (memory.MemoryItem, error) {
 	if isUserCorrection(candidate, evidence) {
 		target, found, err := s.resolveCorrectionTarget(ctx, evidence)
 		if err != nil {
@@ -450,6 +455,7 @@ func (s *Service) writeAdmittedMemory(ctx context.Context, record MemoryCandidat
 		Item:             item,
 		EvidenceIDs:      candidate.SourceEvidenceIDs,
 		ReviewCheckpoint: checkpoint,
+		Provenance:       buildMemoryProvenance(record, evidence, rawEvent, admission),
 	})
 	return written, err
 }

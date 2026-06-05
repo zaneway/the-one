@@ -51,6 +51,13 @@ func TestP1RememberSearchArchiveDelete(t *testing.T) {
 	if rememberResp.State != memory.StatePendingReview {
 		t.Fatalf("state = %q, want pending_review", rememberResp.State)
 	}
+	provenance, found, err := store.GetMemoryProvenance(ctx, rememberResp.MemoryID)
+	if err != nil {
+		t.Fatalf("GetMemoryProvenance() error = %v", err)
+	}
+	if !found || provenance.HookPhase != "manual_observe" || provenance.DerivationStage != "memory_remember" {
+		t.Fatalf("provenance = %+v found=%v, want manual remember provenance", provenance, found)
+	}
 
 	hitResp, err := svc.Search(ctx, memory.SearchRequest{
 		Query:       "为什么没有 Kafka",

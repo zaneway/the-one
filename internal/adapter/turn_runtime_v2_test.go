@@ -42,7 +42,7 @@ func TestTurnRuntimeV2SkipsToolAndFileExpansion(t *testing.T) {
 	}
 }
 
-func TestTurnRuntimeLegacyStillExpandsToolAndFile(t *testing.T) {
+func TestTurnRuntimeLegacySkipsToolResultsButKeepsFileEdits(t *testing.T) {
 	store := NewFileStateStore(filepath.Join(t.TempDir(), "runtime-state"))
 	runtime := NewTurnRuntime(store)
 	requests, err := runtime.BuildObserveRequests(TurnPayload{
@@ -61,11 +61,18 @@ func TestTurnRuntimeLegacyStillExpandsToolAndFile(t *testing.T) {
 			OutputSummary: "ok",
 			ExitCode:      0,
 		}},
+		FileEdits: []FileEditInput{{
+			FilePath:       "internal/foo.go",
+			ContentSummary: "edit",
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !hasEvent(requests, capture.EventToolResultSummary) {
-		t.Fatalf("legacy should expand tool results, got %+v", requests)
+	if hasEvent(requests, capture.EventToolResultSummary) {
+		t.Fatalf("legacy should not expand tool results, got %+v", requests)
+	}
+	if !hasEvent(requests, capture.EventFileEditSummary) {
+		t.Fatalf("legacy should still expand file edits, got %+v", requests)
 	}
 }

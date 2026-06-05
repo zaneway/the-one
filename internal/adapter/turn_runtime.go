@@ -79,6 +79,10 @@ type TurnPayload struct {
 	UsedMemoryIDs    []string `json:"used_memory_ids"`
 	InjectedToPrompt bool     `json:"injected_to_prompt"`
 
+	SemanticSummaryVersion string `json:"semantic_summary_version"`
+	UserPromptChars        int    `json:"user_prompt_chars"`
+	AgentResponseChars     int    `json:"agent_response_chars"`
+
 	// SkipBaseTurn 为 true 时仅展开 tool/file/decision 等增量事件，不写 conversation/agent 回合。
 	SkipBaseTurn bool `json:"skip_base_turn"`
 }
@@ -135,7 +139,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 	}
 
 	expandV2 := IsExpandModeV2(r.expandMode)
-	hasHighSignal := !expandV2 && (len(payload.ToolResults) > 0 || len(payload.FileEdits) > 0 || strings.TrimSpace(payload.DecisionSummary) != "")
+	hasHighSignal := !expandV2 && (len(payload.FileEdits) > 0 || strings.TrimSpace(payload.DecisionSummary) != "")
 	signature := turnSignature(payload.TurnID, payload.UserSummary, payload.AgentSummary)
 	emitBaseTurn := !payload.SkipBaseTurn && (payload.IsSubstantive || hasHighSignal)
 	if emitBaseTurn && !(payload.TurnID != "" && payload.TurnID == state.LastTurnID && signature == state.LastTurnSig) {
@@ -162,6 +166,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 			userReq.Keywords = semanticKeywords(firstNonEmptySlice(payload.UserKeywords, payload.Keywords))
 			userReq.SalientSpans = firstNonEmptySlice(payload.UserSalientSpans, payload.SalientSpans)
 			userReq.ContentSummary = capture.EnsureStructuredContentSummary(userReq.EventType, payload.UserSummary)
+			userReq.SourceRefs = appendSemanticDigestSourceRef(userReq.SourceRefs, "user_prompt", payload.UserPromptChars, payload.SemanticSummaryVersion)
 			requests = append(requests, userReq)
 		}
 		if strings.TrimSpace(payload.AgentSummary) != "" {
@@ -171,6 +176,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 			agentReq.Keywords = semanticKeywords(firstNonEmptySlice(payload.AgentKeywords, payload.Keywords))
 			agentReq.SalientSpans = firstNonEmptySlice(payload.AgentSalientSpans, payload.SalientSpans)
 			agentReq.ContentSummary = capture.EnsureStructuredContentSummary(agentReq.EventType, payload.AgentSummary)
+			agentReq.SourceRefs = appendSemanticDigestSourceRef(agentReq.SourceRefs, "agent_response", payload.AgentResponseChars, payload.SemanticSummaryVersion)
 			agentReq.SourceRefs = appendRetrievalSourceRefs(agentReq.SourceRefs, payload)
 			requests = append(requests, agentReq)
 		}
@@ -179,24 +185,6 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 	}
 
 	if !expandV2 {
-		for _, item := range payload.ToolResults {
-			if strings.TrimSpace(item.ToolName) == "" {
-				continue
-			}
-			toolReq := common
-			toolReq.EventType = capture.EventToolResultSummary
-			toolReq.Actor = capture.ActorTool
-			toolReq.ToolName = item.ToolName
-			toolReq.InputSummary = item.InputSummary
-			toolReq.OutputSummary = item.OutputSummary
-			toolReq.ContentSummary = capture.EnsureStructuredContentSummary(toolReq.EventType, "工具执行结果："+item.ToolName)
-			toolReq.SourceRefs = append(toolReq.SourceRefs, capture.SourceRef{
-				"source_type": "tool_output",
-				"exit_code":   item.ExitCode,
-			})
-			requests = append(requests, toolReq)
-		}
-
 		for _, item := range payload.FileEdits {
 			if strings.TrimSpace(item.FilePath) == "" {
 				continue
@@ -318,6 +306,23 @@ func isCaptureMetadataKeyword(keyword string) bool {
 	default:
 		return strings.HasPrefix(lower, "trace:") || strings.HasPrefix(lower, "mem:")
 	}
+}
+
+func appendSemanticDigestSourceRef(refs []capture.SourceRef, sourceType string, contentChars int, version string) []capture.SourceRef {
+	if contentChars <= 0 && strings.TrimSpace(version) == "" {
+		return refs
+	}
+	ref := capture.SourceRef{
+		"source_type":    sourceType,
+		"capture_method": capture.CaptureMethodAdapterHook,
+	}
+	if contentChars > 0 {
+		ref["content_chars"] = contentChars
+	}
+	if version = strings.TrimSpace(version); version != "" {
+		ref["semantic_summary_version"] = version
+	}
+	return append(refs, ref)
 }
 
 // appendRetrievalSourceRefs 将检索上下文信息追加到 source_refs。

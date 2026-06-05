@@ -236,15 +236,16 @@ func isCaptureMetadataKeyword(keyword string) bool {
 	}
 }
 
+// 判断是否为低价值数据
 func isLowValueStatement(value string) bool {
 	normalized := normalizeSemanticText(value)
 	if normalized == "" {
 		return true
 	}
-	if normalized == "claude 已完成本轮响应" || normalized == "agent 已完成本轮响应" || normalized == "codex 已完成本轮响应" || normalized == "用户输入摘要未直接可见" {
+	if normalized == "工具执行完成" || normalized == "agent 已完成本轮响应" || normalized == "codex 已完成本轮响应" || normalized == "用户输入摘要未直接可见" {
 		return true
 	}
-	if strings.Contains(normalized, "已完成本轮响应") && len([]rune(normalized)) <= 24 {
+	if strings.Contains(normalized, "已完成本轮响应") && len([]rune(normalized)) <= 64 {
 		return true
 	}
 	return hasAnySignal(normalized, "完整任务提示词", "可直接复制给", "```", "# 任务：")

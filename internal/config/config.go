@@ -161,6 +161,9 @@ type AdapterConfig struct {
 
 	// MaxInjectChars 注入 Markdown 最大字符数
 	MaxInjectChars int `yaml:"max_inject_chars" json:"max_inject_chars"`
+
+	// PromptCacheUserSummaryMaxChars beforeSubmitPrompt 本地 prompt-cache 用户摘要最大字符数
+	PromptCacheUserSummaryMaxChars int `yaml:"prompt_cache_user_summary_max_chars" json:"prompt_cache_user_summary_max_chars"`
 }
 
 // CaptureConfig 捕获配置结构体
@@ -425,9 +428,10 @@ func Default() Config {
 			MaxSalientSpanCount: 10,
 		},
 		Adapter: AdapterConfig{
-			ExpandMode:        "legacy",
-			PrefetchTimeoutMS: 3000,
-			MaxInjectChars:    4000,
+			ExpandMode:                     "legacy",
+			PrefetchTimeoutMS:              3000,
+			MaxInjectChars:                 4000,
+			PromptCacheUserSummaryMaxChars: 3000,
 		},
 		Capture: CaptureConfig{
 			RequireSessionForAgentEvents: true,
@@ -568,6 +572,9 @@ func validate(cfg Config) error {
 	if cfg.Capture.MaxInputSummaryChars <= 0 || cfg.Capture.MaxOutputSummaryChars <= 0 || cfg.Capture.MaxContentSummaryChars <= 0 ||
 		cfg.Capture.MaxSourceRefsChars <= 0 || cfg.Capture.MaxSalientSpanChars <= 0 || cfg.Capture.MaxSalientSpanCount <= 0 || cfg.Capture.MaxKeywordCount <= 0 {
 		return errors.New("CONFIG_INVALID: capture content limits must be positive")
+	}
+	if cfg.Adapter.PrefetchTimeoutMS <= 0 || cfg.Adapter.MaxInjectChars <= 0 || cfg.Adapter.PromptCacheUserSummaryMaxChars <= 0 {
+		return errors.New("CONFIG_INVALID: adapter content limits must be positive")
 	}
 	if strings.TrimSpace(cfg.Capture.DefaultAgentType) == "" {
 		return errors.New("CONFIG_INVALID: capture.default_agent_type is required")

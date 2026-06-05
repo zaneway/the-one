@@ -69,6 +69,7 @@ func TestServiceRunsEvidenceCandidateAdmissionChain(t *testing.T) {
 		OccurredAt:     now,
 		Actor:          capture.ActorUser,
 		ContentSummary: "以后推进 automation 时先按详细设计拆分任务，再用测试验证。",
+		SourceRefsJSON: `[{"source_type":"agent_session","capture_method":"adapter_hook","producer":"codex_hook:UserPromptSubmit"}]`,
 		ContentHash:    "sha256:p3-c1-preference",
 		CreatedAt:      now,
 	}
@@ -99,6 +100,19 @@ func TestServiceRunsEvidenceCandidateAdmissionChain(t *testing.T) {
 	}
 	if written.MemoryType != memory.TypePreference || written.State != memory.StateStable || !written.UserConfirmed {
 		t.Fatalf("written memory = %+v, want stable user-confirmed preference", written)
+	}
+	provenance, found, err := store.GetMemoryProvenance(ctx, written.ID)
+	if err != nil {
+		t.Fatalf("GetMemoryProvenance() error = %v", err)
+	}
+	if !found {
+		t.Fatalf("GetMemoryProvenance() found=false, want true")
+	}
+	if provenance.RawEventID != rawEvent.ID || provenance.EvidenceID == "" || provenance.CandidateID != candidates[0].ID {
+		t.Fatalf("provenance = %+v, want raw event/evidence/candidate linkage", provenance)
+	}
+	if provenance.SourceProducer != "codex_hook:UserPromptSubmit" || provenance.HookPhase != automation.HookPhasePrePrompt || provenance.Provider != "rule_based" || provenance.DerivationStage != automation.JobTypeComputeAdmission {
+		t.Fatalf("provenance = %+v, want codex pre-prompt compute_admission provenance", provenance)
 	}
 }
 

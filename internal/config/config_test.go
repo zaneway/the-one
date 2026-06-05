@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,6 +38,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.Automation.RunningTimeoutMS != 300000 {
 		t.Fatalf("automation running timeout = %d, want 300000", cfg.Automation.RunningTimeoutMS)
+	}
+	if cfg.Adapter.PromptCacheUserSummaryMaxChars != 3000 {
+		t.Fatalf("adapter prompt cache user summary max chars = %d, want 3000", cfg.Adapter.PromptCacheUserSummaryMaxChars)
 	}
 	if cfg.Processor.Provider != "rule_based" || cfg.Processor.MaxRelatedEvents != 20 || cfg.Processor.MaxCandidatesPerEvent != 3 {
 		t.Fatalf("processor defaults = %+v, want rule_based enabled with limits", cfg.Processor)
@@ -85,6 +89,22 @@ func TestLoadEnvAndOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadAdapterPromptCacheUserSummaryLimitFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "theone.yaml")
+	data := []byte("adapter:\n  prompt_cache_user_summary_max_chars: 42\n")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(Overrides{ConfigPath: path})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Adapter.PromptCacheUserSummaryMaxChars != 42 {
+		t.Fatalf("adapter prompt cache user summary max chars = %d, want 42", cfg.Adapter.PromptCacheUserSummaryMaxChars)
+	}
+}
+
 func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 	_, err := Load(Overrides{LogLevel: "verbose"})
 	if err == nil {
@@ -97,6 +117,14 @@ func TestValidateRejectsInvalidAutomationConfig(t *testing.T) {
 	cfg.Automation.BatchSize = 0
 	if err := validate(cfg); err == nil {
 		t.Fatal("validate() error = nil, want invalid automation config")
+	}
+}
+
+func TestValidateRejectsInvalidAdapterPromptCacheUserSummaryLimit(t *testing.T) {
+	cfg := Default()
+	cfg.Adapter.PromptCacheUserSummaryMaxChars = 0
+	if err := validate(cfg); err == nil {
+		t.Fatal("validate() error = nil, want invalid adapter prompt cache limit")
 	}
 }
 

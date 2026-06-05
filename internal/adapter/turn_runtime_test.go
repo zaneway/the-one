@@ -40,14 +40,14 @@ func TestTurnRuntimeBuildObserveRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildObserveRequests() error = %v", err)
 	}
-	if len(requests) < 6 {
-		t.Fatalf("requests len = %d, want >= 6", len(requests))
+	if len(requests) < 5 {
+		t.Fatalf("requests len = %d, want >= 5", len(requests))
 	}
 	assertHasEvent(t, requests, capture.EventTaskStart)
 	assertHasEvent(t, requests, capture.EventConversationMessage)
 	assertHasEvent(t, requests, capture.EventAgentResponseSummary)
 	assertAgentHasMemoryContextRef(t, requests)
-	assertHasEvent(t, requests, capture.EventToolResultSummary)
+	assertMissingEvent(t, requests, capture.EventToolResultSummary)
 	assertHasEvent(t, requests, capture.EventFileEditSummary)
 	assertHasEvent(t, requests, capture.EventAgentDecision)
 	assertHasEvent(t, requests, capture.EventTaskResult)
@@ -153,6 +153,33 @@ func TestTurnRuntimeUsesActorSpecificKeywordsAndSpans(t *testing.T) {
 	}
 }
 
+func TestTurnRuntimeRecordsSemanticDigestSourceRefs(t *testing.T) {
+	store := NewFileStateStore(filepath.Join(t.TempDir(), "runtime-state"))
+	runtime := NewTurnRuntime(store)
+	requests, err := runtime.BuildObserveRequests(TurnPayload{
+		WorkspaceID:            "ws",
+		ProjectID:              "project_a",
+		RepoID:                 "repo_a",
+		AgentType:              "cursor",
+		SessionID:              "sess_digest",
+		TaskID:                 "task_digest",
+		TurnID:                 "turn_digest",
+		UserSummary:            "【事件】用户要求记录 prompt 语义摘要",
+		AgentSummary:           "【结论/决策】记录 response 语义摘要",
+		IsSubstantive:          true,
+		UserPromptChars:        42,
+		AgentResponseChars:     128,
+		SemanticSummaryVersion: "semantic_digest_v1",
+	})
+	if err != nil {
+		t.Fatalf("BuildObserveRequests() error = %v", err)
+	}
+	userReq := findEvent(t, requests, capture.EventConversationMessage)
+	agentReq := findEvent(t, requests, capture.EventAgentResponseSummary)
+	assertHasSourceRef(t, userReq, "user_prompt", 42)
+	assertHasSourceRef(t, agentReq, "agent_response", 128)
+}
+
 func TestTurnRuntimeRequiresScope(t *testing.T) {
 	store := NewFileStateStore(filepath.Join(t.TempDir(), "runtime-state"))
 	runtime := NewTurnRuntime(store)
@@ -165,6 +192,26 @@ func TestTurnRuntimeRequiresScope(t *testing.T) {
 	if err == nil {
 		t.Fatalf("BuildObserveRequests() error = nil, want missing scope")
 	}
+}
+
+func assertHasSourceRef(t *testing.T, req capture.ObserveRequest, sourceType string, chars int) {
+	t.Helper()
+	for _, ref := range req.SourceRefs {
+		if ref["source_type"] != sourceType {
+			continue
+		}
+		if _, ok := ref["content_hash"]; ok {
+			t.Fatalf("%s source_ref must not include content_hash: %+v", sourceType, ref)
+		}
+		if ref["content_chars"] != chars {
+			t.Fatalf("%s content_chars = %v, want %d", sourceType, ref["content_chars"], chars)
+		}
+		if ref["semantic_summary_version"] != "semantic_digest_v1" {
+			t.Fatalf("%s semantic_summary_version = %v, want semantic_digest_v1", sourceType, ref["semantic_summary_version"])
+		}
+		return
+	}
+	t.Fatalf("missing source_ref %s in %+v", sourceType, req.SourceRefs)
 }
 
 func findEvent(t *testing.T, requests []capture.ObserveRequest, eventType string) capture.ObserveRequest {
@@ -182,6 +229,13 @@ func assertHasEvent(t *testing.T, requests []capture.ObserveRequest, eventType s
 	t.Helper()
 	if !hasEvent(requests, eventType) {
 		t.Fatalf("requests missing event_type %s", eventType)
+	}
+}
+
+func assertMissingEvent(t *testing.T, requests []capture.ObserveRequest, eventType string) {
+	t.Helper()
+	if hasEvent(requests, eventType) {
+		t.Fatalf("requests unexpectedly include event_type %s", eventType)
 	}
 }
 

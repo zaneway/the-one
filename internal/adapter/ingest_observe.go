@@ -78,6 +78,9 @@ func observeFromAtomic(env IngestEnvelope, sessionID, taskID string) (capture.Ob
 			req.SourceRefs = append(req.SourceRefs, capture.SourceRef{
 				"source_type":    "file_edit_summary",
 				"file_path":      fp,
+				"symbol":         stringFromPayload(env.Payload, "symbol"),
+				"before_hash":    stringFromPayload(env.Payload, "before_hash"),
+				"after_hash":     stringFromPayload(env.Payload, "after_hash"),
 				"change_type":    stringFromPayload(env.Payload, "change_type"),
 				"capture_method": capture.CaptureMethodAdapterHook,
 			})

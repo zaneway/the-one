@@ -125,6 +125,76 @@ func TestAutomatedMemoryRepositoryWriteMemoryAndSearch(t *testing.T) {
 	}
 }
 
+func TestAutomatedMemoryRepositoryWritesProvenanceWithMemory(t *testing.T) {
+	ctx := context.Background()
+	store := newCaptureTestStore(t)
+	defer store.Close()
+
+	evidence := memory.Evidence{
+		ID:                   "ev_provenance",
+		RawEventID:           "evt_provenance",
+		SourceType:           "tool_output",
+		InterpretedStatement: "Codex PostToolUse 捕获到工具失败摘要。",
+		Confidence:           0.8,
+	}
+	if err := store.WriteEvidence(ctx, evidence); err != nil {
+		t.Fatalf("WriteEvidence() error = %v", err)
+	}
+	item := memory.MemoryItem{
+		ID:            "mem_provenance",
+		Scope:         memory.ScopeSession,
+		WorkspaceID:   "ws",
+		SessionID:     "sess_provenance",
+		MemoryType:    memory.TypeTemporaryState,
+		SourceType:    "tool_output",
+		CreatedBy:     "automation:rule_based",
+		Content:       "Codex PostToolUse 捕获到工具失败摘要。",
+		State:         memory.StateArchived,
+		Confidence:    0.8,
+		Importance:    0.5,
+		EncodingDepth: 2,
+		DecayRate:     0.8,
+		Tier:          memory.TierArchived,
+		Version:       1,
+	}
+	if _, err := store.WriteAutomatedMemory(ctx, automation.AutomatedMemoryWrite{
+		Item:        item,
+		EvidenceIDs: []string{evidence.ID},
+		Provenance: &automation.MemoryProvenance{
+			RawEventID:        evidence.RawEventID,
+			EvidenceID:        evidence.ID,
+			CandidateID:       "cand_provenance",
+			AgentType:         "codex",
+			SourceChannel:     "agent_session",
+			SourceProducer:    "codex_hook:PostToolUse",
+			HookName:          "PostToolUse",
+			HookPhase:         automation.HookPhasePostTool,
+			EventType:         "tool.result.summary",
+			CaptureMethod:     "adapter_hook",
+			Pipeline:          "raw_event->evidence->candidate->admission->memory",
+			Provider:          "rule_based",
+			DerivationStage:   automation.JobTypeComputeAdmission,
+			AdmissionDecision: automation.DecisionWriteProvisional,
+			AdmissionScore:    0.74,
+		},
+	}); err != nil {
+		t.Fatalf("WriteAutomatedMemory() error = %v", err)
+	}
+	got, found, err := store.GetMemoryProvenance(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("GetMemoryProvenance() error = %v", err)
+	}
+	if !found {
+		t.Fatalf("GetMemoryProvenance() found=false, want true")
+	}
+	if got.MemoryID != item.ID || got.RawEventID != evidence.RawEventID || got.EvidenceID != evidence.ID || got.CandidateID != "cand_provenance" {
+		t.Fatalf("provenance ids = %+v, want memory/raw/evidence/candidate linkage", got)
+	}
+	if got.SourceProducer != "codex_hook:PostToolUse" || got.HookPhase != automation.HookPhasePostTool || got.Provider != "rule_based" || got.AdmissionDecision != automation.DecisionWriteProvisional {
+		t.Fatalf("provenance = %+v, want codex post-tool rule_based write_provisional", got)
+	}
+}
+
 func TestAutomatedMemoryRepositoryReviewCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	store := newCaptureTestStore(t)

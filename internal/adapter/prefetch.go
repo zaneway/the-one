@@ -29,20 +29,19 @@ type PrefetchRequest struct {
 
 // PrefetchResult prefetch-context stdout / 缓存结构。
 type PrefetchResult struct {
-	OK                bool               `json:"ok"`
-	ContextPack       memory.ContextPack `json:"context_pack,omitempty"`
-	InjectMarkdown    string             `json:"inject_markdown"`
-	RetrievalTraceID  string             `json:"retrieval_trace_id,omitempty"`
-	UsedMemoryIDs     []string           `json:"used_memory_ids,omitempty"`
-	SessionID         string             `json:"session_id,omitempty"`
-	TaskID            string             `json:"task_id,omitempty"`
-	GenerationID      string             `json:"generation_id,omitempty"`
-	PromptFingerprint string             `json:"prompt_fingerprint,omitempty"`
-	TurnID            string             `json:"turn_id,omitempty"`
-	TaskBound         bool               `json:"task_bound"`
-	Degraded          bool               `json:"degraded"`
-	ErrorSummary      string             `json:"error_summary,omitempty"`
-	LatencyMS         int64              `json:"latency_ms,omitempty"`
+	OK               bool               `json:"ok"`
+	ContextPack      memory.ContextPack `json:"context_pack,omitempty"`
+	InjectMarkdown   string             `json:"inject_markdown"`
+	RetrievalTraceID string             `json:"retrieval_trace_id,omitempty"`
+	UsedMemoryIDs    []string           `json:"used_memory_ids,omitempty"`
+	SessionID        string             `json:"session_id,omitempty"`
+	TaskID           string             `json:"task_id,omitempty"`
+	GenerationID     string             `json:"generation_id,omitempty"`
+	TurnID           string             `json:"turn_id,omitempty"`
+	TaskBound        bool               `json:"task_bound"`
+	Degraded         bool               `json:"degraded"`
+	ErrorSummary     string             `json:"error_summary,omitempty"`
+	LatencyMS        int64              `json:"latency_ms,omitempty"`
 }
 
 // ContextFunc 调用 memory.context。
@@ -74,12 +73,9 @@ func (p *PrefetchProcessor) Run(ctx context.Context, req PrefetchRequest) Prefet
 	}
 
 	normalizedTask := NormalizePrompt(req.Task)
-	result.PromptFingerprint = PromptFingerprint(req.Task)
 	if gen := strings.TrimSpace(req.GenerationID); gen != "" {
 		result.GenerationID = gen
 		result.TurnID = "turn_" + gen
-	} else if result.PromptFingerprint != "" {
-		result.TurnID = "turn_" + result.PromptFingerprint
 	}
 
 	resolved, err := p.Binder.Resolve(ResolveInput{
@@ -244,7 +240,6 @@ func (p *PrefetchProcessor) writeInjectCache(result PrefetchResult, agentType st
 	path := DriverSurface{AgentType: agentType, StateDir: p.StateDir}.InjectCachePath()
 	payload := map[string]any{
 		"generation_id":      result.GenerationID,
-		"prompt_fingerprint": result.PromptFingerprint,
 		"turn_id":            result.TurnID,
 		"session_id":         result.SessionID,
 		"task_id":            result.TaskID,

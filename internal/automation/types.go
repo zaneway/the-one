@@ -282,6 +282,43 @@ type AutomatedMemoryWrite struct {
 	EvidenceIDs      []string
 	EvidenceRelation string
 	ReviewCheckpoint *memory.ReviewCheckpoint
+	Provenance       *MemoryProvenance
+}
+
+const (
+	HookPhaseSessionStart  = "session_start"
+	HookPhasePrePrompt     = "pre_prompt"
+	HookPhasePostTool      = "post_tool"
+	HookPhaseTurnEnd       = "turn_end"
+	HookPhaseSessionEnd    = "session_end"
+	HookPhaseFileEdit      = "file_edit"
+	HookPhaseManualObserve = "manual_observe"
+	HookPhaseAutoBootstrap = "auto_bootstrap"
+	HookPhaseUnknown       = "unknown"
+)
+
+// MemoryProvenance 记录 memory_item 的采集来源和自动派生链路。
+// 它用于回答“这条记忆来自哪个 hook/事件，并由哪个 pipeline step 写入”。
+type MemoryProvenance struct {
+	ID                string
+	MemoryID          string
+	RawEventID        string
+	EvidenceID        string
+	CandidateID       string
+	AgentType         string
+	SourceChannel     string
+	SourceProducer    string
+	HookName          string
+	HookPhase         string
+	EventType         string
+	CaptureMethod     string
+	Pipeline          string
+	Provider          string
+	DerivationStage   string
+	AdmissionDecision string
+	AdmissionScore    float64
+	TraceJSON         string
+	CreatedAt         time.Time
 }
 
 // AutomatedMemoryCorrection 描述用户纠正命中旧 memory 后的原地覆盖写入。
