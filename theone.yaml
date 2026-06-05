@@ -39,7 +39,7 @@ logging:
   path: "~/.theone/logs/theone.log"
 
 # ── 记忆配置 ──────────────────────────────────────────────
-# P0/P1 默认身份和工作区，内容边界限制
+#  默认身份和工作区，内容边界限制
 memory:
   # 默认用户 ID，用于 user_global 作用域的默认值
   default_user_id: "local_default_user"
@@ -60,12 +60,14 @@ memory:
   max_salient_span_count: 10
 
 # ── 接入层（ingest / ExpandMode）──────────────────────────
-# P2：the-one dogfood 默认 v2；回滚设 legacy。环境变量 THEONE_EXPAND_MODE 优先。
+# the-one dogfood 默认 ；回滚设 legacy。环境变量 THEONE_EXPAND_MODE 优先。
 adapter:
   expand_mode: v2
   atomic_strip_turn_fields: false
   prefetch_timeout_ms: 3000
   max_inject_chars: 4000
+  # beforeSubmitPrompt 写入 prompt-cache 的用户摘要最大字符数
+  prompt_cache_user_summary_max_chars: 3000
 
 # ── 捕获配置 ──────────────────────────────────────────────
 capture:
@@ -97,7 +99,7 @@ capture:
   default_agent_type: "unknown"
 
 # ── 检索配置 ──────────────────────────────────────────────
-# 在线检索默认值，P1 检索实现会使用这些限制
+# 在线检索默认值， 检索实现会使用这些限制
 retrieval:
   # memory.search 默认返回结果数
   default_limit: 10
@@ -114,7 +116,7 @@ retention:
   temporary_ttl_days: 5
 
 # ── 处理器配置 ────────────────────────────────────────────
-# P3 自动 evidence/candidate 抽取 Provider 和内容上限
+# 自动 evidence/candidate 抽取 Provider 和内容上限
 processor:
   # 处理器提供者：仅 rule_based（observe 后必入队，由准入规则决定是否写入 memory_item）
   provider: "rule_based"
@@ -126,7 +128,7 @@ processor:
   max_candidates_per_event: 3
 
 # ── 自动化 Worker 配置 ───────────────────────────────────
-# P3 本地异步 worker 的轮询、批量和重试策略
+# 本地异步 worker 的轮询、批量和重试策略
 automation:
   # 无 pending job 时的空轮询间隔(毫秒)
   poll_interval_ms: 1000
