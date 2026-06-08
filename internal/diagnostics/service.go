@@ -204,6 +204,7 @@ func (s *Service) StatusTool(_ context.Context, raw json.RawMessage) (any, *mcp.
 			"codeindex_provider":                 s.cfg.CodeIndex.Provider,
 			"codeindex_max_resolve_refs":         s.cfg.CodeIndex.MaxResolveRefs,
 			"retention_job_enabled":              s.cfg.Retention.JobEnabled,
+			"retention_job_interval_ms":          s.cfg.Retention.JobIntervalMS,
 			"retrieval_timeout_ms":               s.cfg.Retrieval.OnlineTimeoutMS,
 			"default_token_budget":               s.cfg.Retrieval.DefaultTokenBudget,
 			"retrieval_max_relation_expansion":   s.cfg.Retrieval.MaxRelationExpansion,

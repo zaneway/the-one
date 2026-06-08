@@ -330,6 +330,10 @@ type RetentionConfig struct {
 	// 默认 false，不启动后台 retention job
 	JobEnabled bool `yaml:"job_enabled" json:"job_enabled"`
 
+	// JobIntervalMS 保留任务执行间隔（毫秒）
+	// 默认24小时；启用 job 后按该间隔周期触发遗忘清理。
+	JobIntervalMS int `yaml:"job_interval_ms" json:"job_interval_ms"`
+
 	// TemporaryTTLDays 临时记忆生存天数
 	// temporary层级的默认保留天数，默认5天
 	TemporaryTTLDays int `yaml:"temporary_ttl_days" json:"temporary_ttl_days"`
@@ -486,6 +490,7 @@ func Default() Config {
 		},
 		Retention: RetentionConfig{
 			JobEnabled:       false,
+			JobIntervalMS:    24 * 60 * 60 * 1000,
 			TemporaryTTLDays: 5,
 			ShortTermTTLDays: 90,
 		},

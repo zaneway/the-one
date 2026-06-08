@@ -27,13 +27,14 @@ import (
 // 负责配置、日志、SQLite、migration 和诊断工具注册；
 // 记忆写入、检索和 review 业务基于同一 Registry 扩展。
 type App struct {
-	cfg       config.Config
-	version   string
-	logger    *slog.Logger
-	logCloser io.Closer
-	store     *sqlite.Store
-	registry  *mcp.Registry
-	worker    *automation.Worker
+	cfg               config.Config
+	version           string
+	logger            *slog.Logger
+	logCloser         io.Closer
+	store             *sqlite.Store
+	registry          *mcp.Registry
+	worker            *automation.Worker
+	automationService *automation.Service
 }
 
 // New 初始化 theone 运行时。
@@ -102,13 +103,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		"mcp_addr", cfg.Server.MCPAddr,
 	)
 	return &App{
-		cfg:       cfg,
-		version:   version,
-		logger:    logger,
-		logCloser: logCloser,
-		store:     store,
-		registry:  registry,
-		worker:    worker,
+		cfg:               cfg,
+		version:           version,
+		logger:            logger,
+		logCloser:         logCloser,
+		store:             store,
+		registry:          registry,
+		worker:            worker,
+		automationService: automationService,
 	}, nil
 }
 
@@ -128,6 +130,7 @@ func (a *App) Serve(ctx context.Context) error {
 			}
 		}()
 	}
+	startRetentionCleanupScheduler(ctx, a.cfg.Retention, a.automationService, a.logger)
 	// 启动标准 MCP stdio 服务器：由官方 SDK 处理 initialize/tools/list/tools/call。
 	server := mcp.NewSDKServer(a.registry, a.version, a.logger)
 	return server.RunStdio(ctx)
