@@ -130,7 +130,7 @@ func (a *App) Serve(ctx context.Context) error {
 			}
 		}()
 	}
-	startRetentionCleanupScheduler(ctx, a.cfg.Retention, a.automationService, a.logger)
+	startRetentionMaintenanceScheduler(ctx, a.cfg.Retention, a.automationService, a.logger)
 	// 启动标准 MCP stdio 服务器：由官方 SDK 处理 initialize/tools/list/tools/call。
 	server := mcp.NewSDKServer(a.registry, a.version, a.logger)
 	return server.RunStdio(ctx)

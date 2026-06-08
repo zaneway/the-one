@@ -11,39 +11,29 @@ import (
 
 const defaultRetentionJobInterval = 24 * time.Hour
 
-type retentionCleanupRunner interface {
+type retentionMaintenanceRunner interface {
 	RunRetention(ctx context.Context, req retention.RunRequest) (retention.RunResponse, error)
 }
 
-func startRetentionCleanupScheduler(ctx context.Context, cfg config.RetentionConfig, runner retentionCleanupRunner, logger *slog.Logger) bool {
+func startRetentionMaintenanceScheduler(ctx context.Context, cfg config.RetentionConfig, runner retentionMaintenanceRunner, logger *slog.Logger) bool {
 	if !cfg.JobEnabled || runner == nil {
 		return false
 	}
 	interval := retentionJobInterval(cfg.JobIntervalMS)
-	go runRetentionCleanupScheduler(ctx, interval, runner, logger)
+	go runRetentionMaintenanceScheduler(ctx, interval, runner, logger)
 	return true
 }
 
-func runRetentionCleanupScheduler(ctx context.Context, interval time.Duration, runner retentionCleanupRunner, logger *slog.Logger) {
-	runCleanup := func() {
+func runRetentionMaintenanceScheduler(ctx context.Context, interval time.Duration, runner retentionMaintenanceRunner, logger *slog.Logger) {
+	runMaintenance := func() {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		resp, err := runner.RunRetention(ctx, retention.RunRequest{
-			Mode:   retention.ModeCleanupTemporary,
-			DryRun: false,
-		})
-		if err != nil {
-			logger.Error("retention cleanup job failed", "error", err)
-			return
-		}
-		logger.Info("retention cleanup job completed",
-			"processed", resp.Processed,
-			"item_count", len(resp.Items),
-		)
+		runRetentionMode(ctx, runner, logger, retention.ModeCleanupTemporary)
+		runRetentionMode(ctx, runner, logger, retention.ModeRecomputeScores)
 	}
 
-	runCleanup()
+	runMaintenance()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -51,9 +41,25 @@ func runRetentionCleanupScheduler(ctx context.Context, interval time.Duration, r
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			runCleanup()
+			runMaintenance()
 		}
 	}
+}
+
+func runRetentionMode(ctx context.Context, runner retentionMaintenanceRunner, logger *slog.Logger, mode string) {
+	resp, err := runner.RunRetention(ctx, retention.RunRequest{
+		Mode:   mode,
+		DryRun: false,
+	})
+	if err != nil {
+		logger.Error("retention job failed", "mode", mode, "error", err)
+		return
+	}
+	logger.Info("retention job completed",
+		"mode", mode,
+		"processed", resp.Processed,
+		"item_count", len(resp.Items),
+	)
 }
 
 func retentionJobInterval(intervalMS int) time.Duration {

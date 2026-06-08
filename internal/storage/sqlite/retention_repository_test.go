@@ -147,6 +147,82 @@ func TestRetentionServiceRecomputeScoresUpdatesTier(t *testing.T) {
 	}
 }
 
+func TestRetentionServiceRecomputeScoresDeletesInvalidWeakMemory(t *testing.T) {
+	ctx := context.Background()
+	store := newCaptureTestStore(t)
+	defer store.Close()
+	requireFTS5(t, store)
+
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	evidence := memory.Evidence{
+		ID:                   "ev_invalid_weak",
+		RawEventID:           "evt_invalid_weak",
+		SourceType:           "auto_log",
+		InterpretedStatement: "过期的临时弱信号。",
+	}
+	if err := store.WriteEvidence(ctx, evidence); err != nil {
+		t.Fatalf("WriteEvidence() error = %v", err)
+	}
+	item := memory.MemoryItem{
+		ID:            "mem_invalid_weak",
+		Scope:         memory.ScopeSession,
+		WorkspaceID:   "ws",
+		SessionID:     "session_a",
+		MemoryType:    memory.TypeTemporaryState,
+		SourceType:    "auto_log",
+		Content:       "过期的临时弱信号。",
+		State:         memory.StateProvisional,
+		Tier:          memory.TierShortTerm,
+		Confidence:    0.2,
+		Importance:    0.0,
+		EncodingDepth: 0,
+		DecayRate:     1.2,
+		CreatedAt:     now.Add(-30 * 24 * time.Hour),
+		UpdatedAt:     now.Add(-30 * 24 * time.Hour),
+	}
+	if _, err := store.WriteAutomatedMemory(ctx, automation.AutomatedMemoryWrite{
+		Item:        item,
+		EvidenceIDs: []string{evidence.ID},
+	}); err != nil {
+		t.Fatalf("WriteAutomatedMemory() error = %v", err)
+	}
+
+	cfg := storeCfgFromTestStore(t, store)
+	service := retention.NewService(cfg, store)
+	resp, err := service.Run(ctx, retention.RunRequest{
+		Mode:   retention.ModeRecomputeScores,
+		DryRun: false,
+		Limit:  10,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if resp.Processed != 1 || len(resp.Items) != 1 {
+		t.Fatalf("response = %+v, want one processed invalid memory", resp)
+	}
+	if resp.Items[0].Action != retention.ActionDelete || resp.Items[0].Reason != retention.ReasonInvalidRetentionScore {
+		t.Fatalf("item = %+v, want delete invalid_retention_score", resp.Items[0])
+	}
+	deleted, err := store.Get(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if deleted.State != memory.StateDeleted {
+		t.Fatalf("deleted state = %q, want deleted", deleted.State)
+	}
+	results, _, err := store.searchByFTS(ctx, memory.SearchRequest{
+		Query:       "过期 临时 弱信号",
+		WorkspaceID: "ws",
+		SessionID:   "session_a",
+	}, "过期 OR 临时 OR 弱信号", 10)
+	if err != nil {
+		t.Fatalf("searchByFTS() error = %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("fts results = %+v, want deleted memory removed from fts", results)
+	}
+}
+
 func storeCfgFromTestStore(t *testing.T, store *Store) config.Config {
 	t.Helper()
 	status := store.Status()

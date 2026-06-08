@@ -65,6 +65,7 @@ type Repository interface {
 	ArchiveTemporaryMemory(ctx context.Context, memoryID string, now time.Time) error
 	ListMemoriesForScoreRecalc(ctx context.Context, req retention.ListRequest) ([]retention.MemoryRecord, error)
 	UpdateRetentionFields(ctx context.Context, memoryID string, update retention.ScoreUpdate) error
+	DeleteInvalidMemory(ctx context.Context, memoryID string, now time.Time, reason string) error
 }
 
 // Service 编排自动记忆 job 链路。

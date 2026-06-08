@@ -10,12 +10,14 @@ const (
 const (
 	ActionArchive     = "archive"
 	ActionUpdateScore = "update_score"
+	ActionDelete      = "delete"
 )
 
 const (
-	ReasonTemporaryExpired = "temporary_expired"
-	ReasonScoreRecomputed  = "score_recomputed"
-	ReasonArchiveCandidate = "archive_candidate"
+	ReasonTemporaryExpired      = "temporary_expired"
+	ReasonScoreRecomputed       = "score_recomputed"
+	ReasonArchiveCandidate      = "archive_candidate"
+	ReasonInvalidRetentionScore = "invalid_retention_score"
 )
 
 type RunRequest struct {

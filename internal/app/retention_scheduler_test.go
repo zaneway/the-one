@@ -10,11 +10,11 @@ import (
 	"github.com/zaneway/theone/internal/retention"
 )
 
-type fakeRetentionCleanupRunner struct {
+type fakeRetentionMaintenanceRunner struct {
 	calls chan retention.RunRequest
 }
 
-func (f *fakeRetentionCleanupRunner) RunRetention(ctx context.Context, req retention.RunRequest) (retention.RunResponse, error) {
+func (f *fakeRetentionMaintenanceRunner) RunRetention(ctx context.Context, req retention.RunRequest) (retention.RunResponse, error) {
 	select {
 	case f.calls <- req:
 	case <-ctx.Done():
@@ -29,10 +29,10 @@ func TestRetentionCleanupSchedulerDisabledDoesNotStart(t *testing.T) {
 
 	cfg := config.Default().Retention
 	cfg.JobEnabled = false
-	runner := &fakeRetentionCleanupRunner{calls: make(chan retention.RunRequest, 1)}
+	runner := &fakeRetentionMaintenanceRunner{calls: make(chan retention.RunRequest, 1)}
 
-	if started := startRetentionCleanupScheduler(ctx, cfg, runner, slog.Default()); started {
-		t.Fatal("startRetentionCleanupScheduler() = true, want false when retention job is disabled")
+	if started := startRetentionMaintenanceScheduler(ctx, cfg, runner, slog.Default()); started {
+		t.Fatal("startRetentionMaintenanceScheduler() = true, want false when retention job is disabled")
 	}
 	select {
 	case call := <-runner.calls:
@@ -41,17 +41,17 @@ func TestRetentionCleanupSchedulerDisabledDoesNotStart(t *testing.T) {
 	}
 }
 
-func TestRetentionCleanupSchedulerRunsImmediatelyAndOnInterval(t *testing.T) {
+func TestRetentionMaintenanceSchedulerRunsCleanupAndRecompute(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	cfg := config.Default().Retention
 	cfg.JobEnabled = true
 	cfg.JobIntervalMS = 5
-	runner := &fakeRetentionCleanupRunner{calls: make(chan retention.RunRequest, 4)}
+	runner := &fakeRetentionMaintenanceRunner{calls: make(chan retention.RunRequest, 8)}
 
-	if started := startRetentionCleanupScheduler(ctx, cfg, runner, slog.Default()); !started {
-		t.Fatal("startRetentionCleanupScheduler() = false, want true when retention job is enabled")
+	if started := startRetentionMaintenanceScheduler(ctx, cfg, runner, slog.Default()); !started {
+		t.Fatal("startRetentionMaintenanceScheduler() = false, want true when retention job is enabled")
 	}
 
 	first := waitRetentionCall(t, runner.calls)
@@ -59,8 +59,16 @@ func TestRetentionCleanupSchedulerRunsImmediatelyAndOnInterval(t *testing.T) {
 		t.Fatalf("first retention call = %+v, want cleanup_temporary apply", first)
 	}
 	second := waitRetentionCall(t, runner.calls)
-	if second.Mode != retention.ModeCleanupTemporary || second.DryRun {
-		t.Fatalf("second retention call = %+v, want cleanup_temporary apply", second)
+	if second.Mode != retention.ModeRecomputeScores || second.DryRun {
+		t.Fatalf("second retention call = %+v, want recompute_scores apply", second)
+	}
+	third := waitRetentionCall(t, runner.calls)
+	if third.Mode != retention.ModeCleanupTemporary || third.DryRun {
+		t.Fatalf("third retention call = %+v, want interval cleanup_temporary apply", third)
+	}
+	fourth := waitRetentionCall(t, runner.calls)
+	if fourth.Mode != retention.ModeRecomputeScores || fourth.DryRun {
+		t.Fatalf("fourth retention call = %+v, want interval recompute_scores apply", fourth)
 	}
 }
 

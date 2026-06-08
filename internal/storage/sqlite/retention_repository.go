@@ -158,6 +158,72 @@ func (s *Store) UpdateRetentionFields(ctx context.Context, memoryID string, upda
 	return nil
 }
 
+// DeleteInvalidMemory 将 retention 判定为最终无效的弱记忆置为 deleted。
+// 该路径只由 retention service 的保守策略触发，事务内同步 tombstone、FTS 和关联 artifact 清理。
+func (s *Store) DeleteInvalidMemory(ctx context.Context, memoryID string, now time.Time, reason string) error {
+	if memoryID == "" {
+		return fmt.Errorf("VALIDATION_FAILED: memory id is required")
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return storageErr(err)
+	}
+	item, err := getMemoryForUpdate(ctx, tx, memoryID)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if item.State == memory.StateDeleted {
+		_ = tx.Rollback()
+		return nil
+	}
+	if item.Pinned || item.UserConfirmed || item.State == memory.StateStable || item.Tier == memory.TierLongTerm || item.Tier == memory.TierDurable {
+		_ = tx.Rollback()
+		return fmt.Errorf("STATE_CONFLICT: retention delete requires unconfirmed weak memory")
+	}
+	nowText := now.Format(time.RFC3339Nano)
+	result, err := tx.ExecContext(ctx,
+		"update memory_item set state = ?, tier = ?, updated_at = ? where id = ? and state not in (?, ?)",
+		memory.StateDeleted, memory.TierArchived, nowText, memoryID, memory.StateDeleted, memory.StateArchived,
+	)
+	if err != nil {
+		_ = tx.Rollback()
+		return storageErr(err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return storageErr(err)
+	}
+	if affected == 0 {
+		_ = tx.Rollback()
+		return fmt.Errorf("MEMORY_NOT_FOUND: %s", memoryID)
+	}
+	if _, err := tx.ExecContext(ctx,
+		"insert or replace into memory_tombstone(memory_id, deleted_reason, deleted_by, content_hash, deleted_at) values (?, ?, ?, ?, ?)",
+		memoryID, reason, "retention", "", nowText,
+	); err != nil {
+		_ = tx.Rollback()
+		return storageErr(err)
+	}
+	if err := deleteFTS(ctx, tx, memoryID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := deleteMemoryArtifacts(ctx, tx, memoryID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := insertReviewRecord(ctx, tx, memoryID, "retention", "deleted", "retention", reason, item.Content, ""); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return storageErr(tx.Commit())
+}
+
 func baseRetentionMemorySelect() string {
 	return `select id, coalesce(workspace_id, ''), coalesce(project_id, ''), coalesce(scope, ''),
 		coalesce(source_type, ''), state, tier, memory_type, confidence, importance,

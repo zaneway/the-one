@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 const runLimitMax = 100
@@ -18,6 +19,7 @@ type Repository interface {
 	AggregateRelationSignals(ctx context.Context, memoryIDs []string) (map[string]RelationSignals, error)
 	CountStaleCodeRefs(ctx context.Context, memoryIDs []string) (map[string]int, error)
 	UpdateRetentionFields(ctx context.Context, memoryID string, update ScoreUpdate) error
+	DeleteInvalidMemory(ctx context.Context, memoryID string, now time.Time, reason string) error
 }
 
 type Service struct {
@@ -86,7 +88,7 @@ func (s *Service) runCleanupTemporary(ctx context.Context, req RunRequest) (RunR
 // runRecomputeScores 重新计算记忆的保留分数和 tier。
 // 流程：查询需要重算的记忆 → 逐条计算 ComputeScore + ComputeTier → 更新 retention_score 和 tier。
 // 设计约束：pinned 记忆跳过更新（但仍计算并返回诊断信息）。
-// score < 0.30 的记忆标记为 archive_candidate（由上层决策是否归档）。
+// score < 0.30 的记忆标记为 archive_candidate；未确认的低分短期弱记忆会进入 deleted 终态。
 func (s *Service) runRecomputeScores(ctx context.Context, req RunRequest) (RunResponse, error) {
 	now := time.Now()
 	limit, diagnostics := normalizeRunLimit(req.Limit)
@@ -130,19 +132,28 @@ func (s *Service) runRecomputeScores(ctx context.Context, req RunRequest) (RunRe
 		score := ComputeScore(input)
 		input.RetentionScore = score
 		tier := ComputeTier(input)
-		reason := ReasonScoreRecomputed
-		if score < 0.30 {
-			reason = ReasonArchiveCandidate
+		deleteInvalid := shouldDeleteInvalidMemory(record, score, access, relations)
+		reason := retentionReason(score, deleteInvalid)
+		action := ActionUpdateScore
+		if deleteInvalid {
+			action = ActionDelete
 		}
 		item := ActionItem{
 			MemoryID:       record.ID,
-			Action:         ActionUpdateScore,
+			Action:         action,
 			Reason:         reason,
 			Tier:           tier,
 			RetentionScore: score,
 		}
 		resp.Items = append(resp.Items, item)
 		if req.DryRun || record.Pinned {
+			continue
+		}
+		if deleteInvalid {
+			if err := s.repo.DeleteInvalidMemory(ctx, record.ID, now, ReasonInvalidRetentionScore); err != nil {
+				return resp, err
+			}
+			resp.Processed++
 			continue
 		}
 		update := ScoreUpdate{
@@ -162,6 +173,41 @@ func (s *Service) runRecomputeScores(ctx context.Context, req RunRequest) (RunRe
 		resp.Processed++
 	}
 	return resp, nil
+}
+
+func retentionReason(score float64, deleteInvalid bool) string {
+	if deleteInvalid {
+		return ReasonInvalidRetentionScore
+	}
+	if score < 0.30 {
+		return ReasonArchiveCandidate
+	}
+	return ReasonScoreRecomputed
+}
+
+func shouldDeleteInvalidMemory(record MemoryRecord, score float64, access AccessFeedbackSummary, relations RelationSignals) bool {
+	if score >= 0.30 || record.Pinned || record.UserConfirmed {
+		return false
+	}
+	if record.State != memory.StateProvisional {
+		return false
+	}
+	switch record.Tier {
+	case memory.TierTemporary, memory.TierShortTerm:
+	default:
+		return false
+	}
+	switch record.MemoryType {
+	case memory.TypeDecision, memory.TypeConstraint, memory.TypePreference, memory.TypeRequirement, memory.TypeReviewCheckpoint:
+		return false
+	}
+	if access.EffectiveReinforcement > 0 || access.ReinforcementCount > 0 {
+		return false
+	}
+	if relations.SupportingCount > 0 || relations.LinkedLongTermCount > 0 {
+		return false
+	}
+	return true
 }
 
 func normalizeRunLimit(limit int) (int, []string) {

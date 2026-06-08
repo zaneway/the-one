@@ -331,7 +331,7 @@ type RetentionConfig struct {
 	JobEnabled bool `yaml:"job_enabled" json:"job_enabled"`
 
 	// JobIntervalMS 保留任务执行间隔（毫秒）
-	// 默认24小时；启用 job 后按该间隔周期触发遗忘清理。
+	// 默认24小时；启用 job 后按该间隔周期触发遗忘清理和分数重算。
 	JobIntervalMS int `yaml:"job_interval_ms" json:"job_interval_ms"`
 
 	// TemporaryTTLDays 临时记忆生存天数
