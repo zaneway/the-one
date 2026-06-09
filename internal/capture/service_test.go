@@ -2,6 +2,7 @@ package capture
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -154,6 +155,104 @@ func TestServiceObserveEnqueuesAutomationForNewRawEventOnly(t *testing.T) {
 	}
 	if len(enqueuer.rawEventIDs) != 2 || enqueuer.rawEventIDs[1] != first.RawEventID {
 		t.Fatalf("enqueued raw events = %+v, want start and first declaration only", enqueuer.rawEventIDs)
+	}
+}
+
+func TestServiceObserveAppliesSemanticEnhancerBeforeContentBoundaryAndHash(t *testing.T) {
+	repo := newFakeRepository()
+	enhancer := &fakeSemanticEnhancer{
+		output: SemanticEnhanceOutput{
+			InputSummary:       "用户输入强调自动化记忆要先语义简化。",
+			OutputSummary:      "Agent确认会在写入前简化并抽取关键词。",
+			ContentSummary:     "【事实】用户要求记忆写入前先做语义等价简化。\n【约束】根据简化后的语义提取关键词。",
+			Keywords:           []string{"语义简化", "关键词提取", "记忆写入"},
+			SalientSpans:       []string{"写入前先做语义等价简化"},
+			SemanticEquivalent: true,
+		},
+	}
+	service := NewService(config.Default(), repo, WithSemanticEnhancer(enhancer))
+
+	resp, err := service.Observe(context.Background(), ObserveRequest{
+		EventType:      EventUserDeclaration,
+		SourceChannel:  SourceChannelMCPTool,
+		WorkspaceID:    "ws",
+		AgentType:      "codex",
+		Actor:          ActorUser,
+		InputSummary:   strings.Repeat("用户输入强调自动化记忆要先语义简化。", 80),
+		OutputSummary:  strings.Repeat("Agent确认会在写入前简化并抽取关键词。", 80),
+		ContentSummary: strings.Repeat("【事实】用户要求记忆写入前先做语义等价简化。【约束】根据简化后的语义提取关键词。", 160),
+		ContentHash:    "sha256:pre-enhance-hash",
+	})
+	if err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+	event := repo.events[resp.RawEventID]
+	if event.ContentSummary != enhancer.output.ContentSummary {
+		t.Fatalf("content_summary = %q, want semantic enhanced summary", event.ContentSummary)
+	}
+	if event.ContentHash == "sha256:pre-enhance-hash" {
+		t.Fatalf("content_hash = %q, want recomputed hash after semantic enhancement", event.ContentHash)
+	}
+	var keywords []string
+	if err := json.Unmarshal([]byte(event.KeywordsJSON), &keywords); err != nil {
+		t.Fatalf("decode keywords: %v", err)
+	}
+	if strings.Join(keywords, ",") != "语义简化,关键词提取,记忆写入" {
+		t.Fatalf("keywords = %+v, want model semantic keywords", keywords)
+	}
+	if enhancer.input.ContentSummary == "" || enhancer.input.EventType != EventUserDeclaration {
+		t.Fatalf("enhancer input = %+v, want normalized observe request", enhancer.input)
+	}
+}
+
+func TestServiceObserveRejectsSemanticEnhancerOutputWhenSemanticsChanged(t *testing.T) {
+	repo := newFakeRepository()
+	service := NewService(config.Default(), repo, WithSemanticEnhancer(&fakeSemanticEnhancer{
+		output: SemanticEnhanceOutput{
+			ContentSummary:     "【事实】模型输出了不同语义",
+			SemanticEquivalent: false,
+		},
+	}))
+
+	_, err := service.Observe(context.Background(), ObserveRequest{
+		EventType:      EventUserDeclaration,
+		SourceChannel:  SourceChannelMCPTool,
+		WorkspaceID:    "ws",
+		AgentType:      "codex",
+		Actor:          ActorUser,
+		ContentSummary: "【事实】用户要求保持语义不变地简化内容。",
+	})
+	if err == nil || !strings.Contains(err.Error(), "SEMANTIC_ENHANCE_FAILED") {
+		t.Fatalf("Observe() error = %v, want semantic enhancement rejection", err)
+	}
+	if len(repo.events) != 0 {
+		t.Fatalf("events = %d, want no raw_event when semantic equivalence fails", len(repo.events))
+	}
+}
+
+func TestServiceObserveRejectsForbiddenSourceRefsBeforeSemanticEnhancer(t *testing.T) {
+	repo := newFakeRepository()
+	enhancer := &fakeSemanticEnhancer{
+		output: SemanticEnhanceOutput{SemanticEquivalent: true},
+	}
+	service := NewService(config.Default(), repo, WithSemanticEnhancer(enhancer))
+
+	_, err := service.Observe(context.Background(), ObserveRequest{
+		EventType:      EventToolResultSummary,
+		SourceChannel:  SourceChannelMCPTool,
+		WorkspaceID:    "ws",
+		AgentType:      "codex",
+		ContentSummary: "【事件】工具执行结果\n【事实】测试失败",
+		SourceRefs:     []SourceRef{{"full_output": "完整输出不能发送给外部模型"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "CONTENT_TOO_LARGE") {
+		t.Fatalf("Observe() error = %v, want CONTENT_TOO_LARGE before semantic enhancer", err)
+	}
+	if enhancer.called {
+		t.Fatal("semantic enhancer was called with forbidden source_refs")
+	}
+	if len(repo.events) != 0 {
+		t.Fatalf("events = %d, want no raw_event", len(repo.events))
 	}
 }
 
@@ -318,6 +417,19 @@ type fakeRepository struct {
 type fakeJobEnqueuer struct {
 	rawEventIDs []string
 	err         error
+}
+
+type fakeSemanticEnhancer struct {
+	input  SemanticEnhanceInput
+	output SemanticEnhanceOutput
+	err    error
+	called bool
+}
+
+func (e *fakeSemanticEnhancer) EnhanceObserve(_ context.Context, input SemanticEnhanceInput) (SemanticEnhanceOutput, error) {
+	e.called = true
+	e.input = input
+	return e.output, e.err
 }
 
 func (e *fakeJobEnqueuer) EnqueueRawEvent(_ context.Context, event RawEvent) error {

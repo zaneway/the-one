@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/zaneway/theone/internal/config"
@@ -76,39 +77,59 @@ type TaskResultRecorder interface {
 // 编排 observe 写入链路
 // 设计原则：capture 只落 raw_event；通过可选 enqueuer 触发后续 async_job。
 type Service struct {
-	cfg      config.Config // 配置信息
-	repo     Repository    // 仓库接口，负责持久化
-	enqueuer JobEnqueuer   // 自动处理入队器；为空时保持 raw_event-only 行为
-	logger   *slog.Logger  // 结构化日志
+	cfg              config.Config    // 配置信息
+	repo             Repository       // 仓库接口，负责持久化
+	enqueuer         JobEnqueuer      // 自动处理入队器；为空时保持 raw_event-only 行为
+	semanticEnhancer SemanticEnhancer // 语义等价简化与关键词提取扩展点；为空时保持原请求
+	logger           *slog.Logger     // 结构化日志
 }
 
 // NewService 创建 capture service
 // 后续 MCP handler 和 diagnostics service 复用该入口
-func NewService(cfg config.Config, repo Repository) *Service {
-	return &Service{cfg: cfg, repo: repo, logger: slog.Default()}
+func NewService(cfg config.Config, repo Repository, opts ...ServiceOption) *Service {
+	return newService(cfg, repo, nil, opts...)
 }
 
 // NewServiceWithAutomation 创建带自动处理入队能力的 capture service。
 // 该构造函数用于自动入队场景；调用方继续使用 NewService 即可保持原行为。
-func NewServiceWithAutomation(cfg config.Config, repo Repository, enqueuer JobEnqueuer) *Service {
-	return &Service{cfg: cfg, repo: repo, enqueuer: enqueuer, logger: slog.Default()}
+func NewServiceWithAutomation(cfg config.Config, repo Repository, enqueuer JobEnqueuer, opts ...ServiceOption) *Service {
+	return newService(cfg, repo, enqueuer, opts...)
+}
+
+type ServiceOption func(*Service)
+
+func WithSemanticEnhancer(enhancer SemanticEnhancer) ServiceOption {
+	return func(s *Service) {
+		s.semanticEnhancer = enhancer
+	}
+}
+
+func newService(cfg config.Config, repo Repository, enqueuer JobEnqueuer, opts ...ServiceOption) *Service {
+	service := &Service{cfg: cfg, repo: repo, enqueuer: enqueuer, logger: slog.Default()}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(service)
+		}
+	}
+	return service
 }
 
 // Observe 执行 memory.observe 的最小闭环。
 // 完整处理链路：
 //  1. 生成请求 ID（用于日志关联）
 //  2. 归一化：去空白、校验 event_type/source_channel/actor 合法性、设置默认值
-//  3. 内容边界检查：摘要长度、关键词数量、source_refs 完整性（禁止 full_text/full_output/full_diff）
-//  4. 计算 content_hash（未提供时自动计算，基于最小化字段的 SHA256）
-//  5. 归一化 occurred_at（RFC3339 格式，空值使用当前 UTC 时间）
-//  6. 计算 capture_level（基于 Adapter 声明的能力，范围 1-4）
-//  7. 解析或创建 session（session.start 自动生成新 session_id）
-//  8. 解析或创建 task（按 task_summary 归一化后查找，无则创建 default_task）
-//  9. 幂等检测：按 content_hash + session_id + event_type 去重
-//  10. 构建并写入 raw_event（append-only 事实层）
-//  11. 更新 session 质量统计（accepted/deduped 计数）
-//  12. 生命周期处理：task.result -> EndTask，session.End -> EndTask + EndSession
-//  13. 可选：通知自动处理入队（enqueuer 不为空时）
+//  3. 可选语义增强：保持语义不变地简化摘要，并基于简化语义提取关键词
+//  4. 内容边界检查：摘要长度、关键词数量、source_refs 完整性（禁止 full_text/full_output/full_diff）
+//  5. 计算 content_hash（未提供时自动计算，基于最小化字段的 SHA256）
+//  6. 归一化 occurred_at（RFC3339 格式，空值使用当前 UTC 时间）
+//  7. 计算 capture_level（基于 Adapter 声明的能力，范围 1-4）
+//  8. 解析或创建 session（session.start 自动生成新 session_id）
+//  9. 解析或创建 task（按 task_summary 归一化后查找，无则创建 default_task）
+//  10. 幂等检测：按 content_hash + session_id + event_type 去重
+//  11. 构建并写入 raw_event（append-only 事实层）
+//  12. 更新 session 质量统计（accepted/deduped 计数）
+//  13. 生命周期处理：task.result -> EndTask，session.End -> EndTask + EndSession
+//  14. 可选：通知自动处理入队（enqueuer 不为空时）
 //
 // 设计约束：只落 raw_event，不自动生成长期记忆（pipeline=raw_event_only）。
 func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveResponse, error) {
@@ -130,7 +151,16 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		"session_id", req.SessionID,
 		"agent_type", req.AgentType,
 	)
-	// Step 3: 内容边界检查——摘要长度、关键词数量、salient_span 数量；禁止 full_text/full_output/full_diff
+	// Step 3: 可选语义增强——在内容边界检查和 content_hash 之前执行，确保 raw_event 存储的是简化后的语义索引卡
+	if err := s.enhanceObserveSemantics(ctx, &req); err != nil {
+		s.logger.Error("observe semantic enhancement failed",
+			"request_id", requestID,
+			"event_type", req.EventType,
+			"error", err,
+		)
+		return ObserveResponse{}, err
+	}
+	// Step 4: 内容边界检查——摘要长度、关键词数量、salient_span 数量；禁止 full_text/full_output/full_diff
 	if err := CheckMinimizedObserve(s.cfg.Capture, req); err != nil {
 		s.logger.Error("observe content boundary check failed",
 			"request_id", requestID,
@@ -141,7 +171,7 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		_ = s.recordContentBoundaryRejection(ctx, req)
 		return ObserveResponse{}, err
 	}
-	// Step 4: 计算 content_hash——未提供时自动计算，基于最小化字段的 SHA256
+	// Step 5: 计算 content_hash——未提供时自动计算，基于最小化字段的 SHA256
 	if req.ContentHash == "" {
 		contentHash, err := ComputeContentHash(req)
 		if err != nil {
@@ -305,6 +335,78 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		CaptureLevel: captureLevel,
 		Diagnostics:  diagnostics,
 	}, nil
+}
+
+func (s *Service) enhanceObserveSemantics(ctx context.Context, req *ObserveRequest) error {
+	if s.semanticEnhancer == nil {
+		return nil
+	}
+	if err := checkSourceRefsBeforeSemanticEnhance(req.SourceRefs); err != nil {
+		return err
+	}
+	before := *req
+	output, err := s.semanticEnhancer.EnhanceObserve(ctx, SemanticEnhanceInput{
+		EventType:      req.EventType,
+		SourceChannel:  req.SourceChannel,
+		Actor:          req.Actor,
+		ToolName:       req.ToolName,
+		InputSummary:   req.InputSummary,
+		OutputSummary:  req.OutputSummary,
+		ContentSummary: req.ContentSummary,
+		Keywords:       append([]string(nil), req.Keywords...),
+		SalientSpans:   append([]string(nil), req.SalientSpans...),
+		SourceRefs:     append([]SourceRef(nil), req.SourceRefs...),
+	})
+	if err != nil {
+		return fmt.Errorf("SEMANTIC_ENHANCE_FAILED: %w", err)
+	}
+	if !output.SemanticEquivalent {
+		return fmt.Errorf("SEMANTIC_ENHANCE_FAILED: semantic equivalence was not confirmed")
+	}
+	applySemanticEnhanceOutput(req, output)
+	if semanticContentChanged(before, *req) {
+		req.ContentHash = ""
+	}
+	return NormalizeObserve(s.cfg.Capture, req)
+}
+
+func checkSourceRefsBeforeSemanticEnhance(sourceRefs []SourceRef) error {
+	sourceRefsJSON, err := json.Marshal(sourceRefs)
+	if err != nil {
+		return fmt.Errorf("VALIDATION_FAILED: source_refs is not json serializable: %w", err)
+	}
+	if containsForbiddenRawField(string(sourceRefsJSON)) {
+		return fmt.Errorf("CONTENT_TOO_LARGE: source_refs must not contain full_text/full_output/full_diff")
+	}
+	return nil
+}
+
+func applySemanticEnhanceOutput(req *ObserveRequest, output SemanticEnhanceOutput) {
+	if strings.TrimSpace(output.InputSummary) != "" {
+		req.InputSummary = output.InputSummary
+	}
+	if strings.TrimSpace(output.OutputSummary) != "" {
+		req.OutputSummary = output.OutputSummary
+	}
+	if strings.TrimSpace(output.ContentSummary) != "" {
+		req.ContentSummary = output.ContentSummary
+	}
+	if output.Keywords != nil {
+		req.Keywords = output.Keywords
+	}
+	if output.SalientSpans != nil {
+		req.SalientSpans = output.SalientSpans
+	}
+}
+
+func semanticContentChanged(before, after ObserveRequest) bool {
+	if before.InputSummary != after.InputSummary || before.OutputSummary != after.OutputSummary || before.ContentSummary != after.ContentSummary {
+		return true
+	}
+	if strings.Join(before.Keywords, "\x00") != strings.Join(after.Keywords, "\x00") {
+		return true
+	}
+	return strings.Join(before.SalientSpans, "\x00") != strings.Join(after.SalientSpans, "\x00")
 }
 
 // ListSessions 返回符合过滤条件的 capture sessions

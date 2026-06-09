@@ -45,6 +45,22 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Processor.Provider != "rule_based" || cfg.Processor.MaxRelatedEvents != 20 || cfg.Processor.MaxCandidatesPerEvent != 3 {
 		t.Fatalf("processor defaults = %+v, want rule_based enabled with limits", cfg.Processor)
 	}
+	if cfg.Processor.OpenAI.Model != "gpt-5-mini" || cfg.Processor.OpenAI.APIKeyEnv != "OPENAI_API_KEY" ||
+		cfg.Processor.OpenAI.TimeoutMS != 30000 || cfg.Processor.OpenAI.MaxOutputTokens != 1200 {
+		t.Fatalf("processor openai defaults = %+v, want bounded gpt-5-mini config", cfg.Processor.OpenAI)
+	}
+	if !strings.Contains(cfg.Processor.OpenAI.SemanticEnhancePrompt, "content_summary") ||
+		!strings.Contains(cfg.Processor.OpenAI.SemanticEnhancePrompt, "semantic_equivalent=false") {
+		t.Fatalf("semantic enhance prompt = %q, want project-specific safety instructions", cfg.Processor.OpenAI.SemanticEnhancePrompt)
+	}
+	if !strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, "EvidenceDraft") ||
+		!strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, "低信号") {
+		t.Fatalf("extract evidence prompt = %q, want project-specific evidence instructions", cfg.Processor.OpenAI.ExtractEvidencePrompt)
+	}
+	if !strings.Contains(cfg.Processor.OpenAI.GenerateCandidatesPrompt, "MemoryCandidate") ||
+		!strings.Contains(cfg.Processor.OpenAI.GenerateCandidatesPrompt, "memory_type") {
+		t.Fatalf("generate candidates prompt = %q, want project-specific candidate instructions", cfg.Processor.OpenAI.GenerateCandidatesPrompt)
+	}
 	if cfg.CodeIndex.Provider != "local_basic" || cfg.CodeIndex.MaxFileSizeKB != 512 || cfg.CodeIndex.MaxResolveRefs != 30 {
 		t.Fatalf("codeindex defaults = %+v, want local_basic with bounded local resolver", cfg.CodeIndex)
 	}
@@ -105,6 +121,28 @@ func TestLoadAdapterPromptCacheUserSummaryLimitFromYAML(t *testing.T) {
 	}
 }
 
+func TestLoadOpenAISemanticEnhancePromptFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "theone.yaml")
+	data := []byte("processor:\n  openai:\n    semantic_enhance_prompt: |\n      custom semantic prompt\n      keep project taxonomy\n    extract_evidence_prompt: custom evidence prompt\n    generate_candidates_prompt: custom candidate prompt\n")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(Overrides{ConfigPath: path})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !strings.Contains(cfg.Processor.OpenAI.SemanticEnhancePrompt, "custom semantic prompt") {
+		t.Fatalf("semantic enhance prompt = %q, want YAML override", cfg.Processor.OpenAI.SemanticEnhancePrompt)
+	}
+	if cfg.Processor.OpenAI.ExtractEvidencePrompt != "custom evidence prompt" {
+		t.Fatalf("extract evidence prompt = %q, want YAML override", cfg.Processor.OpenAI.ExtractEvidencePrompt)
+	}
+	if cfg.Processor.OpenAI.GenerateCandidatesPrompt != "custom candidate prompt" {
+		t.Fatalf("generate candidates prompt = %q, want YAML override", cfg.Processor.OpenAI.GenerateCandidatesPrompt)
+	}
+}
+
 func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 	_, err := Load(Overrides{LogLevel: "verbose"})
 	if err == nil {
@@ -141,6 +179,23 @@ func TestValidateRejectsProcessorProviderNone(t *testing.T) {
 	cfg.Processor.Provider = "none"
 	if err := validate(cfg); err == nil {
 		t.Fatal("validate() error = nil, want unsupported processor provider")
+	}
+}
+
+func TestValidateAllowsOpenAIProcessorProvider(t *testing.T) {
+	cfg := Default()
+	cfg.Processor.Provider = "openai"
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate() error = %v, want openai processor provider allowed", err)
+	}
+}
+
+func TestValidateRejectsInvalidOpenAIProcessorConfig(t *testing.T) {
+	cfg := Default()
+	cfg.Processor.Provider = "openai"
+	cfg.Processor.OpenAI.Model = ""
+	if err := validate(cfg); err == nil {
+		t.Fatal("validate() error = nil, want invalid openai processor config")
 	}
 }
 

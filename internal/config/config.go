@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/zaneway/theone/internal/prompts"
 )
 
 // Config theone 主配置结构体
@@ -346,7 +348,8 @@ type RetentionConfig struct {
 // ProcessorConfig 自动记忆处理器配置结构体
 // 控制 rule_based 抽取的近邻事件与候选数量上限
 type ProcessorConfig struct {
-	// Provider 处理器提供者，仅支持 rule_based（observe 后必入队并由准入规则决定是否持久化）
+	// Provider 处理器提供者，支持 rule_based、openai
+	// rule_based 保持默认本地可运行；openai 通过外部模型生成 evidence/candidate 草稿
 	Provider string `yaml:"provider" json:"provider"`
 
 	// MaxRelatedEvents Provider 抽取时读取的近邻事件上限
@@ -354,6 +357,40 @@ type ProcessorConfig struct {
 
 	// MaxCandidatesPerEvent 单个事件最多生成候选数量
 	MaxCandidatesPerEvent int `yaml:"max_candidates_per_event" json:"max_candidates_per_event"`
+
+	// OpenAI OpenAI provider 配置；provider=openai 时生效
+	OpenAI OpenAIProcessorConfig `yaml:"openai" json:"openai"`
+}
+
+// OpenAIProcessorConfig 描述外部 OpenAI 模型处理器配置。
+// API key 只通过环境变量读取，配置文件不承载明文密钥。
+type OpenAIProcessorConfig struct {
+	// Model Responses API 使用的模型 ID
+	Model string `yaml:"model" json:"model"`
+
+	// BaseURL 可选 API base URL；为空时使用 openai-go 默认值
+	BaseURL string `yaml:"base_url" json:"base_url"`
+
+	// APIKeyEnv 读取 API key 的环境变量名，默认 OPENAI_API_KEY
+	APIKeyEnv string `yaml:"api_key_env" json:"api_key_env"`
+
+	// TimeoutMS 单次外部模型请求超时（毫秒）
+	TimeoutMS int `yaml:"timeout_ms" json:"timeout_ms"`
+
+	// MaxOutputTokens 单次结构化输出上限
+	MaxOutputTokens int `yaml:"max_output_tokens" json:"max_output_tokens"`
+
+	// ExtractEvidencePrompt evidence 抽取提示词
+	// 为空时 OpenAI provider 使用内置默认提示词
+	ExtractEvidencePrompt string `yaml:"extract_evidence_prompt" json:"extract_evidence_prompt"`
+
+	// GenerateCandidatesPrompt candidate 生成提示词
+	// 为空时 OpenAI provider 使用内置默认提示词
+	GenerateCandidatesPrompt string `yaml:"generate_candidates_prompt" json:"generate_candidates_prompt"`
+
+	// SemanticEnhancePrompt observe 写入前语义等价简化与关键词提取提示词
+	// 为空时 OpenAI provider 使用内置默认提示词
+	SemanticEnhancePrompt string `yaml:"semantic_enhance_prompt" json:"semantic_enhance_prompt"`
 }
 
 // AutomationConfig 自动处理配置结构体
@@ -498,6 +535,15 @@ func Default() Config {
 			Provider:              "rule_based",
 			MaxRelatedEvents:      20,
 			MaxCandidatesPerEvent: 3,
+			OpenAI: OpenAIProcessorConfig{
+				Model:                    "gpt-5-mini",
+				APIKeyEnv:                "OPENAI_API_KEY",
+				TimeoutMS:                30000,
+				MaxOutputTokens:          1200,
+				ExtractEvidencePrompt:    prompts.OpenAIExtractEvidencePrompt,
+				GenerateCandidatesPrompt: prompts.OpenAIGenerateCandidatesPrompt,
+				SemanticEnhancePrompt:    prompts.OpenAISemanticEnhancePrompt,
+			},
 		},
 		Automation: AutomationConfig{
 			PollIntervalMS:   1000,
@@ -587,8 +633,14 @@ func validate(cfg Config) error {
 	if strings.TrimSpace(cfg.Processor.Provider) == "" || cfg.Processor.MaxRelatedEvents <= 0 || cfg.Processor.MaxCandidatesPerEvent <= 0 {
 		return errors.New("CONFIG_INVALID: processor config values must be positive and provider is required")
 	}
-	if cfg.Processor.Provider != "rule_based" {
-		return fmt.Errorf("CONFIG_INVALID: unsupported processor provider %q, only rule_based is allowed", cfg.Processor.Provider)
+	switch cfg.Processor.Provider {
+	case "rule_based", "openai":
+	default:
+		return fmt.Errorf("CONFIG_INVALID: unsupported processor provider %q", cfg.Processor.Provider)
+	}
+	if strings.TrimSpace(cfg.Processor.OpenAI.Model) == "" || strings.TrimSpace(cfg.Processor.OpenAI.APIKeyEnv) == "" ||
+		cfg.Processor.OpenAI.TimeoutMS <= 0 || cfg.Processor.OpenAI.MaxOutputTokens <= 0 {
+		return errors.New("CONFIG_INVALID: processor.openai config values must be positive and model/api_key_env are required")
 	}
 	if cfg.Retrieval.DefaultLimit <= 0 || cfg.Retrieval.DefaultTokenBudget <= 0 || cfg.Retrieval.OnlineTimeoutMS <= 0 ||
 		cfg.Retrieval.MaxRelationExpansion <= 0 || cfg.Retrieval.MaxCandidatesBeforeRerank <= 0 {

@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/zaneway/theone/internal/automation"
 	"github.com/zaneway/theone/internal/capture"
@@ -75,7 +78,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		retrieval.WithLogger(logger),
 	)
 	// Step 6: 注册 自动化服务（observe 入队、准入管道、remember 准入）
-	automationService := automation.NewService(cfg, store, processor.NewRuleBasedProvider())
+	provider, err := newProcessorProvider(cfg)
+	if err != nil {
+		logger.Error("processor provider init failed", "provider", cfg.Processor.Provider, "error", err)
+		_ = store.Close()
+		_ = logCloser.Close()
+		return nil, err
+	}
+	automationService := automation.NewService(cfg, store, provider)
 	memoryService := memory.NewService(cfg, store,
 		memory.WithRetrievalOrchestrator(retrievalOrchestrator),
 		memory.WithAccessFeedbackWriter(store),
@@ -88,7 +98,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	tools.RegisterMVPTools(registry, mvpService, logger)
 	// Step 8: 注册捕获工具（memory.observe）
 	// captureService 持有 automationService 引用，raw_event 写入后可触发自动入队
-	captureService := capture.NewServiceWithAutomation(cfg, store, automationService)
+	var semanticEnhancer capture.SemanticEnhancer
+	if enhancer, ok := provider.(capture.SemanticEnhancer); ok {
+		semanticEnhancer = enhancer
+	}
+	captureService := capture.NewServiceWithAutomation(cfg, store, automationService, capture.WithSemanticEnhancer(semanticEnhancer))
 	tools.RegisterCaptureTools(registry, captureService, logger)
 	// Step 9: 创建异步 Worker（后台 goroutine，轮询 pending jobs 并执行）
 	worker := automation.NewWorker(automationService, store, automation.WorkerConfig{
@@ -112,6 +126,32 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		worker:            worker,
 		automationService: automationService,
 	}, nil
+}
+
+func newProcessorProvider(cfg config.Config) (processor.Provider, error) {
+	switch cfg.Processor.Provider {
+	case processor.RuleBasedProviderName:
+		return processor.NewRuleBasedProvider(), nil
+	case processor.OpenAIProviderName:
+		apiKeyEnv := strings.TrimSpace(cfg.Processor.OpenAI.APIKeyEnv)
+		apiKey := os.Getenv(apiKeyEnv)
+		provider, err := processor.NewOpenAIProvider(processor.OpenAIProviderConfig{
+			APIKey:                   apiKey,
+			BaseURL:                  cfg.Processor.OpenAI.BaseURL,
+			Model:                    cfg.Processor.OpenAI.Model,
+			Timeout:                  time.Duration(cfg.Processor.OpenAI.TimeoutMS) * time.Millisecond,
+			MaxOutputTokens:          int64(cfg.Processor.OpenAI.MaxOutputTokens),
+			ExtractEvidencePrompt:    cfg.Processor.OpenAI.ExtractEvidencePrompt,
+			GenerateCandidatesPrompt: cfg.Processor.OpenAI.GenerateCandidatesPrompt,
+			SemanticEnhancePrompt:    cfg.Processor.OpenAI.SemanticEnhancePrompt,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("init openai processor provider from env %s: %w", apiKeyEnv, err)
+		}
+		return provider, nil
+	default:
+		return nil, fmt.Errorf("CONFIG_INVALID: unsupported processor provider %q", cfg.Processor.Provider)
+	}
 }
 
 // Serve 启动 MCP stdio 服务。
