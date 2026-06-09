@@ -120,7 +120,8 @@ retention:
 # ── 处理器配置 ────────────────────────────────────────────
 # 自动 evidence/candidate 抽取 Provider 和内容上限
 processor:
-  # 处理器提供者：仅 rule_based（observe 后必入队，由准入规则决定是否写入 memory_item）
+  # 处理器提供者：rule_based | openai
+  # rule_based 默认本地可运行；openai 使用外部模型生成 evidence/candidate 草稿
   provider: "rule_based"
 
   # Provider 抽取时读取的近邻事件上限
@@ -128,6 +129,20 @@ processor:
 
   # 单个事件最多生成候选记忆数
   max_candidates_per_event: 3
+
+  # provider=openai 时生效；API key 只从环境变量读取，不写入配置文件
+  openai:
+    model: "MiniMax-M3"
+    base_url: "https://api.minimaxi.com/v1"
+    api_key_env: "MINIMAX_API_KEY"
+    timeout_ms: 30000
+    max_output_tokens: 1200
+    # 可选：覆盖 evidence 抽取提示词；留空使用内置默认值
+    extract_evidence_prompt: ""
+    # 可选：覆盖 candidate 生成提示词；留空使用内置默认值
+    generate_candidates_prompt: ""
+    # 可选：覆盖 observe 写入前的语义等价简化与关键词提取提示词；留空使用内置默认值
+    semantic_enhance_prompt: ""
 
 # ── 自动化 Worker 配置 ───────────────────────────────────
 # 本地异步 worker 的轮询、批量和重试策略
