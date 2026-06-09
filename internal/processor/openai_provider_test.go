@@ -180,7 +180,7 @@ func TestOpenAIProviderExtractEvidenceUsesResponsesAPI(t *testing.T) {
 	if !ok {
 		t.Fatalf("instructions = %#v, want string", request["instructions"])
 	}
-	for _, want := range []string{"EvidenceDraft", "低信号", "source_ref", "confidence"} {
+	for _, want := range []string{"判断输入是否值得保存", "不值得保存时返回空数组", "source_ref", "confidence"} {
 		if !strings.Contains(instructions, want) {
 			t.Fatalf("instructions = %q, want to contain %q", instructions, want)
 		}
@@ -256,7 +256,7 @@ func TestOpenAIProviderGenerateCandidatesParsesStructuredOutput(t *testing.T) {
 	if !ok {
 		t.Fatalf("instructions = %#v, want string", request["instructions"])
 	}
-	for _, want := range []string{"MemoryCandidate", "memory_type", "scope", "不要编造"} {
+	for _, want := range []string{"选择 memory_type", "选择 scope", "不要编造", "user_global"} {
 		if !strings.Contains(instructions, want) {
 			t.Fatalf("instructions = %q, want to contain %q", instructions, want)
 		}

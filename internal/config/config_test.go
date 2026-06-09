@@ -50,15 +50,18 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("processor openai defaults = %+v, want bounded gpt-5-mini config", cfg.Processor.OpenAI)
 	}
 	if !strings.Contains(cfg.Processor.OpenAI.SemanticEnhancePrompt, "content_summary") ||
-		!strings.Contains(cfg.Processor.OpenAI.SemanticEnhancePrompt, "semantic_equivalent=false") {
+		!strings.Contains(cfg.Processor.OpenAI.SemanticEnhancePrompt, "semantic_equivalent=false") ||
+		!strings.Contains(cfg.Processor.OpenAI.SemanticEnhancePrompt, "示例：") {
 		t.Fatalf("semantic enhance prompt = %q, want project-specific safety instructions", cfg.Processor.OpenAI.SemanticEnhancePrompt)
 	}
-	if !strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, "EvidenceDraft") ||
-		!strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, "低信号") {
+	if !strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, "判断输入是否值得保存") ||
+		!strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, "不值得保存时返回空数组") ||
+		!strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, "示例：") {
 		t.Fatalf("extract evidence prompt = %q, want project-specific evidence instructions", cfg.Processor.OpenAI.ExtractEvidencePrompt)
 	}
-	if !strings.Contains(cfg.Processor.OpenAI.GenerateCandidatesPrompt, "MemoryCandidate") ||
-		!strings.Contains(cfg.Processor.OpenAI.GenerateCandidatesPrompt, "memory_type") {
+	if !strings.Contains(cfg.Processor.OpenAI.GenerateCandidatesPrompt, "选择 memory_type") ||
+		!strings.Contains(cfg.Processor.OpenAI.GenerateCandidatesPrompt, "选择 scope") ||
+		!strings.Contains(cfg.Processor.OpenAI.GenerateCandidatesPrompt, "示例：") {
 		t.Fatalf("generate candidates prompt = %q, want project-specific candidate instructions", cfg.Processor.OpenAI.GenerateCandidatesPrompt)
 	}
 	if cfg.CodeIndex.Provider != "local_basic" || cfg.CodeIndex.MaxFileSizeKB != 512 || cfg.CodeIndex.MaxResolveRefs != 30 {
