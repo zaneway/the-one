@@ -28,7 +28,14 @@ func TestAggregateAccessFeedbackAndRecomputeScores(t *testing.T) {
 	}
 
 	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
-	evidence := memory.Evidence{ID: "ev_feedback", SourceType: "agent_summary", InterpretedStatement: "先写测试", Confidence: 0.8, CreatedAt: now}
+	evidence := memory.Evidence{
+		ID:                   "ev_feedback",
+		RawEventID:           "evt_feedback",
+		SourceType:           "agent_summary",
+		InterpretedStatement: "先写测试",
+		Confidence:           0.8,
+		CreatedAt:            now,
+	}
 	if err := store.WriteEvidence(ctx, evidence); err != nil {
 		t.Fatalf("WriteEvidence() error = %v", err)
 	}

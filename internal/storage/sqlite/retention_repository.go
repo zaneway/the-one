@@ -101,8 +101,8 @@ func (s *Store) ArchiveTemporaryMemory(ctx context.Context, memoryID string, now
 }
 
 // ListMemoriesForScoreRecalc 查询需要重算保留分数的记忆。
-// 选择范围：provisional/pending_review/stable 状态，按 updated_at 升序（最久未更新的优先）。
-// 设计说明：分数重算是批量异步任务，每次处理一批，避免长时间占用数据库连接。
+// 选择范围：provisional/pending_review/stable 状态，优先处理存在未物化正向 access log 的记忆，再按 updated_at 升序。
+// 设计说明：分数重算是批量异步任务，每次处理一批；命中过的记忆必须优先进入批次，避免强化字段长期滞后。
 func (s *Store) ListMemoriesForScoreRecalc(ctx context.Context, req retention.ListRequest) ([]retention.MemoryRecord, error) {
 	query := baseRetentionMemorySelect() + `
 		where state in (?, ?, ?)`
@@ -115,7 +115,15 @@ func (s *Store) ListMemoriesForScoreRecalc(ctx context.Context, req retention.Li
 		query += " and project_id = ?"
 		args = append(args, req.ProjectID)
 	}
-	query += " order by updated_at asc limit ?"
+	query += ` order by case when exists (
+			select 1 from memory_access_log mal
+			where mal.memory_id = memory_item.id
+			  and mal.event_weight > 0
+			  and (
+				memory_item.last_reinforced_at is null
+				or julianday(mal.created_at) > julianday(memory_item.last_reinforced_at)
+			  )
+		) then 0 else 1 end, updated_at asc limit ?`
 	args = append(args, retentionLimit(req.Limit))
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -129,9 +137,8 @@ func (s *Store) UpdateRetentionFields(ctx context.Context, memoryID string, upda
 	if memoryID == "" {
 		return fmt.Errorf("VALIDATION_FAILED: memory id is required")
 	}
-	now := update.UpdatedAt
-	if now.IsZero() {
-		now = time.Now()
+	if update.State != "" {
+		return s.updateRetentionFieldsWithState(ctx, memoryID, update)
 	}
 	lastReinforced := sql.NullString{}
 	if update.HasLastReinforcedAt && !update.LastReinforcedAt.IsZero() {
@@ -139,11 +146,10 @@ func (s *Store) UpdateRetentionFields(ctx context.Context, memoryID string, upda
 	}
 	result, err := s.db.ExecContext(ctx, `update memory_item
 		set retention_score = ?, tier = ?, effective_reinforcement = ?,
-		    reinforcement_count = ?, last_reinforced_at = ?, updated_at = ?
+		    reinforcement_count = ?, last_reinforced_at = ?
 		where id = ? and state not in (?, ?)`,
 		update.RetentionScore, update.Tier, update.EffectiveReinforcement, update.ReinforcementCount,
-		lastReinforced, now.Format(time.RFC3339Nano),
-		memoryID, memory.StateDeleted, memory.StateArchived,
+		lastReinforced, memoryID, memory.StateDeleted, memory.StateArchived,
 	)
 	if err != nil {
 		return storageErr(err)
@@ -156,6 +162,64 @@ func (s *Store) UpdateRetentionFields(ctx context.Context, memoryID string, upda
 		return fmt.Errorf("MEMORY_NOT_FOUND: %s", memoryID)
 	}
 	return nil
+}
+
+// updateRetentionFieldsWithState 在一次事务内物化分数、tier 和自动巩固状态。
+// 设计约束：只有真实 state 迁移才刷新 updated_at 并写 memory_review；普通分数重算不应重置时间衰减参考点。
+func (s *Store) updateRetentionFieldsWithState(ctx context.Context, memoryID string, update retention.ScoreUpdate) error {
+	if update.State != memory.StateStable {
+		return fmt.Errorf("VALIDATION_FAILED: unsupported retention state transition %q", update.State)
+	}
+	now := update.UpdatedAt
+	if now.IsZero() {
+		now = time.Now()
+	}
+	lastReinforced := sql.NullString{}
+	if update.HasLastReinforcedAt && !update.LastReinforcedAt.IsZero() {
+		lastReinforced = sql.NullString{String: update.LastReinforcedAt.Format(time.RFC3339Nano), Valid: true}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return storageErr(err)
+	}
+	item, err := getMemoryForUpdate(ctx, tx, memoryID)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if item.State == memory.StateDeleted || item.State == memory.StateArchived {
+		_ = tx.Rollback()
+		return fmt.Errorf("MEMORY_NOT_FOUND: %s", memoryID)
+	}
+	result, err := tx.ExecContext(ctx, `update memory_item
+		set retention_score = ?, tier = ?, state = ?, effective_reinforcement = ?,
+		    reinforcement_count = ?, last_reinforced_at = ?, updated_at = ?
+		where id = ? and state not in (?, ?)`,
+		update.RetentionScore, update.Tier, update.State, update.EffectiveReinforcement,
+		update.ReinforcementCount, lastReinforced, now.Format(time.RFC3339Nano),
+		memoryID, memory.StateDeleted, memory.StateArchived,
+	)
+	if err != nil {
+		_ = tx.Rollback()
+		return storageErr(err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return storageErr(err)
+	}
+	if affected == 0 {
+		_ = tx.Rollback()
+		return fmt.Errorf("MEMORY_NOT_FOUND: %s", memoryID)
+	}
+	if item.State != update.State {
+		reason := firstNonEmpty(update.StateTransitionReason, "auto_consolidated")
+		if err := insertReviewRecord(ctx, tx, memoryID, "auto_consolidation", "auto_promoted", "retention", reason, item.Content, ""); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return storageErr(tx.Commit())
 }
 
 // DeleteInvalidMemory 将 retention 判定为最终无效的弱记忆置为 deleted。

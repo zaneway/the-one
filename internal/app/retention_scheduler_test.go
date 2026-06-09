@@ -55,26 +55,36 @@ func TestRetentionMaintenanceSchedulerRunsCleanupAndRecompute(t *testing.T) {
 	}
 
 	first := waitRetentionCall(t, runner.calls)
-	if first.Mode != retention.ModeCleanupTemporary || first.DryRun {
-		t.Fatalf("first retention call = %+v, want cleanup_temporary apply", first)
+	if first.Mode != retention.ModeRecomputeScores || first.DryRun {
+		t.Fatalf("first retention call = %+v, want recompute_scores apply", first)
 	}
 	second := waitRetentionCall(t, runner.calls)
-	if second.Mode != retention.ModeRecomputeScores || second.DryRun {
-		t.Fatalf("second retention call = %+v, want recompute_scores apply", second)
+	if second.Mode != retention.ModeCleanupTemporary || second.DryRun {
+		t.Fatalf("second retention call = %+v, want cleanup_temporary apply", second)
 	}
 	third := waitRetentionCall(t, runner.calls)
-	if third.Mode != retention.ModeCleanupTemporary || third.DryRun {
-		t.Fatalf("third retention call = %+v, want interval cleanup_temporary apply", third)
+	if third.Mode != retention.ModeRecomputeScores || third.DryRun {
+		t.Fatalf("third retention call = %+v, want interval recompute_scores apply", third)
 	}
 	fourth := waitRetentionCall(t, runner.calls)
-	if fourth.Mode != retention.ModeRecomputeScores || fourth.DryRun {
-		t.Fatalf("fourth retention call = %+v, want interval recompute_scores apply", fourth)
+	if fourth.Mode != retention.ModeCleanupTemporary || fourth.DryRun {
+		t.Fatalf("fourth retention call = %+v, want interval cleanup_temporary apply", fourth)
+	}
+}
+
+func TestDefaultRetentionConfigEnablesPeriodicReinforcementRefresh(t *testing.T) {
+	cfg := config.Default().Retention
+	if !cfg.JobEnabled {
+		t.Fatal("default retention job disabled; hit reinforcement refresh would never run in serve mode")
+	}
+	if got := retentionJobInterval(cfg.JobIntervalMS); got > time.Minute {
+		t.Fatalf("default retention interval = %s, want at most 1m for hit reinforcement refresh", got)
 	}
 }
 
 func TestRetentionJobIntervalDefaultsWhenUnset(t *testing.T) {
-	if got := retentionJobInterval(0); got != defaultRetentionJobInterval {
-		t.Fatalf("retentionJobInterval(0) = %s, want %s", got, defaultRetentionJobInterval)
+	if got := retentionJobInterval(0); got != time.Minute {
+		t.Fatalf("retentionJobInterval(0) = %s, want %s", got, time.Minute)
 	}
 	if got := retentionJobInterval(25); got != 25*time.Millisecond {
 		t.Fatalf("retentionJobInterval(25) = %s, want 25ms", got)

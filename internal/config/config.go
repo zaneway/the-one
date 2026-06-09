@@ -324,14 +324,14 @@ type DocIndexConfig struct {
 }
 
 // RetentionConfig 保留配置结构体
-// 描述 retention job 默认策略，默认不启动后台 retention job
+// 描述 retention job 默认策略，默认启动轻量后台刷新。
 type RetentionConfig struct {
 	// JobEnabled 是否启用保留任务
-	// 默认 false，不启动后台 retention job
+	// 默认 true，serve 模式周期性消费 access log 并刷新记忆强化字段。
 	JobEnabled bool `yaml:"job_enabled" json:"job_enabled"`
 
 	// JobIntervalMS 保留任务执行间隔（毫秒）
-	// 默认24小时；启用 job 后按该间隔周期触发遗忘清理和分数重算。
+	// 默认 1 分钟；启用 job 后按该间隔周期触发遗忘清理和分数重算。
 	JobIntervalMS int `yaml:"job_interval_ms" json:"job_interval_ms"`
 
 	// TemporaryTTLDays 临时记忆生存天数
@@ -489,8 +489,8 @@ func Default() Config {
 			AggregateBeforeCleanup: true,
 		},
 		Retention: RetentionConfig{
-			JobEnabled:       false,
-			JobIntervalMS:    24 * 60 * 60 * 1000,
+			JobEnabled:       true,
+			JobIntervalMS:    60 * 1000,
 			TemporaryTTLDays: 5,
 			ShortTermTTLDays: 90,
 		},

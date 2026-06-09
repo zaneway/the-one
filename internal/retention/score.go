@@ -54,7 +54,7 @@ func ComputeTier(in Input) string {
 	if in.SourceType == "user_declared" && in.UserConfirmed && in.State == memory.StateStable {
 		return memory.TierDurable
 	}
-	if in.Tier == memory.TierTemporary {
+	if in.Tier == memory.TierTemporary && !hasTemporaryPersistenceSignal(in) {
 		if !in.ValidUntil.IsZero() && in.ValidUntil.After(now) {
 			return memory.TierTemporary
 		}
@@ -84,6 +84,10 @@ func ComputeTier(in Input) string {
 	default:
 		return memory.TierShortTerm
 	}
+}
+
+func hasTemporaryPersistenceSignal(in Input) bool {
+	return in.EffectiveReinforcement >= 3 || in.Access.EffectiveReinforcement >= 3 || in.Access.BaseActivationNorm >= 0.15
 }
 
 func computeSalience(in Input) float64 {

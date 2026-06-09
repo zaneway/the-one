@@ -9,7 +9,7 @@ import (
 	"github.com/zaneway/theone/internal/retention"
 )
 
-const defaultRetentionJobInterval = 24 * time.Hour
+const defaultRetentionRefreshInterval = time.Minute
 
 type retentionMaintenanceRunner interface {
 	RunRetention(ctx context.Context, req retention.RunRequest) (retention.RunResponse, error)
@@ -29,8 +29,8 @@ func runRetentionMaintenanceScheduler(ctx context.Context, interval time.Duratio
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		runRetentionMode(ctx, runner, logger, retention.ModeCleanupTemporary)
 		runRetentionMode(ctx, runner, logger, retention.ModeRecomputeScores)
+		runRetentionMode(ctx, runner, logger, retention.ModeCleanupTemporary)
 	}
 
 	runMaintenance()
@@ -64,7 +64,7 @@ func runRetentionMode(ctx context.Context, runner retentionMaintenanceRunner, lo
 
 func retentionJobInterval(intervalMS int) time.Duration {
 	if intervalMS <= 0 {
-		return defaultRetentionJobInterval
+		return defaultRetentionRefreshInterval
 	}
 	return time.Duration(intervalMS) * time.Millisecond
 }

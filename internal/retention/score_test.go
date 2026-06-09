@@ -70,6 +70,28 @@ func TestComputeTierKeepsTemporaryWhenNotExpired(t *testing.T) {
 	}
 }
 
+func TestComputeTierPromotesTemporaryAfterRepeatedAccess(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	tier := ComputeTier(Input{
+		State:                  memory.StateStable,
+		Tier:                   memory.TierTemporary,
+		MemoryType:             memory.TypeProjectFact,
+		Scope:                  memory.ScopeProjectLocal,
+		RetentionScore:         0.68,
+		EffectiveReinforcement: 3.2,
+		Access: AccessFeedbackSummary{
+			BaseActivationNorm: 0.35,
+		},
+		UserConfirmed: false,
+		Pinned:        false,
+		ValidUntil:    now.Add(24 * time.Hour),
+		Now:           now,
+	})
+	if tier == memory.TierTemporary {
+		t.Fatalf("tier = %q, want repeated access to move temporary memory into persistent lifecycle", tier)
+	}
+}
+
 func TestComputeTierPromotesConfirmedHighScoreToDurable(t *testing.T) {
 	tier := ComputeTier(Input{
 		State:          memory.StateStable,

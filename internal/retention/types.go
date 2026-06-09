@@ -136,6 +136,8 @@ type ListRequest struct {
 type ScoreUpdate struct {
 	RetentionScore         float64
 	Tier                   string
+	State                  string
+	StateTransitionReason  string
 	EffectiveReinforcement float64
 	ReinforcementCount     float64
 	LastReinforcedAt       time.Time

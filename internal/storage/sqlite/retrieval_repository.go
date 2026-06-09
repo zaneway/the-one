@@ -233,10 +233,43 @@ func (s *Store) WriteMemoryAccessLogs(ctx context.Context, records []retrieval.A
 			return nil, storageErr(err)
 		}
 	}
+	if err := updateLastAccessedAt(ctx, tx, prepared); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, storageErr(err)
 	}
 	return prepared, nil
+}
+
+func updateLastAccessedAt(ctx context.Context, tx *sql.Tx, records []retrieval.AccessLogRecord) error {
+	latestByMemory := make(map[string]time.Time, len(records))
+	for _, record := range records {
+		if record.EventWeight <= 0 {
+			continue
+		}
+		switch record.EventType {
+		case "retrieved", "injected", "cited_by_agent", "user_confirmed", "user_declared", "task_success", "repeated_signal", "linked_to_long":
+		default:
+			continue
+		}
+		if existing, ok := latestByMemory[record.MemoryID]; !ok || record.CreatedAt.After(existing) {
+			latestByMemory[record.MemoryID] = record.CreatedAt
+		}
+	}
+	for memoryID, accessedAt := range latestByMemory {
+		if _, err := tx.ExecContext(ctx, `update memory_item
+			set last_accessed_at = ?
+			where id = ?
+			  and state not in (?, ?)
+			  and (last_accessed_at is null or julianday(last_accessed_at) < julianday(?))`,
+			accessedAt.Format(time.RFC3339Nano), memoryID, memory.StateDeleted, memory.StateArchived, accessedAt.Format(time.RFC3339Nano),
+		); err != nil {
+			return storageErr(err)
+		}
+	}
+	return nil
 }
 
 // ListMemoryAccessLogs 按 trace 或 memory 查询 access log 诊断记录。

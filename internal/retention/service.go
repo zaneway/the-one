@@ -132,6 +132,7 @@ func (s *Service) runRecomputeScores(ctx context.Context, req RunRequest) (RunRe
 		score := ComputeScore(input)
 		input.RetentionScore = score
 		tier := ComputeTier(input)
+		nextState, stateReason := computeStateTransition(record, score, access, relations)
 		deleteInvalid := shouldDeleteInvalidMemory(record, score, access, relations)
 		reason := retentionReason(score, deleteInvalid)
 		action := ActionUpdateScore
@@ -159,6 +160,8 @@ func (s *Service) runRecomputeScores(ctx context.Context, req RunRequest) (RunRe
 		update := ScoreUpdate{
 			RetentionScore:         score,
 			Tier:                   tier,
+			State:                  nextState,
+			StateTransitionReason:  stateReason,
 			EffectiveReinforcement: access.EffectiveReinforcement,
 			ReinforcementCount:     access.ReinforcementCount,
 			UpdatedAt:              now,
@@ -173,6 +176,44 @@ func (s *Service) runRecomputeScores(ctx context.Context, req RunRequest) (RunRe
 		resp.Processed++
 	}
 	return resp, nil
+}
+
+func computeStateTransition(record MemoryRecord, score float64, access AccessFeedbackSummary, relations RelationSignals) (string, string) {
+	if record.State != memory.StateProvisional && record.State != memory.StatePendingReview {
+		return "", ""
+	}
+	if record.Scope == memory.ScopeSession {
+		return "", ""
+	}
+	if !autoPromotableMemoryType(record.MemoryType) {
+		return "", ""
+	}
+	if relations.IsSuperseded || relations.UnresolvedConflictCount > 0 || relations.ContradictingCount > 0 {
+		return "", ""
+	}
+	if access.NegativePenalty > 0 {
+		return "", ""
+	}
+	switch record.State {
+	case memory.StateProvisional:
+		if score >= 0.65 && (access.EffectiveReinforcement >= 3 || access.BaseActivationNorm >= 0.15) {
+			return memory.StateStable, "auto_consolidated_from_provisional"
+		}
+	case memory.StatePendingReview:
+		if score >= 0.80 && access.EffectiveReinforcement >= 5 {
+			return memory.StateStable, "auto_consolidated_from_pending_review"
+		}
+	}
+	return "", ""
+}
+
+func autoPromotableMemoryType(memoryType string) bool {
+	switch memoryType {
+	case memory.TypePreference, memory.TypeProcedure, memory.TypeFailure, memory.TypeProjectFact:
+		return true
+	default:
+		return false
+	}
 }
 
 func retentionReason(score float64, deleteInvalid bool) string {
@@ -201,7 +242,7 @@ func shouldDeleteInvalidMemory(record MemoryRecord, score float64, access Access
 	case memory.TypeDecision, memory.TypeConstraint, memory.TypePreference, memory.TypeRequirement, memory.TypeReviewCheckpoint:
 		return false
 	}
-	if access.EffectiveReinforcement > 0 || access.ReinforcementCount > 0 {
+	if access.BaseActivationNorm > 0.05 {
 		return false
 	}
 	if relations.SupportingCount > 0 || relations.LinkedLongTermCount > 0 {
