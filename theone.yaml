@@ -111,8 +111,10 @@ retrieval:
   online_timeout_ms: 100
 
 # ── 保留策略 ──────────────────────────────────────────────
-# memory.retention.run（cleanup_temporary）使用的 TTL；无后台 job
+# serve 模式周期性消费 access log，刷新 retention_score 与强化字段。
 retention:
+  job_enabled: true
+  job_interval_ms: 60000
   temporary_ttl_days: 5
 
 # ── 处理器配置 ────────────────────────────────────────────
