@@ -31,6 +31,10 @@ const (
 	// Agent回复的摘要，取决于Agent能力
 	EventAgentResponseSummary = "agent.response.summary"
 
+	// EventTurnCompleted 一轮问答完成事件
+	// 将用户请求与 Agent 应答作为同一 turn 事实写入，避免 base turn 拆成两条 raw_event。
+	EventTurnCompleted = "turn.completed"
+
 	// EventToolCall 工具调用事件
 	// 工具调用时触发，记录工具名和输入摘要
 	EventToolCall = "tool.call"

@@ -12,7 +12,7 @@ set
     when r.event_type = 'session.end' then 'session_end'
     when r.event_type = 'file.edit.summary' then 'file_edit'
     when r.event_type = 'tool.result.summary' then 'post_tool'
-    when r.event_type = 'agent.response.summary' then 'turn_end'
+    when r.event_type in ('agent.response.summary', 'turn.completed') then 'turn_end'
     else 'unknown'
   end,
   source_producer = case
@@ -20,8 +20,8 @@ set
     when r.source_channel = 'mcp_tool' then 'mcp:memory_observe'
     when r.event_type = 'session.start' then r.agent_type || '_hook:SessionStart'
     when r.event_type = 'session.end' then r.agent_type || '_hook:SessionEnd'
-    when r.event_type = 'agent.response.summary' and r.agent_type = 'cursor' then 'cursor_hook:afterAgentResponse'
-    when r.event_type = 'agent.response.summary' then r.agent_type || '_hook:Stop'
+    when r.event_type in ('agent.response.summary', 'turn.completed') and r.agent_type = 'cursor' then 'cursor_hook:afterAgentResponse'
+    when r.event_type in ('agent.response.summary', 'turn.completed') then r.agent_type || '_hook:Stop'
     when r.event_type = 'tool.result.summary' and r.agent_type = 'cursor' then 'cursor_hook:afterMCPExecution'
     when r.event_type = 'tool.result.summary' then r.agent_type || '_hook:PostToolUse'
     when r.event_type = 'file.edit.summary' and r.agent_type = 'cursor' then 'cursor_hook:afterFileEdit'

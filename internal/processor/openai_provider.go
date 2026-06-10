@@ -11,7 +11,6 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/zaneway/theone/internal/capture"
@@ -88,7 +87,7 @@ func (p OpenAIProvider) Name() string {
 	return OpenAIProviderName
 }
 
-// CheckHealth 对 OpenAI Responses API 执行轻量结构化探测。
+// CheckHealth 对 OpenAI 兼容 Chat Completions API 执行轻量结构化探测。
 // 该方法只验证外部模型可达性、认证和模型配置，不抽取业务 evidence，也不写入任何存储。
 func (p OpenAIProvider) CheckHealth(ctx context.Context) (HealthStatus, error) {
 	startedAt := time.Now()
@@ -264,13 +263,21 @@ func (p OpenAIProvider) callStructured(ctx context.Context, instructions string,
 	if err != nil {
 		return "", fmt.Errorf("PROVIDER_INPUT_INVALID: encode openai payload: %w", err)
 	}
+	systemContent, err := chatCompletionSystemContent(instructions, schemaName, schema)
+	if err != nil {
+		return "", fmt.Errorf("PROVIDER_INPUT_INVALID: encode openai system content: %w", err)
+	}
+	jsonObjectFormat := shared.NewResponseFormatJSONObjectParam()
 	requestBody, err := json.Marshal(map[string]any{
-		"model":             p.model,
-		"schema_name":       schemaName,
-		"instructions":      instructions,
-		"input":             string(data),
-		"max_output_tokens": p.maxOutputTokens,
-		"temperature":       0,
+		"model":       p.model,
+		"schema_name": schemaName,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemContent},
+			{"role": "user", "content": string(data)},
+		},
+		"max_tokens":      p.maxOutputTokens,
+		"temperature":     0,
+		"response_format": jsonObjectFormat,
 	})
 	if err != nil {
 		return "", fmt.Errorf("PROVIDER_INPUT_INVALID: encode openai request log body: %w", err)
@@ -283,14 +290,16 @@ func (p OpenAIProvider) callStructured(ctx context.Context, instructions string,
 	)
 	reqCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
-	resp, err := p.client.Responses.New(reqCtx, responses.ResponseNewParams{
-		Model:           shared.ResponsesModel(p.model),
-		Instructions:    openai.String(instructions),
-		Input:           responses.ResponseNewParamsInputUnion{OfString: openai.String(string(data))},
-		MaxOutputTokens: openai.Int(p.maxOutputTokens),
-		Temperature:     openai.Float(0),
-		Text: responses.ResponseTextConfigParam{
-			Format: responses.ResponseFormatTextConfigParamOfJSONSchema(schemaName, schema),
+	resp, err := p.client.Chat.Completions.New(reqCtx, openai.ChatCompletionNewParams{
+		Model: shared.ChatModel(p.model),
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage(systemContent),
+			openai.UserMessage(string(data)),
+		},
+		MaxTokens:   openai.Int(p.maxOutputTokens),
+		Temperature: openai.Float(0),
+		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
+			OfJSONObject: &jsonObjectFormat,
 		},
 	}, option.WithRequestTimeout(p.timeout))
 	if err != nil {
@@ -300,37 +309,57 @@ func (p OpenAIProvider) callStructured(ctx context.Context, instructions string,
 			"duration_ms", time.Since(startedAt).Milliseconds(),
 			"error", err.Error(),
 		)
-		return "", fmt.Errorf("PROVIDER_UNAVAILABLE: openai responses request failed: %w", err)
+		return "", fmt.Errorf("PROVIDER_UNAVAILABLE: openai chat completions request failed: %w", err)
 	}
-	out := strings.TrimSpace(resp.OutputText())
+	if len(resp.Choices) == 0 {
+		p.logError("openai provider response invalid",
+			"schema_name", schemaName,
+			"model", p.model,
+			"duration_ms", time.Since(startedAt).Milliseconds(),
+			"response_body", providerChatCompletionLogBody(resp, ""),
+			"error", "choices is empty",
+		)
+		return "", fmt.Errorf("PROVIDER_INVALID_OUTPUT: openai response choices is empty")
+	}
+	out := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if out == "" {
 		p.logError("openai provider response invalid",
 			"schema_name", schemaName,
 			"model", p.model,
 			"duration_ms", time.Since(startedAt).Milliseconds(),
-			"response_body", providerResponseLogBody(resp, ""),
-			"error", "output_text is empty",
+			"response_body", providerChatCompletionLogBody(resp, ""),
+			"error", "message content is empty",
 		)
-		return "", fmt.Errorf("PROVIDER_INVALID_OUTPUT: openai response output_text is empty")
+		return "", fmt.Errorf("PROVIDER_INVALID_OUTPUT: openai response message content is empty")
 	}
 	p.logInfo("openai provider response",
 		"schema_name", schemaName,
 		"model", p.model,
 		"duration_ms", time.Since(startedAt).Milliseconds(),
-		"response_body", providerResponseLogBody(resp, out),
+		"response_body", providerChatCompletionLogBody(resp, out),
 	)
 	return out, nil
 }
 
-func providerResponseLogBody(resp *responses.Response, outputText string) string {
+func chatCompletionSystemContent(instructions, schemaName string, schema map[string]any) (string, error) {
+	schemaJSON, err := json.Marshal(schema)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(instructions) + "\n\n" +
+		"Return exactly one JSON object matching schema " + schemaName + ". " +
+		"Do not include markdown fences or any text outside the JSON object.\n" +
+		string(schemaJSON), nil
+}
+
+func providerChatCompletionLogBody(resp *openai.ChatCompletion, outputText string) string {
 	if resp == nil {
-		return providerLogBody(fmt.Sprintf(`{"output_text":%q}`, outputText))
+		return providerLogBody(fmt.Sprintf(`{"content":%q}`, outputText))
 	}
 	body, err := json.Marshal(map[string]any{
 		"response_id": resp.ID,
-		"status":      resp.Status,
 		"model":       resp.Model,
-		"output_text": outputText,
+		"content":     outputText,
 		"usage":       resp.Usage,
 	})
 	if err != nil {

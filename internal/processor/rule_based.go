@@ -32,6 +32,7 @@ func (RuleBasedProvider) Name() string {
 //   - agent_decision：Agent 决策，合并 decision_summary 和 reason_summary
 //   - tool_result_summary：仅保留失败的工具调用（exit_code!=0 或包含错误关键词）
 //   - task_result / session_end：任务/会话结束摘要，直接抽取
+//   - turn_completed：一轮用户请求 + Agent 应答，仅保留包含需求/约束/结论/决策等高信号的摘要
 //   - file_edit_summary：仅保留包含决策/约束/失败等高信号关键词的编辑摘要
 //   - conversation_message：仅保留包含语义信号（记住、必须、需求等）的对话
 //   - agent_response_summary：仅保留包含结论/决策/约束等高信号的响应摘要
@@ -66,6 +67,11 @@ func (RuleBasedProvider) ExtractEvidence(ctx context.Context, input EvidenceInpu
 		return evidenceIfStatement("task_result", firstNonEmpty(input.Task.OutcomeSummary, statement), keywords, spans, sourceRef, input, false), nil
 	case capture.EventSessionEnd:
 		return evidenceIfStatement("session_summary", statement, keywords, spans, sourceRef, input, false), nil
+	case capture.EventTurnCompleted:
+		if !hasSemanticSignal(statement) && !hasAnySignal(statement, "结论", "决策", "约束", "复查", "假设", "待确认", "conclusion", "decision", "constraint", "review", "assumption") {
+			return nil, nil
+		}
+		return evidenceIfStatement("agent_summary", statement, keywords, spans, sourceRef, input, false), nil
 	case capture.EventFileEditSummary:
 		// 普通文件编辑无记忆价值，仅保留包含决策/约束/失败信号的编辑
 		if !hasAnySignal(statement, "原因", "决策", "约束", "失败", "修复", "because", "decision", "constraint", "failure", "fix") {
@@ -98,7 +104,7 @@ func (RuleBasedProvider) ExtractEvidence(ctx context.Context, input EvidenceInpu
 //     （开放问题 → open_issue，假设 → assumption，需求 → requirement，约束 → constraint，偏好 → preference）
 //   - agent_decision：固定为 TypeDecision + ScopeProjectLocal（架构决策）
 //   - tool_result_summary：失败的工具调用，重复失败 → TypeFailure，单次失败 → TypeTemporaryState
-//   - task_result / session_end / agent_response_summary：先检测是否为设计复查（→ checkpoint），否则按类型处理
+//   - task_result / session_end / turn_completed / agent_response_summary：先检测是否为设计复查（→ checkpoint），否则按类型处理
 func (RuleBasedProvider) GenerateCandidates(ctx context.Context, input CandidateInput) ([]MemoryCandidate, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -165,7 +171,7 @@ func (RuleBasedProvider) GenerateCandidates(ctx context.Context, input Candidate
 			return checkpointCandidate(input, statement, keywords, evidenceIDs)
 		}
 		return []MemoryCandidate{baseCandidate(input, statement, memory.TypeSessionSummary, memory.ScopeSession, keywords, evidenceIDs, "session_summary", eventScore)}, nil
-	case capture.EventAgentResponseSummary:
+	case capture.EventTurnCompleted, capture.EventAgentResponseSummary:
 		if isDesignReview(input.RawEvent, input.Task, statement) {
 			return checkpointCandidate(input, statement, keywords, evidenceIDs)
 		}

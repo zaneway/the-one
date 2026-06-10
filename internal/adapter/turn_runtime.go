@@ -3,6 +3,7 @@ package adapter
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -166,46 +167,8 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 	signature := turnSignature(payload.TurnID, payload.UserSummary, payload.AgentSummary)
 	emitBaseTurn := !payload.SkipBaseTurn && (payload.IsSubstantive || hasHighSignal)
 	if emitBaseTurn && !(payload.TurnID != "" && payload.TurnID == state.LastTurnID && signature == state.LastTurnSig) {
-		if strings.TrimSpace(payload.UserCorrectionSummary) != "" {
-			userReq := common
-			userReq.EventType = capture.EventUserCorrection
-			userReq.Actor = capture.ActorUser
-			userReq.Keywords = semanticKeywords(firstNonEmptySlice(payload.UserKeywords, payload.Keywords))
-			userReq.SalientSpans = firstNonEmptySlice(payload.UserSalientSpans, payload.SalientSpans)
-			userReq.ContentSummary = capture.EnsureStructuredContentSummary(userReq.EventType, payload.UserCorrectionSummary)
-			applyTurnRawPayload(&userReq, payload, payload.UserRawPayload, payload.UserRawPayloadHash, payload.UserTruncation)
-			requests = append(requests, userReq)
-		} else if strings.TrimSpace(payload.UserDeclarationSummary) != "" {
-			userReq := common
-			userReq.EventType = capture.EventUserDeclaration
-			userReq.Actor = capture.ActorUser
-			userReq.Keywords = semanticKeywords(firstNonEmptySlice(payload.UserKeywords, payload.Keywords))
-			userReq.SalientSpans = firstNonEmptySlice(payload.UserSalientSpans, payload.SalientSpans)
-			userReq.ContentSummary = capture.EnsureStructuredContentSummary(userReq.EventType, payload.UserDeclarationSummary)
-			applyTurnRawPayload(&userReq, payload, payload.UserRawPayload, payload.UserRawPayloadHash, payload.UserTruncation)
-			requests = append(requests, userReq)
-		} else if strings.TrimSpace(payload.UserSummary) != "" {
-			userReq := common
-			userReq.EventType = capture.EventConversationMessage
-			userReq.Actor = capture.ActorUser
-			userReq.Keywords = semanticKeywords(firstNonEmptySlice(payload.UserKeywords, payload.Keywords))
-			userReq.SalientSpans = firstNonEmptySlice(payload.UserSalientSpans, payload.SalientSpans)
-			userReq.ContentSummary = capture.EnsureStructuredContentSummary(userReq.EventType, payload.UserSummary)
-			userReq.SourceRefs = appendSemanticDigestSourceRef(userReq.SourceRefs, "user_prompt", payload.UserPromptChars, payload.SemanticSummaryVersion)
-			applyTurnRawPayload(&userReq, payload, payload.UserRawPayload, payload.UserRawPayloadHash, payload.UserTruncation)
-			requests = append(requests, userReq)
-		}
-		if strings.TrimSpace(payload.AgentSummary) != "" {
-			agentReq := common
-			agentReq.EventType = capture.EventAgentResponseSummary
-			agentReq.Actor = capture.ActorAgent
-			agentReq.Keywords = semanticKeywords(firstNonEmptySlice(payload.AgentKeywords, payload.Keywords))
-			agentReq.SalientSpans = firstNonEmptySlice(payload.AgentSalientSpans, payload.SalientSpans)
-			agentReq.ContentSummary = capture.EnsureStructuredContentSummary(agentReq.EventType, payload.AgentSummary)
-			agentReq.SourceRefs = appendSemanticDigestSourceRef(agentReq.SourceRefs, "agent_response", payload.AgentResponseChars, payload.SemanticSummaryVersion)
-			agentReq.SourceRefs = appendRetrievalSourceRefs(agentReq.SourceRefs, payload)
-			applyTurnRawPayload(&agentReq, payload, payload.AgentRawPayload, payload.AgentRawPayloadHash, payload.AgentTruncation)
-			requests = append(requests, agentReq)
+		if turnReq, ok := buildBaseTurnRequest(common, payload); ok {
+			requests = append(requests, turnReq)
 		}
 		state.LastTurnID = payload.TurnID
 		state.LastTurnSig = signature
@@ -265,10 +228,80 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 	return requests, nil
 }
 
+func buildBaseTurnRequest(common capture.ObserveRequest, payload TurnPayload) (capture.ObserveRequest, bool) {
+	userEventType, userSummary := userTurnSummary(payload)
+	agentSummary := strings.TrimSpace(payload.AgentSummary)
+	if userSummary == "" && agentSummary == "" {
+		return capture.ObserveRequest{}, false
+	}
+	req := common
+	req.EventType = baseTurnEventType(userEventType)
+	req.Actor = baseTurnActor(req.EventType)
+	req.Keywords = semanticKeywords(mergeStringSlices(
+		firstNonEmptySlice(payload.UserKeywords, payload.Keywords),
+		firstNonEmptySlice(payload.AgentKeywords, payload.Keywords),
+	))
+	req.SalientSpans = mergeStringSlices(
+		firstNonEmptySlice(payload.UserSalientSpans, payload.SalientSpans),
+		firstNonEmptySlice(payload.AgentSalientSpans, payload.SalientSpans),
+	)
+	req.ContentSummary = turnContentSummary(userEventType, userSummary, agentSummary)
+	req.SourceRefs = appendSemanticDigestSourceRef(req.SourceRefs, "user_prompt", payload.UserPromptChars, payload.SemanticSummaryVersion)
+	req.SourceRefs = appendSemanticDigestSourceRef(req.SourceRefs, "agent_response", payload.AgentResponseChars, payload.SemanticSummaryVersion)
+	req.SourceRefs = appendRetrievalSourceRefs(req.SourceRefs, payload)
+	applyCombinedTurnRawPayload(&req, payload)
+	return req, true
+}
+
+func userTurnSummary(payload TurnPayload) (string, string) {
+	switch {
+	case strings.TrimSpace(payload.UserCorrectionSummary) != "":
+		return capture.EventUserCorrection, strings.TrimSpace(payload.UserCorrectionSummary)
+	case strings.TrimSpace(payload.UserDeclarationSummary) != "":
+		return capture.EventUserDeclaration, strings.TrimSpace(payload.UserDeclarationSummary)
+	default:
+		return capture.EventConversationMessage, strings.TrimSpace(payload.UserSummary)
+	}
+}
+
+func baseTurnEventType(userEventType string) string {
+	switch userEventType {
+	case capture.EventUserCorrection, capture.EventUserDeclaration:
+		return userEventType
+	default:
+		return capture.EventTurnCompleted
+	}
+}
+
+func baseTurnActor(eventType string) string {
+	switch eventType {
+	case capture.EventUserCorrection, capture.EventUserDeclaration:
+		return capture.ActorUser
+	default:
+		return capture.ActorAdapter
+	}
+}
+
+func turnContentSummary(userEventType, userSummary, agentSummary string) string {
+	parts := make([]string, 0, 2)
+	if strings.TrimSpace(userSummary) != "" {
+		parts = append(parts, capture.EnsureStructuredContentSummary(userEventType, userSummary))
+	}
+	if strings.TrimSpace(agentSummary) != "" {
+		parts = append(parts, capture.EnsureStructuredContentSummary(capture.EventAgentResponseSummary, agentSummary))
+	}
+	return strings.Join(parts, "\n")
+}
+
 func applyTurnRawPayload(req *capture.ObserveRequest, payload TurnPayload, rawPayload, rawPayloadHash string, truncation capture.TruncationPolicy) {
 	if truncation == (capture.TruncationPolicy{}) {
 		truncation = payload.TruncationPolicy
 	}
+	applyAtomicRawPayload(req, rawPayload, payload.PayloadSchema, rawPayloadHash, payload.RedactionState, payload.RedactionPolicy, truncation)
+}
+
+func applyCombinedTurnRawPayload(req *capture.ObserveRequest, payload TurnPayload) {
+	rawPayload, rawPayloadHash, truncation := combinedTurnRawPayload(payload)
 	applyAtomicRawPayload(req, rawPayload, payload.PayloadSchema, rawPayloadHash, payload.RedactionState, payload.RedactionPolicy, truncation)
 }
 
@@ -279,6 +312,55 @@ func applyAtomicRawPayload(req *capture.ObserveRequest, rawPayload, payloadSchem
 	req.RedactionState = strings.TrimSpace(redactionState)
 	req.RedactionPolicy = strings.TrimSpace(redactionPolicy)
 	req.TruncationPolicy = truncation
+}
+
+func combinedTurnRawPayload(payload TurnPayload) (string, string, capture.TruncationPolicy) {
+	values := map[string]any{}
+	if userRaw := rawPayloadValue(payload.UserRawPayload); userRaw != nil {
+		values["user"] = userRaw
+	}
+	if agentRaw := rawPayloadValue(payload.AgentRawPayload); agentRaw != nil {
+		values["agent"] = agentRaw
+	}
+	if len(values) == 0 {
+		return "", "", payload.TruncationPolicy
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return "", "", payload.TruncationPolicy
+	}
+	sum := sha256.Sum256(data)
+	return string(data), "sha256:" + hex.EncodeToString(sum[:]), mergeTruncation(payload.TruncationPolicy, payload.UserTruncation, payload.AgentTruncation)
+}
+
+func rawPayloadValue(raw string) any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	if json.Valid([]byte(raw)) {
+		return json.RawMessage(raw)
+	}
+	return raw
+}
+
+func mergeTruncation(base capture.TruncationPolicy, values ...capture.TruncationPolicy) capture.TruncationPolicy {
+	out := base
+	for _, value := range values {
+		if value == (capture.TruncationPolicy{}) {
+			continue
+		}
+		out.Truncated = out.Truncated || value.Truncated
+		out.OriginalSizeBytes += value.OriginalSizeBytes
+		out.StoredSizeBytes += value.StoredSizeBytes
+		if value.MaxSizeBytes > out.MaxSizeBytes {
+			out.MaxSizeBytes = value.MaxSizeBytes
+		}
+		if strings.TrimSpace(value.Reason) != "" {
+			out.Reason = joinNonEmpty(out.Reason, value.Reason)
+		}
+	}
+	return out
 }
 
 // isTerminalStatus 判断任务状态是否为终态。
@@ -323,6 +405,35 @@ func firstNonEmptySlice(values ...[]string) []string {
 		}
 	}
 	return nil
+}
+
+func mergeStringSlices(values ...[]string) []string {
+	out := make([]string, 0)
+	seen := map[string]struct{}{}
+	for _, group := range values {
+		for _, value := range group {
+			item := strings.TrimSpace(value)
+			if item == "" {
+				continue
+			}
+			if _, ok := seen[item]; ok {
+				continue
+			}
+			seen[item] = struct{}{}
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func joinNonEmpty(values ...string) string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return strings.Join(out, "; ")
 }
 
 func semanticKeywords(values []string) []string {

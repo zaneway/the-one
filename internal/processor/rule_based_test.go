@@ -146,6 +146,25 @@ func TestRuleBasedFiltersCaptureMetadataKeywordsAndNoisySpans(t *testing.T) {
 	}
 }
 
+func TestRuleBasedTurnCompletedExtractsHighSignalEvidence(t *testing.T) {
+	provider := NewRuleBasedProvider()
+	event := rawEvent(capture.EventTurnCompleted, "【事件】用户要求一轮问答只写一条 raw_event。\n【结论/决策】采用 turn.completed 合并用户请求和助手应答。")
+	event.KeywordsJSON = jsonArray("raw_event", "turn.completed", "adapter")
+	event.SalientSpansJSON = jsonArray("一轮问答只写一条 raw_event", "采用 turn.completed")
+
+	evidence := extractOne(t, provider, event)
+	if evidence.SourceType != "agent_summary" {
+		t.Fatalf("source type = %q, want agent_summary", evidence.SourceType)
+	}
+	candidates := generate(t, provider, event, evidence)
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count = %d, want 1", len(candidates))
+	}
+	if candidates[0].MemoryType != memory.TypeDecision {
+		t.Fatalf("candidate type = %s, want decision", candidates[0].MemoryType)
+	}
+}
+
 func TestRuleBasedFailedToolTemporaryCandidate(t *testing.T) {
 	provider := NewRuleBasedProvider()
 	event := rawEvent(capture.EventToolResultSummary, "")

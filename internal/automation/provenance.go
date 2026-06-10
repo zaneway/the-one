@@ -55,6 +55,11 @@ func inferProducerFromRawEvent(rawEvent capture.RawEvent) string {
 			return "cursor_hook:afterAgentResponse"
 		}
 		return agentType + "_hook:Stop"
+	case capture.EventTurnCompleted:
+		if agentType == "cursor" {
+			return "cursor_hook:afterAgentResponse"
+		}
+		return agentType + "_hook:Stop"
 	case capture.EventToolResultSummary:
 		if agentType == "cursor" {
 			return "cursor_hook:afterMCPExecution"
@@ -130,6 +135,8 @@ func hookPhaseFromSource(producer, hookName string, rawEvent capture.RawEvent) s
 		return HookPhaseSessionStart
 	case rawEvent.EventType == capture.EventSessionEnd:
 		return HookPhaseSessionEnd
+	case rawEvent.EventType == capture.EventTurnCompleted:
+		return HookPhaseTurnEnd
 	default:
 		return HookPhaseUnknown
 	}

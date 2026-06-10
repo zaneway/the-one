@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,9 +45,10 @@ func TestTurnRuntimeBuildObserveRequests(t *testing.T) {
 		t.Fatalf("requests len = %d, want >= 5", len(requests))
 	}
 	assertHasEvent(t, requests, capture.EventTaskStart)
-	assertHasEvent(t, requests, capture.EventConversationMessage)
-	assertHasEvent(t, requests, capture.EventAgentResponseSummary)
-	assertAgentHasMemoryContextRef(t, requests)
+	assertHasEvent(t, requests, capture.EventTurnCompleted)
+	assertMissingEvent(t, requests, capture.EventConversationMessage)
+	assertMissingEvent(t, requests, capture.EventAgentResponseSummary)
+	assertTurnHasMemoryContextRef(t, requests)
 	assertMissingEvent(t, requests, capture.EventToolResultSummary)
 	assertHasEvent(t, requests, capture.EventFileEditSummary)
 	assertHasEvent(t, requests, capture.EventAgentDecision)
@@ -79,12 +81,12 @@ func TestTurnRuntimeDebounceSameTurn(t *testing.T) {
 	if len(first) == 0 {
 		t.Fatalf("first requests len = 0, want > 0")
 	}
-	if hasEvent(second, capture.EventConversationMessage) || hasEvent(second, capture.EventAgentResponseSummary) {
+	if hasEvent(second, capture.EventTurnCompleted) {
 		t.Fatalf("second requests should be debounced for base turn events, got %+v", second)
 	}
 }
 
-func TestTurnRuntimeWrapsLegacyAgentSummaryAsStructuredContent(t *testing.T) {
+func TestTurnRuntimeWrapsLegacyTurnSummaryAsStructuredContent(t *testing.T) {
 	store := NewFileStateStore(filepath.Join(t.TempDir(), "runtime-state"))
 	runtime := NewTurnRuntime(store)
 	requests, err := runtime.BuildObserveRequests(TurnPayload{
@@ -103,14 +105,14 @@ func TestTurnRuntimeWrapsLegacyAgentSummaryAsStructuredContent(t *testing.T) {
 		t.Fatalf("BuildObserveRequests() error = %v", err)
 	}
 	for _, req := range requests {
-		if req.EventType == capture.EventAgentResponseSummary {
-			if !capture.HasStructuredContentSummaryTag(req.ContentSummary) {
-				t.Fatalf("agent content_summary = %q, want structured tag", req.ContentSummary)
+		if req.EventType == capture.EventTurnCompleted {
+			if !capture.HasStructuredContentSummaryTag(req.ContentSummary) || !strings.Contains(req.ContentSummary, "已完成捕获规则更新") {
+				t.Fatalf("turn content_summary = %q, want structured turn summary", req.ContentSummary)
 			}
 			return
 		}
 	}
-	t.Fatalf("missing agent.response.summary event: %+v", requests)
+	t.Fatalf("missing turn.completed event: %+v", requests)
 }
 
 func TestTurnRuntimeUsesActorSpecificKeywordsAndSpans(t *testing.T) {
@@ -137,19 +139,12 @@ func TestTurnRuntimeUsesActorSpecificKeywordsAndSpans(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildObserveRequests() error = %v", err)
 	}
-	userReq := findEvent(t, requests, capture.EventConversationMessage)
-	agentReq := findEvent(t, requests, capture.EventAgentResponseSummary)
-	if strings.Join(userReq.SalientSpans, "|") != "用户要求修复 Codex hook 记忆污染" {
-		t.Fatalf("user salient_spans = %+v", userReq.SalientSpans)
+	turnReq := findEvent(t, requests, capture.EventTurnCompleted)
+	if strings.Join(turnReq.SalientSpans, "|") != "用户要求修复 Codex hook 记忆污染|TurnRuntime 按 actor 分离 spans" {
+		t.Fatalf("turn salient_spans = %+v", turnReq.SalientSpans)
 	}
-	if strings.Join(agentReq.SalientSpans, "|") != "TurnRuntime 按 actor 分离 spans" {
-		t.Fatalf("agent salient_spans = %+v", agentReq.SalientSpans)
-	}
-	if strings.Join(userReq.Keywords, "|") != "codex|用户需求" {
-		t.Fatalf("user keywords = %+v", userReq.Keywords)
-	}
-	if strings.Join(agentReq.Keywords, "|") != "TurnRuntime|salient_spans" {
-		t.Fatalf("agent keywords = %+v", agentReq.Keywords)
+	if strings.Join(turnReq.Keywords, "|") != "codex|用户需求|TurnRuntime|salient_spans" {
+		t.Fatalf("turn keywords = %+v", turnReq.Keywords)
 	}
 }
 
@@ -174,10 +169,9 @@ func TestTurnRuntimeRecordsSemanticDigestSourceRefs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildObserveRequests() error = %v", err)
 	}
-	userReq := findEvent(t, requests, capture.EventConversationMessage)
-	agentReq := findEvent(t, requests, capture.EventAgentResponseSummary)
-	assertHasSourceRef(t, userReq, "user_prompt", 42)
-	assertHasSourceRef(t, agentReq, "agent_response", 128)
+	turnReq := findEvent(t, requests, capture.EventTurnCompleted)
+	assertHasSourceRef(t, turnReq, "user_prompt", 42)
+	assertHasSourceRef(t, turnReq, "agent_response", 128)
 }
 
 func TestTurnRuntimeCarriesRawPayloadMetadata(t *testing.T) {
@@ -202,16 +196,22 @@ func TestTurnRuntimeCarriesRawPayloadMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildObserveRequests() error = %v", err)
 	}
-	userReq := findEvent(t, requests, capture.EventConversationMessage)
-	agentReq := findEvent(t, requests, capture.EventAgentResponseSummary)
-	if userReq.RawPayloadJSON != `{"message":"用户要求保留原始输入"}` || agentReq.RawPayloadJSON != `{"message":"已保留原始输出"}` {
-		t.Fatalf("raw payloads user=%q agent=%q", userReq.RawPayloadJSON, agentReq.RawPayloadJSON)
+	turnReq := findEvent(t, requests, capture.EventTurnCompleted)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(turnReq.RawPayloadJSON), &raw); err != nil {
+		t.Fatalf("raw payload json = %q: %v", turnReq.RawPayloadJSON, err)
 	}
-	if userReq.PayloadSchema != "turn.completed.v1" || agentReq.PayloadSchema != "turn.completed.v1" {
-		t.Fatalf("payload schemas user=%q agent=%q", userReq.PayloadSchema, agentReq.PayloadSchema)
+	if string(raw["user"]) != `{"message":"用户要求保留原始输入"}` || string(raw["agent"]) != `{"message":"已保留原始输出"}` {
+		t.Fatalf("raw payload = %q", turnReq.RawPayloadJSON)
 	}
-	if userReq.RedactionState != capture.RedactionStateRaw || agentReq.RedactionState != capture.RedactionStateRaw {
-		t.Fatalf("redaction states user=%q agent=%q", userReq.RedactionState, agentReq.RedactionState)
+	if turnReq.PayloadSchema != "turn.completed.v1" {
+		t.Fatalf("payload schema=%q", turnReq.PayloadSchema)
+	}
+	if turnReq.RawPayloadHash == "" {
+		t.Fatal("turn raw payload hash is empty")
+	}
+	if turnReq.RedactionState != capture.RedactionStateRaw {
+		t.Fatalf("redaction state=%q", turnReq.RedactionState)
 	}
 }
 
@@ -283,10 +283,10 @@ func hasEvent(requests []capture.ObserveRequest, eventType string) bool {
 	return false
 }
 
-func assertAgentHasMemoryContextRef(t *testing.T, requests []capture.ObserveRequest) {
+func assertTurnHasMemoryContextRef(t *testing.T, requests []capture.ObserveRequest) {
 	t.Helper()
 	for _, req := range requests {
-		if req.EventType != capture.EventAgentResponseSummary {
+		if req.EventType != capture.EventTurnCompleted {
 			continue
 		}
 		for _, ref := range req.SourceRefs {
@@ -295,5 +295,5 @@ func assertAgentHasMemoryContextRef(t *testing.T, requests []capture.ObserveRequ
 			}
 		}
 	}
-	t.Fatalf("agent.response.summary missing memory_context source_ref")
+	t.Fatalf("turn.completed missing memory_context source_ref")
 }

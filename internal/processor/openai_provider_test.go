@@ -18,14 +18,14 @@ import (
 func TestOpenAIProviderEnhanceObserveSimplifiesAndExtractsKeywords(t *testing.T) {
 	var request map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" {
-			t.Fatalf("path = %q, want /responses", r.URL.Path)
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q, want /chat/completions", r.URL.Path)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(responseJSON(`{
+		_, _ = w.Write([]byte(chatCompletionResponseJSON(`{
 			"input_summary": "用户要求写入前做语义简化。",
 			"output_summary": "",
 			"content_summary": "【事实】用户要求记忆写入前做语义等价简化。\n【约束】基于简化语义提取关键词。",
@@ -62,16 +62,13 @@ func TestOpenAIProviderEnhanceObserveSimplifiesAndExtractsKeywords(t *testing.T)
 	if strings.Join(out.Keywords, ",") != "语义简化,关键词提取" {
 		t.Fatalf("keywords = %+v, want semantic keywords", out.Keywords)
 	}
-	if input, ok := request["input"].(string); !ok || !strings.Contains(input, "user.declaration") {
-		t.Fatalf("request input = %#v, want serialized observe input", request["input"])
+	if userContent := requestUserContent(request); !strings.Contains(userContent, "user.declaration") {
+		t.Fatalf("request user content = %#v, want serialized observe input", userContent)
 	}
-	instructions, ok := request["instructions"].(string)
-	if !ok {
-		t.Fatalf("instructions = %#v, want string", request["instructions"])
-	}
+	systemContent := requestSystemContent(request)
 	for _, want := range []string{"content_summary", "semantic_equivalent=false", "【事实】", "full_text/full_output/full_diff"} {
-		if !strings.Contains(instructions, want) {
-			t.Fatalf("instructions = %q, want to contain %q", instructions, want)
+		if !strings.Contains(systemContent, want) {
+			t.Fatalf("system content = %q, want to contain %q", systemContent, want)
 		}
 	}
 }
@@ -83,7 +80,7 @@ func TestOpenAIProviderEnhanceObserveUsesConfiguredPrompt(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(responseJSON(`{
+		_, _ = w.Write([]byte(chatCompletionResponseJSON(`{
 			"input_summary": "",
 			"output_summary": "",
 			"content_summary": "【事实】custom prompt applied",
@@ -112,16 +109,16 @@ func TestOpenAIProviderEnhanceObserveUsesConfiguredPrompt(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("EnhanceObserve() error = %v", err)
 	}
-	if request["instructions"] != "CUSTOM SEMANTIC PROMPT" {
-		t.Fatalf("instructions = %q, want configured prompt", request["instructions"])
+	if !strings.HasPrefix(requestSystemContent(request), "CUSTOM SEMANTIC PROMPT") {
+		t.Fatalf("system content = %q, want configured prompt", requestSystemContent(request))
 	}
 }
 
-func TestOpenAIProviderExtractEvidenceUsesResponsesAPI(t *testing.T) {
+func TestOpenAIProviderExtractEvidenceUsesChatCompletionsAPI(t *testing.T) {
 	var request map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" {
-			t.Fatalf("path = %q, want /responses", r.URL.Path)
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q, want /chat/completions", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
 			t.Fatalf("authorization = %q, want bearer test-key", got)
@@ -130,7 +127,7 @@ func TestOpenAIProviderExtractEvidenceUsesResponsesAPI(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(responseJSON(`{
+		_, _ = w.Write([]byte(chatCompletionResponseJSON(`{
 			"evidence": [{
 				"source_type": "user_declared",
 				"interpreted_statement": "用户要求先设计再实现",
@@ -184,25 +181,23 @@ func TestOpenAIProviderExtractEvidenceUsesResponsesAPI(t *testing.T) {
 	if request["model"] != "gpt-5-mini" {
 		t.Fatalf("model = %v, want gpt-5-mini", request["model"])
 	}
-	if _, ok := request["text"].(map[string]any); !ok {
-		t.Fatalf("request text config missing JSON schema: %+v", request)
+	responseFormat, ok := request["response_format"].(map[string]any)
+	if !ok || responseFormat["type"] != "json_object" {
+		t.Fatalf("response_format = %#v, want json_object", request["response_format"])
 	}
-	if input, ok := request["input"].(string); !ok || !strings.Contains(input, "以后先设计再实现") {
-		t.Fatalf("input = %#v, want serialized event content", request["input"])
+	userContent := requestUserContent(request)
+	if !strings.Contains(userContent, "以后先设计再实现") {
+		t.Fatalf("user content = %#v, want serialized event content", userContent)
 	}
-	input := request["input"].(string)
 	for _, want := range []string{"raw_payload_json", "payload_schema", "raw_payload_hash", "redaction_state", "truncation", "sha256:raw-openai", "conversation_message.v1"} {
-		if !strings.Contains(input, want) {
-			t.Fatalf("input = %s, want raw event payload metadata %q", input, want)
+		if !strings.Contains(userContent, want) {
+			t.Fatalf("user content = %s, want raw event payload metadata %q", userContent, want)
 		}
 	}
-	instructions, ok := request["instructions"].(string)
-	if !ok {
-		t.Fatalf("instructions = %#v, want string", request["instructions"])
-	}
+	systemContent := requestSystemContent(request)
 	for _, want := range []string{"判断输入是否值得保存", "不值得保存时返回空数组", "source_ref", "confidence"} {
-		if !strings.Contains(instructions, want) {
-			t.Fatalf("instructions = %q, want to contain %q", instructions, want)
+		if !strings.Contains(systemContent, want) {
+			t.Fatalf("system content = %q, want to contain %q", systemContent, want)
 		}
 	}
 }
@@ -214,7 +209,7 @@ func TestOpenAIProviderGenerateCandidatesParsesStructuredOutput(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(responseJSON(`{
+		_, _ = w.Write([]byte(chatCompletionResponseJSON(`{
 			"candidates": [{
 				"memory_type": "preference",
 				"scope": "project_local",
@@ -272,13 +267,10 @@ func TestOpenAIProviderGenerateCandidatesParsesStructuredOutput(t *testing.T) {
 	if got.WorkspaceID != "ws" || got.ProjectID != "project_a" || got.SourceEvidenceIDs[0] != "ev_1" {
 		t.Fatalf("candidate lineage = %+v, want raw event/evidence lineage", got)
 	}
-	instructions, ok := request["instructions"].(string)
-	if !ok {
-		t.Fatalf("instructions = %#v, want string", request["instructions"])
-	}
+	systemContent := requestSystemContent(request)
 	for _, want := range []string{"选择 memory_type", "选择 scope", "不要编造", "user_global"} {
-		if !strings.Contains(instructions, want) {
-			t.Fatalf("instructions = %q, want to contain %q", instructions, want)
+		if !strings.Contains(systemContent, want) {
+			t.Fatalf("system content = %q, want to contain %q", systemContent, want)
 		}
 	}
 }
@@ -292,12 +284,12 @@ func TestOpenAIProviderExtractAndCandidateUseConfiguredPrompts(t *testing.T) {
 		}
 		requests = append(requests, request)
 		w.Header().Set("Content-Type", "application/json")
-		input, _ := request["input"].(string)
-		if strings.Contains(input, "extract_evidence") {
-			_, _ = w.Write([]byte(responseJSON(`{"evidence":[]}`)))
+		userContent := requestUserContent(request)
+		if strings.Contains(userContent, "extract_evidence") {
+			_, _ = w.Write([]byte(chatCompletionResponseJSON(`{"evidence":[]}`)))
 			return
 		}
-		_, _ = w.Write([]byte(responseJSON(`{"candidates":[]}`)))
+		_, _ = w.Write([]byte(chatCompletionResponseJSON(`{"candidates":[]}`)))
 	}))
 	defer server.Close()
 
@@ -328,19 +320,19 @@ func TestOpenAIProviderExtractAndCandidateUseConfiguredPrompts(t *testing.T) {
 	if len(requests) != 2 {
 		t.Fatalf("requests = %d, want 2", len(requests))
 	}
-	if requests[0]["instructions"] != "CUSTOM EVIDENCE PROMPT" {
-		t.Fatalf("extract instructions = %q, want configured prompt", requests[0]["instructions"])
+	if !strings.HasPrefix(requestSystemContent(requests[0]), "CUSTOM EVIDENCE PROMPT") {
+		t.Fatalf("extract system content = %q, want configured prompt", requestSystemContent(requests[0]))
 	}
-	if requests[1]["instructions"] != "CUSTOM CANDIDATE PROMPT" {
-		t.Fatalf("candidate instructions = %q, want configured prompt", requests[1]["instructions"])
+	if !strings.HasPrefix(requestSystemContent(requests[1]), "CUSTOM CANDIDATE PROMPT") {
+		t.Fatalf("candidate system content = %q, want configured prompt", requestSystemContent(requests[1]))
 	}
 }
 
-func TestOpenAIProviderCheckHealthUsesResponsesAPI(t *testing.T) {
+func TestOpenAIProviderCheckHealthUsesChatCompletionsAPI(t *testing.T) {
 	var request map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" {
-			t.Fatalf("path = %q, want /responses", r.URL.Path)
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q, want /chat/completions", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
 			t.Fatalf("authorization = %q, want bearer test-key", got)
@@ -349,7 +341,7 @@ func TestOpenAIProviderCheckHealthUsesResponsesAPI(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(responseJSON(`{"ok":true}`)))
+		_, _ = w.Write([]byte(chatCompletionResponseJSON(`{"ok":true}`)))
 	}))
 	defer server.Close()
 
@@ -374,11 +366,13 @@ func TestOpenAIProviderCheckHealthUsesResponsesAPI(t *testing.T) {
 	if request["model"] != "gpt-5-mini" {
 		t.Fatalf("model = %v, want gpt-5-mini", request["model"])
 	}
-	if _, ok := request["text"].(map[string]any); !ok {
-		t.Fatalf("request text config missing JSON schema: %+v", request)
+	responseFormat, ok := request["response_format"].(map[string]any)
+	if !ok || responseFormat["type"] != "json_object" {
+		t.Fatalf("response_format = %#v, want json_object", request["response_format"])
 	}
-	if input, ok := request["input"].(string); !ok || !strings.Contains(input, "health_check") {
-		t.Fatalf("input = %#v, want health check payload", request["input"])
+	userContent := requestUserContent(request)
+	if !strings.Contains(userContent, "health_check") {
+		t.Fatalf("user content = %#v, want health check payload", userContent)
 	}
 }
 
@@ -388,7 +382,7 @@ func TestOpenAIProviderLogsRequestAndResponseBodies(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(responseJSON(`{"evidence":[]}`)))
+		_, _ = w.Write([]byte(chatCompletionResponseJSON(`{"evidence":[]}`)))
 	}))
 	defer server.Close()
 
@@ -492,29 +486,45 @@ func TestProviderLogBodyTruncatesLongPayload(t *testing.T) {
 	}
 }
 
-func responseJSON(outputText string) string {
+func requestSystemContent(request map[string]any) string {
+	return requestMessageContent(request, "system")
+}
+
+func requestUserContent(request map[string]any) string {
+	return requestMessageContent(request, "user")
+}
+
+func requestMessageContent(request map[string]any, role string) string {
+	messages, _ := request["messages"].([]any)
+	for _, message := range messages {
+		item, _ := message.(map[string]any)
+		if item["role"] == role {
+			content, _ := item["content"].(string)
+			return content
+		}
+	}
+	return ""
+}
+
+func chatCompletionResponseJSON(outputText string) string {
 	escaped, _ := json.Marshal(outputText)
 	return `{
 		"id": "resp_test",
-		"object": "response",
-		"created_at": 1781000000,
+		"object": "chat.completion",
+		"created": 1781000000,
 		"model": "gpt-5-mini",
-		"output": [{
-			"id": "msg_test",
-			"type": "message",
-			"role": "assistant",
-			"status": "completed",
-			"content": [{
-				"type": "output_text",
-				"text": ` + string(escaped) + `,
-				"annotations": []
-			}]
+		"choices": [{
+			"index": 0,
+			"message": {
+				"role": "assistant",
+				"content": ` + string(escaped) + `
+			},
+			"finish_reason": "stop"
 		}],
-		"parallel_tool_calls": false,
-		"tools": [],
-		"tool_choice": "auto",
-		"temperature": 0,
-		"top_p": 1,
-		"status": "completed"
+		"usage": {
+			"prompt_tokens": 10,
+			"completion_tokens": 5,
+			"total_tokens": 15
+		}
 	}`
 }

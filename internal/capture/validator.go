@@ -130,12 +130,12 @@ func NormalizeTaskSummary(value string) string {
 // validEventType 校验事件类型是否合法
 // 合法值：session.start、session.end、task.start、task.result、conversation.message、
 //
-//	agent.response.summary、tool.call、tool.result.summary、file.edit.summary、
+//	agent.response.summary、turn.completed、tool.call、tool.result.summary、file.edit.summary、
 //	user.correction、user.declaration、agent.decision
 func validEventType(eventType string) bool {
 	switch eventType {
 	case EventSessionStart, EventSessionEnd, EventTaskStart, EventTaskResult,
-		EventConversationMessage, EventAgentResponseSummary, EventToolCall, EventToolResultSummary,
+		EventConversationMessage, EventAgentResponseSummary, EventTurnCompleted, EventToolCall, EventToolResultSummary,
 		EventFileEditSummary, EventUserCorrection, EventUserDeclaration, EventAgentDecision:
 		return true
 	default:

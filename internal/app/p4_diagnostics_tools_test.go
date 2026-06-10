@@ -208,18 +208,25 @@ func TestAppHealthChecksOpenAIProviderWhenConfigured(t *testing.T) {
 	var requestCount int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
-		if r.URL.Path != "/responses" {
-			t.Fatalf("path = %q, want /responses", r.URL.Path)
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q, want /chat/completions", r.URL.Path)
 		}
 		var request map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if _, ok := request["text"].(map[string]any); !ok {
-			t.Fatalf("request text config missing JSON schema: %+v", request)
+		responseFormat, ok := request["response_format"].(map[string]any)
+		if !ok || responseFormat["type"] != "json_object" {
+			t.Fatalf("response_format = %#v, want json_object", request["response_format"])
 		}
-		if input, ok := request["input"].(string); !ok || !strings.Contains(input, "health_check") {
-			t.Fatalf("input = %#v, want health check payload", request["input"])
+		messages, ok := request["messages"].([]any)
+		if !ok || len(messages) < 2 {
+			t.Fatalf("messages = %#v, want system and user messages", request["messages"])
+		}
+		userMessage, _ := messages[1].(map[string]any)
+		userContent, _ := userMessage["content"].(string)
+		if !strings.Contains(userContent, "health_check") {
+			t.Fatalf("user content = %#v, want health check payload", userContent)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(openAIHealthResponseJSON(`{"ok":true}`)))
@@ -274,18 +281,16 @@ func openAIHealthResponseJSON(outputText string) string {
 	escaped, _ := json.Marshal(outputText)
 	return `{
 		"id": "resp_health",
-		"object": "response",
-		"created_at": 1781000000,
+		"object": "chat.completion",
+		"created": 1781000000,
 		"model": "gpt-5-mini",
-		"output": [{
-			"id": "msg_health",
-			"type": "message",
-			"role": "assistant",
-			"status": "completed",
-			"content": [{
-				"type": "output_text",
-				"text": ` + string(escaped) + `
-			}]
+		"choices": [{
+			"index": 0,
+			"message": {
+				"role": "assistant",
+				"content": ` + string(escaped) + `
+			},
+			"finish_reason": "stop"
 		}]
 	}`
 }

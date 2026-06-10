@@ -183,7 +183,7 @@ func captureObserveSpec(handler mcp.Handler) mcp.ToolSpec {
 			"workspace_id":         mcp.StringProp("Workspace id."),
 			"project_id":           mcp.StringProp("Project id."),
 			"repo_id":              mcp.StringProp("Repository id."),
-			"event_type":           mcp.EnumStringProp("Captured event type.", "session.start", "session.end", "task.start", "task.result", "conversation.message", "agent.response.summary", "tool.call", "tool.result.summary", "file.edit.summary", "user.correction", "user.declaration", "agent.decision"),
+			"event_type":           mcp.EnumStringProp("Captured event type.", "session.start", "session.end", "task.start", "task.result", "conversation.message", "agent.response.summary", "turn.completed", "tool.call", "tool.result.summary", "file.edit.summary", "user.correction", "user.declaration", "agent.decision"),
 			"source_channel":       mcp.EnumStringProp("Capture source channel.", "agent_session", "mcp_tool", "manual_cli"),
 			"occurred_at":          mcp.StringProp("Event occurrence timestamp. If empty, server time is used."),
 			"actor":                mcp.EnumStringProp("Event actor.", "user", "agent", "tool", "adapter", "system"),

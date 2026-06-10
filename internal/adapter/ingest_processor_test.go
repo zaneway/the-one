@@ -176,9 +176,9 @@ func TestBuildRequestsCarriesEnvelopeProducerForTurnCompleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildRequests() error = %v", err)
 	}
-	req := findRequestByEvent(requests, capture.EventAgentResponseSummary)
+	req := findRequestByEvent(requests, capture.EventTurnCompleted)
 	if req.EventType == "" {
-		t.Fatalf("missing agent.response.summary in %+v", requests)
+		t.Fatalf("missing turn.completed in %+v", requests)
 	}
 	for _, ref := range req.SourceRefs {
 		if ref["producer"] == "claude_code_hook:Stop" {

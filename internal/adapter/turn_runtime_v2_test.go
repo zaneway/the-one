@@ -37,8 +37,11 @@ func TestTurnRuntimeV2SkipsToolAndFileExpansion(t *testing.T) {
 	if hasEvent(requests, capture.EventToolResultSummary) || hasEvent(requests, capture.EventFileEditSummary) {
 		t.Fatalf("v2 should not expand tool/file in turn, got %+v", requests)
 	}
-	if !hasEvent(requests, capture.EventConversationMessage) || !hasEvent(requests, capture.EventAgentResponseSummary) {
+	if !hasEvent(requests, capture.EventTurnCompleted) {
 		t.Fatalf("v2 should still emit base turn, got %+v", requests)
+	}
+	if hasEvent(requests, capture.EventConversationMessage) || hasEvent(requests, capture.EventAgentResponseSummary) {
+		t.Fatalf("v2 should emit one turn.completed base event, got %+v", requests)
 	}
 }
 

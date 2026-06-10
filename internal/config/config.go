@@ -369,7 +369,7 @@ type ProcessorConfig struct {
 // OpenAIProcessorConfig 描述外部 OpenAI 兼容模型处理器配置。
 // APIKey 支持配置文件直填；环境变量 THEONE_OPENAI_API_KEY 或 OPENAI_API_KEY 非空时会覆盖配置文件值。
 type OpenAIProcessorConfig struct {
-	// Model Responses API 使用的模型 ID
+	// Model Chat Completions API 使用的模型 ID
 	Model string `yaml:"model" json:"model"`
 
 	// BaseURL 可选 API base URL；为空时使用 openai-go 默认值
