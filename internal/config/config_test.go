@@ -45,7 +45,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Processor.Provider != "rule_based" || cfg.Processor.MaxRelatedEvents != 20 || cfg.Processor.MaxCandidatesPerEvent != 3 {
 		t.Fatalf("processor defaults = %+v, want rule_based enabled with limits", cfg.Processor)
 	}
-	if cfg.Processor.OpenAI.Model != "gpt-5-mini" || cfg.Processor.OpenAI.APIKeyEnv != "OPENAI_API_KEY" ||
+	if cfg.Processor.OpenAI.Model != "gpt-5-mini" || cfg.Processor.OpenAI.APIKey != "" ||
 		cfg.Processor.OpenAI.TimeoutMS != 30000 || cfg.Processor.OpenAI.MaxOutputTokens != 1200 {
 		t.Fatalf("processor openai defaults = %+v, want bounded gpt-5-mini config", cfg.Processor.OpenAI)
 	}
@@ -143,6 +143,46 @@ func TestLoadOpenAISemanticEnhancePromptFromYAML(t *testing.T) {
 	}
 	if cfg.Processor.OpenAI.GenerateCandidatesPrompt != "custom candidate prompt" {
 		t.Fatalf("generate candidates prompt = %q, want YAML override", cfg.Processor.OpenAI.GenerateCandidatesPrompt)
+	}
+}
+
+func TestLoadOpenAIAPIKeyFromYAMLAndEnvOverride(t *testing.T) {
+	t.Setenv("THEONE_OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	path := filepath.Join(t.TempDir(), "theone.yaml")
+	data := []byte("processor:\n  openai:\n    api_key: config-key\n")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(Overrides{ConfigPath: path})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Processor.OpenAI.APIKey != "config-key" {
+		t.Fatalf("api key = %q, want config key", cfg.Processor.OpenAI.APIKey)
+	}
+
+	t.Setenv("THEONE_OPENAI_API_KEY", "env-key")
+	cfg, err = Load(Overrides{ConfigPath: path})
+	if err != nil {
+		t.Fatalf("Load() with env override error = %v", err)
+	}
+	if cfg.Processor.OpenAI.APIKey != "env-key" {
+		t.Fatalf("api key = %q, want env override", cfg.Processor.OpenAI.APIKey)
+	}
+}
+
+func TestLoadOpenAIAPIKeyFromStandardEnv(t *testing.T) {
+	t.Setenv("THEONE_OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "standard-env-key")
+
+	cfg, err := Load(Overrides{})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Processor.OpenAI.APIKey != "standard-env-key" {
+		t.Fatalf("api key = %q, want OPENAI_API_KEY override", cfg.Processor.OpenAI.APIKey)
 	}
 }
 

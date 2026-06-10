@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -17,7 +18,11 @@ import (
 	"github.com/zaneway/theone/internal/prompts"
 )
 
-const OpenAIProviderName = "openai"
+const (
+	OpenAIProviderName = "openai"
+	// providerLogBodyMaxChars 限制单条日志字段长度，避免 prompt/事件正文撑爆日志文件。
+	providerLogBodyMaxChars = 32000
+)
 
 // OpenAIProviderConfig 是 OpenAI processor 的运行时配置。
 // APIKey 由调用方从环境变量或测试替身注入，避免配置文件保存明文密钥。
@@ -31,6 +36,7 @@ type OpenAIProviderConfig struct {
 	ExtractEvidencePrompt    string
 	GenerateCandidatesPrompt string
 	SemanticEnhancePrompt    string
+	Logger                   *slog.Logger
 }
 
 type OpenAIProvider struct {
@@ -41,6 +47,7 @@ type OpenAIProvider struct {
 	extractEvidencePrompt    string
 	generateCandidatesPrompt string
 	semanticEnhancePrompt    string
+	logger                   *slog.Logger
 }
 
 func NewOpenAIProvider(cfg OpenAIProviderConfig) (OpenAIProvider, error) {
@@ -73,6 +80,7 @@ func NewOpenAIProvider(cfg OpenAIProviderConfig) (OpenAIProvider, error) {
 		extractEvidencePrompt:    firstNonEmpty(cfg.ExtractEvidencePrompt, prompts.OpenAIExtractEvidencePrompt),
 		generateCandidatesPrompt: firstNonEmpty(cfg.GenerateCandidatesPrompt, prompts.OpenAIGenerateCandidatesPrompt),
 		semanticEnhancePrompt:    firstNonEmpty(cfg.SemanticEnhancePrompt, prompts.OpenAISemanticEnhancePrompt),
+		logger:                   cfg.Logger,
 	}, nil
 }
 
@@ -232,6 +240,23 @@ func (p OpenAIProvider) callStructured(ctx context.Context, instructions string,
 	if err != nil {
 		return "", fmt.Errorf("PROVIDER_INPUT_INVALID: encode openai payload: %w", err)
 	}
+	requestBody, err := json.Marshal(map[string]any{
+		"model":             p.model,
+		"schema_name":       schemaName,
+		"instructions":      instructions,
+		"input":             string(data),
+		"max_output_tokens": p.maxOutputTokens,
+		"temperature":       0,
+	})
+	if err != nil {
+		return "", fmt.Errorf("PROVIDER_INPUT_INVALID: encode openai request log body: %w", err)
+	}
+	startedAt := time.Now()
+	p.logInfo("openai provider request",
+		"schema_name", schemaName,
+		"model", p.model,
+		"request_body", providerLogBody(string(requestBody)),
+	)
 	reqCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 	resp, err := p.client.Responses.New(reqCtx, responses.ResponseNewParams{
@@ -245,13 +270,70 @@ func (p OpenAIProvider) callStructured(ctx context.Context, instructions string,
 		},
 	}, option.WithRequestTimeout(p.timeout))
 	if err != nil {
+		p.logError("openai provider request failed",
+			"schema_name", schemaName,
+			"model", p.model,
+			"duration_ms", time.Since(startedAt).Milliseconds(),
+			"error", err.Error(),
+		)
 		return "", fmt.Errorf("PROVIDER_UNAVAILABLE: openai responses request failed: %w", err)
 	}
 	out := strings.TrimSpace(resp.OutputText())
 	if out == "" {
+		p.logError("openai provider response invalid",
+			"schema_name", schemaName,
+			"model", p.model,
+			"duration_ms", time.Since(startedAt).Milliseconds(),
+			"response_body", providerResponseLogBody(resp, ""),
+			"error", "output_text is empty",
+		)
 		return "", fmt.Errorf("PROVIDER_INVALID_OUTPUT: openai response output_text is empty")
 	}
+	p.logInfo("openai provider response",
+		"schema_name", schemaName,
+		"model", p.model,
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+		"response_body", providerResponseLogBody(resp, out),
+	)
 	return out, nil
+}
+
+func providerResponseLogBody(resp *responses.Response, outputText string) string {
+	if resp == nil {
+		return providerLogBody(fmt.Sprintf(`{"output_text":%q}`, outputText))
+	}
+	body, err := json.Marshal(map[string]any{
+		"response_id": resp.ID,
+		"status":      resp.Status,
+		"model":       resp.Model,
+		"output_text": outputText,
+		"usage":       resp.Usage,
+	})
+	if err != nil {
+		return providerLogBody(fmt.Sprintf(`{"marshal_error":%q}`, err.Error()))
+	}
+	return providerLogBody(string(body))
+}
+
+func providerLogBody(value string) string {
+	if providerLogBodyMaxChars <= 0 || len(value) <= providerLogBodyMaxChars {
+		return value
+	}
+	return value[:providerLogBodyMaxChars] + "...(truncated)"
+}
+
+func (p OpenAIProvider) logInfo(msg string, args ...any) {
+	if p.logger == nil {
+		return
+	}
+	p.logger.Info(msg, args...)
+}
+
+func (p OpenAIProvider) logError(msg string, args ...any) {
+	if p.logger == nil {
+		return
+	}
+	p.logger.Error(msg, args...)
 }
 
 func applyCandidateLineage(candidate *MemoryCandidate, input CandidateInput) {

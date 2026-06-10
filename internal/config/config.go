@@ -362,8 +362,8 @@ type ProcessorConfig struct {
 	OpenAI OpenAIProcessorConfig `yaml:"openai" json:"openai"`
 }
 
-// OpenAIProcessorConfig 描述外部 OpenAI 模型处理器配置。
-// API key 只通过环境变量读取，配置文件不承载明文密钥。
+// OpenAIProcessorConfig 描述外部 OpenAI 兼容模型处理器配置。
+// APIKey 支持配置文件直填；环境变量 THEONE_OPENAI_API_KEY 或 OPENAI_API_KEY 非空时会覆盖配置文件值。
 type OpenAIProcessorConfig struct {
 	// Model Responses API 使用的模型 ID
 	Model string `yaml:"model" json:"model"`
@@ -371,8 +371,8 @@ type OpenAIProcessorConfig struct {
 	// BaseURL 可选 API base URL；为空时使用 openai-go 默认值
 	BaseURL string `yaml:"base_url" json:"base_url"`
 
-	// APIKeyEnv 读取 API key 的环境变量名，默认 OPENAI_API_KEY
-	APIKeyEnv string `yaml:"api_key_env" json:"api_key_env"`
+	// APIKey API key 明文；生产环境建议通过环境变量覆盖，避免提交到版本库
+	APIKey string `yaml:"api_key" json:"api_key"`
 
 	// TimeoutMS 单次外部模型请求超时（毫秒）
 	TimeoutMS int `yaml:"timeout_ms" json:"timeout_ms"`
@@ -537,7 +537,7 @@ func Default() Config {
 			MaxCandidatesPerEvent: 3,
 			OpenAI: OpenAIProcessorConfig{
 				Model:                    "gpt-5-mini",
-				APIKeyEnv:                "OPENAI_API_KEY",
+				APIKey:                   "",
 				TimeoutMS:                30000,
 				MaxOutputTokens:          1200,
 				ExtractEvidencePrompt:    prompts.OpenAIExtractEvidencePrompt,
@@ -591,6 +591,9 @@ func Load(overrides Overrides) (Config, error) {
 	if logPath := os.Getenv("THEONE_LOG_PATH"); logPath != "" {
 		cfg.Logging.Path = logPath
 	}
+	if apiKey := firstNonEmpty(os.Getenv("THEONE_OPENAI_API_KEY"), os.Getenv("OPENAI_API_KEY")); apiKey != "" {
+		cfg.Processor.OpenAI.APIKey = apiKey
+	}
 	cfg.Storage.Path = expandHome(cfg.Storage.Path)
 	cfg.Logging.Path = expandHome(cfg.Logging.Path)
 	return cfg, validate(cfg)
@@ -638,9 +641,9 @@ func validate(cfg Config) error {
 	default:
 		return fmt.Errorf("CONFIG_INVALID: unsupported processor provider %q", cfg.Processor.Provider)
 	}
-	if strings.TrimSpace(cfg.Processor.OpenAI.Model) == "" || strings.TrimSpace(cfg.Processor.OpenAI.APIKeyEnv) == "" ||
+	if strings.TrimSpace(cfg.Processor.OpenAI.Model) == "" ||
 		cfg.Processor.OpenAI.TimeoutMS <= 0 || cfg.Processor.OpenAI.MaxOutputTokens <= 0 {
-		return errors.New("CONFIG_INVALID: processor.openai config values must be positive and model/api_key_env are required")
+		return errors.New("CONFIG_INVALID: processor.openai config values must be positive and model is required")
 	}
 	if cfg.Retrieval.DefaultLimit <= 0 || cfg.Retrieval.DefaultTokenBudget <= 0 || cfg.Retrieval.OnlineTimeoutMS <= 0 ||
 		cfg.Retrieval.MaxRelationExpansion <= 0 || cfg.Retrieval.MaxCandidatesBeforeRerank <= 0 {

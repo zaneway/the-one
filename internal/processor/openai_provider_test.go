@@ -1,8 +1,10 @@
 package processor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -316,6 +318,94 @@ func TestOpenAIProviderExtractAndCandidateUseConfiguredPrompts(t *testing.T) {
 	}
 }
 
+func TestOpenAIProviderLogsRequestAndResponseBodies(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(responseJSON(`{"evidence":[]}`)))
+	}))
+	defer server.Close()
+
+	provider, err := NewOpenAIProvider(OpenAIProviderConfig{
+		APIKey:          "test-key",
+		BaseURL:         server.URL,
+		Model:           "gpt-5-mini",
+		Timeout:         time.Second,
+		MaxOutputTokens: 400,
+		Logger:          logger,
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIProvider() error = %v", err)
+	}
+
+	if _, err := provider.ExtractEvidence(context.Background(), EvidenceInput{
+		RawEvent: capture.RawEvent{
+			ID:             "evt_log_1",
+			EventType:      capture.EventUserDeclaration,
+			ContentSummary: "以后先设计再实现。",
+		},
+	}); err != nil {
+		t.Fatalf("ExtractEvidence() error = %v", err)
+	}
+
+	logs := buf.String()
+	for _, want := range []string{
+		"openai provider request",
+		"openai provider response",
+		"theone_evidence",
+		"request_body",
+		"response_body",
+		"以后先设计再实现。",
+		"evidence",
+		"resp_test",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("logs = %q, want to contain %q", logs, want)
+		}
+	}
+}
+
+func TestOpenAIProviderLogsFailedRequest(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "upstream unavailable", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	provider, err := NewOpenAIProvider(OpenAIProviderConfig{
+		APIKey:          "test-key",
+		BaseURL:         server.URL,
+		Model:           "gpt-5-mini",
+		Timeout:         time.Second,
+		MaxOutputTokens: 400,
+		Logger:          logger,
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIProvider() error = %v", err)
+	}
+
+	if _, err := provider.ExtractEvidence(context.Background(), EvidenceInput{
+		RawEvent: capture.RawEvent{ID: "evt_log_2", EventType: capture.EventUserDeclaration},
+	}); err == nil {
+		t.Fatal("ExtractEvidence() error = nil, want provider failure")
+	}
+
+	logs := buf.String()
+	for _, want := range []string{
+		"openai provider request",
+		"openai provider request failed",
+		"request_body",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("logs = %q, want to contain %q", logs, want)
+		}
+	}
+}
+
 func TestOpenAIProviderRequiresAPIKey(t *testing.T) {
 	_, err := NewOpenAIProvider(OpenAIProviderConfig{
 		Model:           "gpt-5-mini",
@@ -324,6 +414,17 @@ func TestOpenAIProviderRequiresAPIKey(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("NewOpenAIProvider() error = nil, want missing key error")
+	}
+}
+
+func TestProviderLogBodyTruncatesLongPayload(t *testing.T) {
+	long := strings.Repeat("a", providerLogBodyMaxChars+10)
+	got := providerLogBody(long)
+	if !strings.HasSuffix(got, "...(truncated)") {
+		t.Fatalf("providerLogBody() = %q, want truncated suffix", got)
+	}
+	if len(got) != providerLogBodyMaxChars+len("...(truncated)") {
+		t.Fatalf("truncated length = %d, want %d", len(got), providerLogBodyMaxChars+len("...(truncated)"))
 	}
 }
 

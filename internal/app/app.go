@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -78,7 +77,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		retrieval.WithLogger(logger),
 	)
 	// Step 6: 注册 自动化服务（observe 入队、准入管道、remember 准入）
-	provider, err := newProcessorProvider(cfg)
+	provider, err := newProcessorProvider(cfg, logger)
 	if err != nil {
 		logger.Error("processor provider init failed", "provider", cfg.Processor.Provider, "error", err)
 		_ = store.Close()
@@ -128,13 +127,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}, nil
 }
 
-func newProcessorProvider(cfg config.Config) (processor.Provider, error) {
+func newProcessorProvider(cfg config.Config, logger *slog.Logger) (processor.Provider, error) {
 	switch cfg.Processor.Provider {
 	case processor.RuleBasedProviderName:
 		return processor.NewRuleBasedProvider(), nil
 	case processor.OpenAIProviderName:
-		apiKeyEnv := strings.TrimSpace(cfg.Processor.OpenAI.APIKeyEnv)
-		apiKey := os.Getenv(apiKeyEnv)
+		apiKey := strings.TrimSpace(cfg.Processor.OpenAI.APIKey)
 		provider, err := processor.NewOpenAIProvider(processor.OpenAIProviderConfig{
 			APIKey:                   apiKey,
 			BaseURL:                  cfg.Processor.OpenAI.BaseURL,
@@ -144,9 +142,10 @@ func newProcessorProvider(cfg config.Config) (processor.Provider, error) {
 			ExtractEvidencePrompt:    cfg.Processor.OpenAI.ExtractEvidencePrompt,
 			GenerateCandidatesPrompt: cfg.Processor.OpenAI.GenerateCandidatesPrompt,
 			SemanticEnhancePrompt:    cfg.Processor.OpenAI.SemanticEnhancePrompt,
+			Logger:                   logger,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("init openai processor provider from env %s: %w", apiKeyEnv, err)
+			return nil, fmt.Errorf("init openai processor provider: %w", err)
 		}
 		return provider, nil
 	default:
