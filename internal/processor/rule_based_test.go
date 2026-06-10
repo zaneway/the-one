@@ -239,6 +239,80 @@ func TestRuleBasedDesignReviewCheckpointCandidate(t *testing.T) {
 	}
 }
 
+func TestRuleBasedTurnCompletedAcceptanceConstraintFallsThroughToCandidate(t *testing.T) {
+	provider := NewRuleBasedProvider()
+	event := rawEvent(capture.EventTurnCompleted, "【约束】禁止合并未测代码进入主分支。")
+
+	evidence := extractOne(t, provider, event)
+	candidates := generate(t, provider, event, evidence)
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count = %d, want 1", len(candidates))
+	}
+	if candidates[0].MemoryType != memory.TypeConstraint {
+		t.Fatalf("candidate type = %s, want constraint", candidates[0].MemoryType)
+	}
+}
+
+func TestRuleBasedDesignReviewKeywordWithoutCheckpointFallsThrough(t *testing.T) {
+	provider := NewRuleBasedProvider()
+	event := rawEvent(capture.EventTaskResult, "任务完成，后续需要补充验收标准。")
+
+	evidence := extractOne(t, provider, event)
+	candidates := generate(t, provider, event, evidence)
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count = %d, want 1", len(candidates))
+	}
+	if candidates[0].MemoryType != memory.TypeSessionSummary {
+		t.Fatalf("candidate type = %s, want session_summary", candidates[0].MemoryType)
+	}
+}
+
+func TestRuleBasedFailedToolDoesNotUpgradeOnUnrelatedMemory(t *testing.T) {
+	provider := NewRuleBasedProvider()
+	event := rawEvent(capture.EventToolResultSummary, "")
+	event.ToolName = "go test"
+	event.OutputSummary = "auth token expiry boundary test failed"
+	event.SourceRefsJSON = refsJSON(map[string]any{"exit_code": 1})
+
+	evidence := extractOne(t, provider, event)
+	candidates, err := provider.GenerateCandidates(context.Background(), CandidateInput{
+		Evidence: evidence,
+		RawEvent: event,
+		RelatedMemory: []memory.MemoryItem{{
+			ID:         "mem_pref",
+			MemoryType: memory.TypePreference,
+			Content:    "回答技术方案时先分析架构边界。",
+		}},
+		Now: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("GenerateCandidates() error = %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count = %d, want 1", len(candidates))
+	}
+	if candidates[0].MemoryType != memory.TypeTemporaryState {
+		t.Fatalf("candidate type = %s, want temporary_state", candidates[0].MemoryType)
+	}
+}
+
+func TestRuleBasedTurnCompletedUsesDeclarationClassification(t *testing.T) {
+	provider := NewRuleBasedProvider()
+	event := rawEvent(capture.EventTurnCompleted, "【约束】禁止在未写迁移测试时修改数据库 schema。")
+	evidence := memory.Evidence{
+		ID:                   "ev_001",
+		InterpretedStatement: "禁止在未写迁移测试时修改数据库 schema。",
+		SourceType:           "agent_summary",
+	}
+	candidates := generate(t, provider, event, evidence)
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count = %d, want 1", len(candidates))
+	}
+	if candidates[0].MemoryType != memory.TypeConstraint {
+		t.Fatalf("candidate type = %s, want constraint", candidates[0].MemoryType)
+	}
+}
+
 func TestRuleBasedInsufficientInputReturnsEmpty(t *testing.T) {
 	provider := NewRuleBasedProvider()
 	event := rawEvent(capture.EventConversationMessage, "继续")

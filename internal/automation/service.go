@@ -19,8 +19,7 @@ import (
 )
 
 const (
-	defaultRelatedEventsLimit = 20
-	defaultMaxRetries         = 3
+	defaultMaxRetries = 3
 )
 
 // Repository 定义 automation service 依赖的异步任务、事件、证据和自动写入能力。
@@ -37,8 +36,6 @@ type Repository interface {
 	GetRawEvent(ctx context.Context, rawEventID string) (capture.RawEvent, error)
 	GetSession(ctx context.Context, sessionID string) (capture.AgentSession, error)
 	GetTask(ctx context.Context, taskID string) (capture.AgentTask, error)
-	ListRelatedEvents(ctx context.Context, req RelatedEventsRequest) ([]capture.RawEvent, error)
-
 	FindDuplicateEvidence(ctx context.Context, draft EvidenceDraftKey) (memory.Evidence, bool, error)
 	WriteEvidence(ctx context.Context, evidence memory.Evidence) error
 	GetEvidence(ctx context.Context, evidenceID string) (memory.Evidence, error)
@@ -169,8 +166,7 @@ func (s *Service) RunJob(ctx context.Context, job AsyncJob) error {
 // runExtractEvidence 执行管道第一步：从 raw_event 抽取 evidence。
 // 处理流程：
 //  1. 加载原始事件及其关联的 session 和 task
-//  2. 加载同 session/task 的近邻事件（最多 20 条），用于上下文理解
-//  3. 调用 Provider（默认 rule_based）抽取 evidence drafts
+//  2. 调用 Provider 抽取 evidence drafts（openai 仅本步调外部模型）
 //  4. 将 drafts 物化为 evidence 记录（去重检测 + 序列化 + 写入）
 //  5. 为每条 evidence 入队下一步 job（generate_memory_candidate）
 func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[string]any, error) {
@@ -192,25 +188,19 @@ func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[str
 	if err != nil {
 		return nil, err
 	}
-	related, err := s.repo.ListRelatedEvents(ctx, RelatedEventsRequest{
-		SessionID: rawEvent.SessionID,
-		TaskID:    rawEvent.TaskID,
-		Limit:     defaultRelatedEventsLimit,
-	})
-	if err != nil {
-		return nil, err
-	}
-	drafts, err := s.provider.ExtractEvidence(ctx, processor.EvidenceInput{
-		RawEvent:      rawEvent,
-		Session:       session,
-		Task:          task,
-		RelatedEvents: related,
-		Now:           time.Now(),
+	drafts, err := s.provider.ExtractEvidence(processor.WithLogContext(ctx, processor.LogContext{JobID: job.ID}), processor.EvidenceInput{
+		RawEvent: rawEvent,
+		Session:  session,
+		Task:     task,
+		Now:      time.Now(),
 	})
 	if err != nil {
 		s.logger.Error("extract evidence provider failed",
 			"job_id", job.ID,
+			"raw_event_id", rawEvent.ID,
 			"event_type", rawEvent.EventType,
+			"session_id", rawEvent.SessionID,
+			"task_id", rawEvent.TaskID,
 			"error", err,
 		)
 		return nil, err
@@ -244,8 +234,8 @@ func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[str
 // runGenerateMemoryCandidate 执行管道第二步：从 evidence 生成候选记忆。
 // 处理流程：
 //  1. 加载 evidence 及其关联的 raw_event
-//  2. 查找同 scope 的相关已有记忆（用于冲突检测和去重）
-//  3. 加载 session 和 task 上下文
+//  2. 查找同 scope 的相关已有记忆（rule_based 用于重复失败检测）
+//  3. 加载 session 和 task 上下文（rule_based 与候选 lineage 回填）
 //  4. 调用 Provider 生成 memory candidates
 //  5. 将 candidates 物化为 MemoryCandidateRecord（序列化所有 JSON 字段）
 //  6. 为每个 candidate 入队下一步 job（compute_admission）
@@ -284,7 +274,7 @@ func (s *Service) runGenerateMemoryCandidate(ctx context.Context, job AsyncJob) 
 	if err != nil {
 		return nil, err
 	}
-	candidates, err := s.provider.GenerateCandidates(ctx, processor.CandidateInput{
+	candidates, err := s.provider.GenerateCandidates(processor.WithLogContext(ctx, processor.LogContext{JobID: job.ID}), processor.CandidateInput{
 		Evidence:      evidence,
 		RawEvent:      rawEvent,
 		Session:       session,
@@ -296,6 +286,8 @@ func (s *Service) runGenerateMemoryCandidate(ctx context.Context, job AsyncJob) 
 		s.logger.Error("generate candidate provider failed",
 			"job_id", job.ID,
 			"evidence_id", evidence.ID,
+			"raw_event_id", rawEvent.ID,
+			"event_type", rawEvent.EventType,
 			"error", err,
 		)
 		return nil, err

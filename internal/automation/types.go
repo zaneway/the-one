@@ -101,13 +101,6 @@ type ListJobsRequest struct {
 	Limit       int    `json:"limit,omitempty"`
 }
 
-// RelatedEventsRequest 用于 Provider 抽取时读取同 session/task 的近邻事件。
-type RelatedEventsRequest struct {
-	SessionID string
-	TaskID    string
-	Limit     int
-}
-
 // MemoryCandidateRecord 保存 Provider 生成的候选记忆诊断记录。
 // 它不是稳定长期记忆，只有 Admission 通过后才会关联 resulting_memory_id。
 type MemoryCandidateRecord struct {

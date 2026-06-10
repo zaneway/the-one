@@ -3,6 +3,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,13 +15,18 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/zaneway/theone/internal/capture"
+	"github.com/zaneway/theone/internal/idgen"
+	"github.com/zaneway/theone/internal/memory"
 	"github.com/zaneway/theone/internal/prompts"
+	"github.com/zaneway/theone/internal/scoring"
 )
 
 const (
 	OpenAIProviderName = "openai"
 	// providerLogBodyMaxChars 限制单条日志字段长度，避免 prompt/事件正文撑爆日志文件。
 	providerLogBodyMaxChars = 32000
+	providerReasoningOpen   = "<" + "think" + ">"
+	providerReasoningClose  = "</" + "think" + ">"
 )
 
 // OpenAIProviderConfig 是 OpenAI processor 的运行时配置。
@@ -40,6 +46,7 @@ type OpenAIProviderConfig struct {
 
 type OpenAIProvider struct {
 	client                   openai.Client
+	baseURL                  string
 	model                    string
 	timeout                  time.Duration
 	maxOutputTokens          int64
@@ -47,6 +54,16 @@ type OpenAIProvider struct {
 	generateCandidatesPrompt string
 	semanticEnhancePrompt    string
 	logger                   *slog.Logger
+}
+
+// callLogMeta 记录单次 provider 调用的业务关联字段，便于失败时定位具体请求。
+type callLogMeta struct {
+	TaskName   string
+	RawEventID string
+	EventType  string
+	SessionID  string
+	TaskID     string
+	EvidenceID string
 }
 
 func NewOpenAIProvider(cfg OpenAIProviderConfig) (OpenAIProvider, error) {
@@ -73,6 +90,7 @@ func NewOpenAIProvider(cfg OpenAIProviderConfig) (OpenAIProvider, error) {
 	}
 	return OpenAIProvider{
 		client:                   openai.NewClient(opts...),
+		baseURL:                  strings.TrimSpace(cfg.BaseURL),
 		model:                    model,
 		timeout:                  cfg.Timeout,
 		maxOutputTokens:          cfg.MaxOutputTokens,
@@ -95,7 +113,7 @@ func (p OpenAIProvider) CheckHealth(ctx context.Context) (HealthStatus, error) {
 		"task":     "health_check",
 		"provider": OpenAIProviderName,
 		"model":    p.model,
-	}, "theone_provider_health", healthSchema())
+	}, "theone_provider_health", healthSchema(), callLogMeta{TaskName: "health_check"})
 	if err != nil {
 		return HealthStatus{Provider: OpenAIProviderName, Model: p.model, LatencyMS: time.Since(startedAt).Milliseconds()}, err
 	}
@@ -115,7 +133,10 @@ func (p OpenAIProvider) EnhanceObserve(ctx context.Context, input capture.Semant
 	raw, err := p.callStructured(ctx, p.semanticEnhancePrompt, map[string]any{
 		"task":  "semantic_preserving_observe_simplification",
 		"input": input,
-	}, "theone_semantic_enhance", semanticEnhanceSchema())
+	}, "theone_semantic_enhance", semanticEnhanceSchema(), callLogMeta{
+		TaskName:  "semantic_preserving_observe_simplification",
+		EventType: string(input.EventType),
+	})
 	if err != nil {
 		return capture.SemanticEnhanceOutput{}, err
 	}
@@ -133,15 +154,16 @@ func (p OpenAIProvider) EnhanceObserve(ctx context.Context, input capture.Semant
 
 func (p OpenAIProvider) ExtractEvidence(ctx context.Context, input EvidenceInput) ([]EvidenceDraft, error) {
 	payload := map[string]any{
-		"task":            "extract_evidence",
-		"raw_event":       openAIRawEventView(input.RawEvent),
-		"session":         input.Session,
-		"agent_task":      input.Task,
-		"capture_quality": input.CaptureQuality,
-		"related_events":  openAIRawEventViews(input.RelatedEvents),
-		"now":             input.Now,
+		"task":      "extract_evidence",
+		"raw_event": openAIRawEventView(input.RawEvent),
 	}
-	raw, err := p.callStructured(ctx, p.extractEvidencePrompt, payload, "theone_evidence", evidenceSchema())
+	raw, err := p.callStructured(ctx, p.extractEvidencePrompt, payload, "theone_evidence", evidenceSchema(), callLogMeta{
+		TaskName:   "extract_evidence",
+		RawEventID: input.RawEvent.ID,
+		EventType:  string(input.RawEvent.EventType),
+		SessionID:  input.RawEvent.SessionID,
+		TaskID:     input.RawEvent.TaskID,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -170,62 +192,194 @@ func (p OpenAIProvider) ExtractEvidence(ctx context.Context, input EvidenceInput
 }
 
 func (p OpenAIProvider) GenerateCandidates(ctx context.Context, input CandidateInput) ([]MemoryCandidate, error) {
-	payload := map[string]any{
-		"task":           "generate_memory_candidates",
-		"evidence":       input.Evidence,
-		"raw_event":      openAIRawEventView(input.RawEvent),
-		"session":        input.Session,
-		"agent_task":     input.Task,
-		"related_memory": input.RelatedMemory,
-		"now":            input.Now,
+	statement := strings.TrimSpace(input.Evidence.InterpretedStatement)
+	if statement == "" {
+		return nil, nil
 	}
-	raw, err := p.callStructured(ctx, p.generateCandidatesPrompt, payload, "theone_candidates", candidateSchema())
+	payload := map[string]any{
+		"task":      "generate_memory_candidate",
+		"raw_event": openAIRawEventCandidateView(input.RawEvent),
+		"evidence": map[string]any{
+			"source_type":           strings.TrimSpace(input.Evidence.SourceType),
+			"interpreted_statement": statement,
+			"keywords":              decodeStringSlice(input.Evidence.KeywordsJSON),
+		},
+	}
+	raw, err := p.callStructured(ctx, p.generateCandidatesPrompt, payload, "theone_candidates", candidatesSchema(), callLogMeta{
+		TaskName:   "generate_memory_candidate",
+		RawEventID: input.RawEvent.ID,
+		EventType:  string(input.RawEvent.EventType),
+		SessionID:  input.RawEvent.SessionID,
+		TaskID:     input.RawEvent.TaskID,
+		EvidenceID: input.Evidence.ID,
+	})
 	if err != nil {
 		return nil, err
 	}
 	var decoded struct {
-		Candidates []openAIMemoryCandidate `json:"candidates"`
+		Candidates []openAIMemoryCandidateDraft `json:"candidates"`
 	}
 	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-		return nil, fmt.Errorf("PROVIDER_INVALID_OUTPUT: decode openai candidate response: %w", err)
+		return nil, fmt.Errorf("PROVIDER_INVALID_OUTPUT: decode openai candidates response: %w", err)
+	}
+	eventScore := scoring.ScoreRawEvent(scoring.RawEventInput{
+		EventType:      input.RawEvent.EventType,
+		OccurredAt:     input.RawEvent.OccurredAt,
+		ContentSummary: input.RawEvent.ContentSummary,
+		InputSummary:   input.RawEvent.InputSummary,
+		OutputSummary:  input.RawEvent.OutputSummary,
+		KeywordsJSON:   input.RawEvent.KeywordsJSON,
+		SourceRefsJSON: input.RawEvent.SourceRefsJSON,
+		Query:          statement,
+		Now:            input.Now,
+	})
+	evidenceIDs := []string{}
+	if input.Evidence.ID != "" {
+		evidenceIDs = append(evidenceIDs, input.Evidence.ID)
 	}
 	out := make([]MemoryCandidate, 0, len(decoded.Candidates))
-	for _, candidate := range decoded.Candidates {
-		mapped := candidate.toMemoryCandidate()
-		applyCandidateLineage(&mapped, input)
-		if mapped.MemoryType == "" || mapped.Scope == "" || mapped.Content == "" {
+	for _, draft := range decoded.Candidates {
+		candidate, ok := materializeOpenAICandidate(input, draft, eventScore, evidenceIDs)
+		if !ok {
 			continue
 		}
-		out = append(out, mapped)
+		out = append(out, candidate)
 	}
 	return out, nil
 }
 
-func openAIRawEventViews(events []capture.RawEvent) []map[string]any {
-	if len(events) == 0 {
-		return nil
-	}
-	out := make([]map[string]any, 0, len(events))
-	for _, event := range events {
-		out = append(out, openAIRawEventView(event))
-	}
-	return out
-}
-
 func openAIRawEventView(event capture.RawEvent) map[string]any {
 	out := map[string]any{}
+	if eventType := strings.TrimSpace(event.EventType); eventType != "" {
+		out["event_type"] = eventType
+	}
+	hasBody := false
 	if input := strings.TrimSpace(event.InputSummary); input != "" {
 		out["input_summary"] = input
+		hasBody = true
 	}
 	if output := strings.TrimSpace(event.OutputSummary); output != "" {
 		out["output_summary"] = output
+		hasBody = true
 	}
-	if len(out) == 0 {
+	if !hasBody {
 		if summary := strings.TrimSpace(event.ContentSummary); summary != "" {
 			out["content_summary"] = summary
 		}
 	}
 	return out
+}
+
+func openAIRawEventCandidateView(event capture.RawEvent) map[string]any {
+	out := openAIRawEventView(event)
+	if refs := decodeSourceRefs(event.SourceRefsJSON); len(refs) > 0 {
+		out["source_refs"] = refs
+	}
+	if event.WorkspaceID != "" {
+		out["workspace_id"] = event.WorkspaceID
+	}
+	if event.ProjectID != "" {
+		out["project_id"] = event.ProjectID
+	}
+	if event.RepoID != "" {
+		out["repo_id"] = event.RepoID
+	}
+	if event.SessionID != "" {
+		out["session_id"] = event.SessionID
+	}
+	if event.TaskID != "" {
+		out["task_id"] = event.TaskID
+	}
+	return out
+}
+
+type openAIMemoryCandidateDraft struct {
+	MemoryType       string                 `json:"memory_type"`
+	Scope            string                 `json:"scope"`
+	Content          string                 `json:"content"`
+	Title            string                 `json:"title"`
+	Keywords         []string               `json:"keywords"`
+	CandidateReason  []string               `json:"candidate_reason"`
+	Confidence       float64                `json:"confidence"`
+	Importance       float64                `json:"importance"`
+	ReviewCheckpoint *ReviewCheckpointDraft `json:"review_checkpoint"`
+}
+
+func materializeOpenAICandidate(input CandidateInput, draft openAIMemoryCandidateDraft, eventScore float64, evidenceIDs []string) (MemoryCandidate, bool) {
+	memoryType := strings.TrimSpace(draft.MemoryType)
+	scope := strings.TrimSpace(draft.Scope)
+	content := strings.TrimSpace(draft.Content)
+	if !isAllowedMemoryType(memoryType) || !isAllowedScope(scope) || content == "" {
+		return MemoryCandidate{}, false
+	}
+	if memoryType == memory.TypeReviewCheckpoint {
+		if draft.ReviewCheckpoint == nil || !reviewCheckpointDraftValid(*draft.ReviewCheckpoint) {
+			return MemoryCandidate{}, false
+		}
+	}
+	keywords := semanticKeywords(trimStringSlice(draft.Keywords))
+	if len(keywords) == 0 {
+		keywords = semanticKeywords(decodeStringSlice(input.Evidence.KeywordsJSON))
+	}
+	workspaceID, userID, projectID, repoID, sessionID := scopedIdentity(input.RawEvent, scope)
+	title := strings.TrimSpace(draft.Title)
+	if title == "" {
+		title = candidateTitle(memoryType, content)
+	}
+	reasons := trimStringSlice(draft.CandidateReason)
+	if len(reasons) == 0 {
+		reasons = []string{"openai_classified"}
+	}
+	sourceType := strings.TrimSpace(input.Evidence.SourceType)
+	if sourceType == "" {
+		sourceType = "agent_summary"
+	}
+	return MemoryCandidate{
+		MemoryType:        memoryType,
+		Scope:             scope,
+		WorkspaceID:       workspaceID,
+		UserID:            userID,
+		ProjectID:         projectID,
+		RepoID:            repoID,
+		SessionID:         sessionID,
+		TaskID:            input.RawEvent.TaskID,
+		SourceType:        sourceType,
+		Title:             title,
+		Content:           content,
+		Keywords:          keywords,
+		RetrievalCues:     keywords,
+		Confidence:        defaultFloat(clamp01(draft.Confidence), defaultFloat(input.Evidence.Confidence, 0.7)),
+		Importance:        defaultFloat(clamp01(draft.Importance), defaultImportance(memoryType)),
+		EncodingDepth:     2,
+		EventScore:        eventScore,
+		ReviewCheckpoint:  draft.ReviewCheckpoint,
+		CandidateReason:   reasons,
+		SourceEvidenceIDs: evidenceIDs,
+	}, true
+}
+
+func isAllowedMemoryType(memoryType string) bool {
+	switch memoryType {
+	case memory.TypePreference, memory.TypeRequirement, memory.TypeDecision, memory.TypeConstraint,
+		memory.TypeAssumption, memory.TypeOpenIssue, memory.TypeFailure, memory.TypeProjectFact,
+		memory.TypeProcedure, memory.TypeTemporaryState, memory.TypeSessionSummary, memory.TypeReviewCheckpoint:
+		return true
+	default:
+		return false
+	}
+}
+
+func isAllowedScope(scope string) bool {
+	switch scope {
+	case memory.ScopeUserGlobal, memory.ScopeProjectLocal, memory.ScopeRepoLocal, memory.ScopeSession:
+		return true
+	default:
+		return false
+	}
+}
+
+func reviewCheckpointDraftValid(draft ReviewCheckpointDraft) bool {
+	return len(draft.TargetDocs) > 0 && len(draft.ReviewIntent) > 0 && strings.TrimSpace(draft.Conclusion) != ""
 }
 
 type openAIEvidenceDraft struct {
@@ -237,55 +391,7 @@ type openAIEvidenceDraft struct {
 	Confidence           float64        `json:"confidence"`
 }
 
-type openAIMemoryCandidate struct {
-	MemoryType        string   `json:"memory_type"`
-	Scope             string   `json:"scope"`
-	WorkspaceID       string   `json:"workspace_id"`
-	UserID            string   `json:"user_id"`
-	ProjectID         string   `json:"project_id"`
-	RepoID            string   `json:"repo_id"`
-	SessionID         string   `json:"session_id"`
-	TaskID            string   `json:"task_id"`
-	SourceType        string   `json:"source_type"`
-	Title             string   `json:"title"`
-	Content           string   `json:"content"`
-	Keywords          []string `json:"keywords"`
-	Entities          []string `json:"entities"`
-	RetrievalCues     []string `json:"retrieval_cues"`
-	Tags              []string `json:"tags"`
-	Confidence        float64  `json:"confidence"`
-	Importance        float64  `json:"importance"`
-	EncodingDepth     int      `json:"encoding_depth"`
-	CandidateReason   []string `json:"candidate_reason"`
-	SourceEvidenceIDs []string `json:"source_evidence_ids"`
-}
-
-func (c openAIMemoryCandidate) toMemoryCandidate() MemoryCandidate {
-	return MemoryCandidate{
-		MemoryType:        c.MemoryType,
-		Scope:             c.Scope,
-		WorkspaceID:       c.WorkspaceID,
-		UserID:            c.UserID,
-		ProjectID:         c.ProjectID,
-		RepoID:            c.RepoID,
-		SessionID:         c.SessionID,
-		TaskID:            c.TaskID,
-		SourceType:        c.SourceType,
-		Title:             c.Title,
-		Content:           c.Content,
-		Keywords:          c.Keywords,
-		Entities:          c.Entities,
-		RetrievalCues:     c.RetrievalCues,
-		Tags:              c.Tags,
-		Confidence:        c.Confidence,
-		Importance:        c.Importance,
-		EncodingDepth:     c.EncodingDepth,
-		CandidateReason:   c.CandidateReason,
-		SourceEvidenceIDs: c.SourceEvidenceIDs,
-	}
-}
-
-func (p OpenAIProvider) callStructured(ctx context.Context, instructions string, payload any, schemaName string, schema map[string]any) (string, error) {
+func (p OpenAIProvider) callStructured(ctx context.Context, instructions string, payload any, schemaName string, schema map[string]any, meta callLogMeta) (string, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("PROVIDER_INPUT_INVALID: encode openai payload: %w", err)
@@ -309,11 +415,17 @@ func (p OpenAIProvider) callStructured(ctx context.Context, instructions string,
 	if err != nil {
 		return "", fmt.Errorf("PROVIDER_INPUT_INVALID: encode openai request log body: %w", err)
 	}
+	requestID, err := idgen.New("oreq")
+	if err != nil {
+		requestID = fmt.Sprintf("oreq_%d", time.Now().UnixNano())
+	}
 	startedAt := time.Now()
+	commonFields := p.providerLogFields(ctx, requestID, schemaName, meta, len(data), string(data))
 	p.logInfo("openai provider request",
-		"schema_name", schemaName,
-		"model", p.model,
-		"request_body", providerLogBody(string(requestBody)),
+		append(commonFields,
+			"timeout_ms", p.timeout.Milliseconds(),
+			"request_body", providerLogBody(string(requestBody)),
+		)...,
 	)
 	reqCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
@@ -330,42 +442,239 @@ func (p OpenAIProvider) callStructured(ctx context.Context, instructions string,
 		},
 	}, option.WithRequestTimeout(p.timeout))
 	if err != nil {
-		p.logError("openai provider request failed",
-			"schema_name", schemaName,
-			"model", p.model,
+		failureFields := append(commonFields,
 			"duration_ms", time.Since(startedAt).Milliseconds(),
+			"timeout_ms", p.timeout.Milliseconds(),
+			"failure_reason", classifyProviderFailure(err),
 			"error", err.Error(),
 		)
+		if classifyProviderFailure(err) == "client_timeout" {
+			failureFields = append(failureFields,
+				"hint", "model did not return within configured processor.openai.timeout_ms; consider increasing timeout or using a faster model variant",
+			)
+		}
+		p.logError("openai provider request failed", failureFields...)
 		return "", fmt.Errorf("PROVIDER_UNAVAILABLE: openai chat completions request failed: %w", err)
 	}
 	if len(resp.Choices) == 0 {
 		p.logError("openai provider response invalid",
-			"schema_name", schemaName,
-			"model", p.model,
-			"duration_ms", time.Since(startedAt).Milliseconds(),
-			"response_body", providerChatCompletionLogBody(resp, ""),
-			"error", "choices is empty",
+			append(commonFields,
+				"duration_ms", time.Since(startedAt).Milliseconds(),
+				"response_body", providerChatCompletionLogBody(resp, ""),
+				"error", "choices is empty",
+			)...,
 		)
 		return "", fmt.Errorf("PROVIDER_INVALID_OUTPUT: openai response choices is empty")
 	}
 	out := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if out == "" {
 		p.logError("openai provider response invalid",
-			"schema_name", schemaName,
-			"model", p.model,
-			"duration_ms", time.Since(startedAt).Milliseconds(),
-			"response_body", providerChatCompletionLogBody(resp, ""),
-			"error", "message content is empty",
+			append(commonFields,
+				"duration_ms", time.Since(startedAt).Milliseconds(),
+				"response_body", providerChatCompletionLogBody(resp, ""),
+				"error", "message content is empty",
+			)...,
 		)
 		return "", fmt.Errorf("PROVIDER_INVALID_OUTPUT: openai response message content is empty")
 	}
 	p.logInfo("openai provider response",
+		append(commonFields,
+			"duration_ms", time.Since(startedAt).Milliseconds(),
+			"response_body", providerChatCompletionLogBody(resp, out),
+		)...,
+	)
+	normalized, err := normalizeStructuredProviderOutput(out)
+	if err != nil {
+		p.logError("openai provider response invalid",
+			append(commonFields,
+				"duration_ms", time.Since(startedAt).Milliseconds(),
+				"response_body", providerChatCompletionLogBody(resp, out),
+				"error", err.Error(),
+			)...,
+		)
+		return "", fmt.Errorf("PROVIDER_INVALID_OUTPUT: normalize openai response: %w", err)
+	}
+	return normalized, nil
+}
+
+// normalizeStructuredProviderOutput 从模型输出中提取可解析的 JSON 文本。
+// 兼容直接返回 JSON，以及 reasoning 标签、markdown 围栏等包裹形式。
+func normalizeStructuredProviderOutput(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("response is empty")
+	}
+	if json.Valid([]byte(trimmed)) {
+		return trimmed, nil
+	}
+	cleaned := strings.TrimSpace(stripMarkdownJSONFences(stripReasoningBlocks(trimmed)))
+	if cleaned != "" && json.Valid([]byte(cleaned)) {
+		return cleaned, nil
+	}
+	extracted, err := extractLastJSONObject(cleaned)
+	if err != nil {
+		return "", err
+	}
+	if !json.Valid([]byte(extracted)) {
+		return "", fmt.Errorf("extracted payload is not valid json")
+	}
+	return extracted, nil
+}
+
+func stripReasoningBlocks(s string) string {
+	for {
+		lower := strings.ToLower(s)
+		start := strings.Index(lower, providerReasoningOpen)
+		if start < 0 {
+			return s
+		}
+		restLower := lower[start+len(providerReasoningOpen):]
+		endRel := strings.Index(restLower, providerReasoningClose)
+		if endRel < 0 {
+			return strings.TrimSpace(s[:start])
+		}
+		end := start + len(providerReasoningOpen) + endRel + len(providerReasoningClose)
+		s = s[:start] + s[end:]
+	}
+}
+
+func stripMarkdownJSONFences(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if !strings.HasPrefix(trimmed, "```") {
+		return trimmed
+	}
+	if idx := strings.Index(trimmed, "\n"); idx >= 0 {
+		trimmed = strings.TrimSpace(trimmed[idx+1:])
+	}
+	trimmed = strings.TrimSuffix(trimmed, "```")
+	return strings.TrimSpace(trimmed)
+}
+
+func extractLastJSONObject(s string) (string, error) {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return "", fmt.Errorf("no json object found")
+	}
+	for i := len(trimmed) - 1; i >= 0; i-- {
+		if trimmed[i] != '{' {
+			continue
+		}
+		candidate := extractBalancedJSONObject(trimmed, i)
+		if candidate == "" {
+			continue
+		}
+		if json.Valid([]byte(candidate)) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("no valid json object found")
+}
+
+func extractBalancedJSONObject(s string, start int) string {
+	if start < 0 || start >= len(s) || s[start] != '{' {
+		return ""
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		ch := s[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch ch {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return ""
+}
+
+func (p OpenAIProvider) providerLogFields(ctx context.Context, requestID, schemaName string, meta callLogMeta, payloadBytes int, payloadJSON string) []any {
+	fields := []any{
+		"request_id", requestID,
 		"schema_name", schemaName,
 		"model", p.model,
-		"duration_ms", time.Since(startedAt).Milliseconds(),
-		"response_body", providerChatCompletionLogBody(resp, out),
-	)
-	return out, nil
+		"payload_bytes", payloadBytes,
+		"input_preview", providerInputPreview(payloadJSON),
+	}
+	if p.baseURL != "" {
+		fields = append(fields, "base_url", p.baseURL)
+	}
+	if meta.TaskName != "" {
+		fields = append(fields, "task", meta.TaskName)
+	}
+	if meta.RawEventID != "" {
+		fields = append(fields, "raw_event_id", meta.RawEventID)
+	}
+	if meta.EventType != "" {
+		fields = append(fields, "event_type", meta.EventType)
+	}
+	if meta.SessionID != "" {
+		fields = append(fields, "session_id", meta.SessionID)
+	}
+	if meta.TaskID != "" {
+		fields = append(fields, "task_id", meta.TaskID)
+	}
+	if meta.EvidenceID != "" {
+		fields = append(fields, "evidence_id", meta.EvidenceID)
+	}
+	if jobID := LogContextFrom(ctx).JobID; jobID != "" {
+		fields = append(fields, "job_id", jobID)
+	}
+	return fields
+}
+
+func providerInputPreview(payloadJSON string) string {
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(payloadJSON), &decoded); err == nil {
+		if rawEvent, ok := decoded["raw_event"].(map[string]any); ok {
+			for _, key := range []string{"content_summary", "input_summary", "output_summary"} {
+				if value, ok := rawEvent[key].(string); ok && strings.TrimSpace(value) != "" {
+					return providerLogBody(strings.TrimSpace(value))
+				}
+			}
+		}
+		if input, ok := decoded["input"].(map[string]any); ok {
+			for _, key := range []string{"content_summary", "input_summary", "output_summary", "event_type"} {
+				if value, ok := input[key].(string); ok && strings.TrimSpace(value) != "" {
+					return providerLogBody(strings.TrimSpace(value))
+				}
+			}
+		}
+	}
+	return providerLogBody(payloadJSON)
+}
+
+func classifyProviderFailure(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return "client_timeout"
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "context deadline exceeded") || strings.Contains(message, "timeout") {
+		return "client_timeout"
+	}
+	return "provider_error"
 }
 
 func chatCompletionSystemContent(instructions, schemaName string, schema map[string]any) (string, error) {
@@ -416,30 +725,6 @@ func (p OpenAIProvider) logError(msg string, args ...any) {
 	p.logger.Error(msg, args...)
 }
 
-func applyCandidateLineage(candidate *MemoryCandidate, input CandidateInput) {
-	candidate.MemoryType = strings.TrimSpace(candidate.MemoryType)
-	candidate.Scope = strings.TrimSpace(candidate.Scope)
-	candidate.Title = strings.TrimSpace(candidate.Title)
-	candidate.Content = strings.TrimSpace(candidate.Content)
-	candidate.WorkspaceID = firstNonEmpty(candidate.WorkspaceID, input.RawEvent.WorkspaceID, input.Session.WorkspaceID)
-	candidate.ProjectID = firstNonEmpty(candidate.ProjectID, input.RawEvent.ProjectID, input.Session.ProjectID)
-	candidate.RepoID = firstNonEmpty(candidate.RepoID, input.RawEvent.RepoID, input.Session.RepoID)
-	candidate.SessionID = firstNonEmpty(candidate.SessionID, input.RawEvent.SessionID, input.Session.ID)
-	candidate.TaskID = firstNonEmpty(candidate.TaskID, input.RawEvent.TaskID, input.Task.ID)
-	candidate.SourceType = firstNonEmpty(candidate.SourceType, input.Evidence.SourceType)
-	candidate.Confidence = clamp01(candidate.Confidence)
-	candidate.Importance = clamp01(candidate.Importance)
-	if candidate.EncodingDepth < 0 {
-		candidate.EncodingDepth = 0
-	}
-	if candidate.EncodingDepth > 4 {
-		candidate.EncodingDepth = 4
-	}
-	if len(candidate.SourceEvidenceIDs) == 0 && input.Evidence.ID != "" {
-		candidate.SourceEvidenceIDs = []string{input.Evidence.ID}
-	}
-}
-
 func clamp01(value float64) float64 {
 	if value < 0 {
 		return 0
@@ -466,6 +751,52 @@ func semanticEnhanceSchema() map[string]any {
 	}
 }
 
+func candidatesSchema() map[string]any {
+	checkpointProps := map[string]any{
+		"checkpoint_type":    stringSchema(),
+		"review_intent":      stringArraySchema(),
+		"conclusion":         stringSchema(),
+		"confirmed_baseline": stringArraySchema(),
+		"ignored_items":      stringArraySchema(),
+		"deferred_items":     stringArraySchema(),
+		"open_items":         stringArraySchema(),
+		"target_docs":        map[string]any{"type": "array"},
+		"target_sections":    map[string]any{"type": "array"},
+		"target_hashes":      map[string]any{"type": "array"},
+		"next_review_policy": map[string]any{"type": "object"},
+	}
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"candidates"},
+		"properties": map[string]any{
+			"candidates": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"required": []string{
+						"memory_type", "scope", "content", "keywords", "candidate_reason", "confidence", "importance",
+					},
+					"properties": map[string]any{
+						"memory_type":      stringSchema(),
+						"scope":            stringSchema(),
+						"content":          stringSchema(),
+						"title":            stringSchema(),
+						"keywords":         stringArraySchema(),
+						"candidate_reason": stringArraySchema(),
+						"confidence":       numberSchema(),
+						"importance":       numberSchema(),
+						"review_checkpoint": map[string]any{
+							"type":       "object",
+							"properties": checkpointProps,
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func evidenceSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
@@ -484,38 +815,6 @@ func evidenceSchema() map[string]any {
 						"salient_spans":         stringArraySchema(),
 						"source_ref":            map[string]any{"type": "object"},
 						"confidence":            numberSchema(),
-					},
-				},
-			},
-		},
-	}
-}
-
-func candidateSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required":             []string{"candidates"},
-		"properties": map[string]any{
-			"candidates": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type":     "object",
-					"required": []string{"memory_type", "scope", "title", "content", "keywords", "entities", "retrieval_cues", "tags", "confidence", "importance", "encoding_depth", "candidate_reason"},
-					"properties": map[string]any{
-						"memory_type":         stringSchema(),
-						"scope":               stringSchema(),
-						"title":               stringSchema(),
-						"content":             stringSchema(),
-						"keywords":            stringArraySchema(),
-						"entities":            stringArraySchema(),
-						"retrieval_cues":      stringArraySchema(),
-						"tags":                stringArraySchema(),
-						"confidence":          numberSchema(),
-						"importance":          numberSchema(),
-						"encoding_depth":      map[string]any{"type": "integer"},
-						"candidate_reason":    stringArraySchema(),
-						"source_evidence_ids": stringArraySchema(),
 					},
 				},
 			},

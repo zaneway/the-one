@@ -352,11 +352,12 @@ type RetentionConfig struct {
 // ProcessorConfig 自动记忆处理器配置结构体
 // 控制 rule_based 抽取的近邻事件与候选数量上限
 type ProcessorConfig struct {
-	// Provider 处理器提供者，支持 rule_based、openai
-	// rule_based 保持默认本地可运行；openai 通过外部模型生成 evidence/candidate 草稿
+	// Provider 处理器提供者，支持 rule_based、openai（二选一，互斥）
+	// rule_based：ExtractEvidence + GenerateCandidates 均本地规则
+	// openai：ExtractEvidence + GenerateCandidates 均调外部模型
 	Provider string `yaml:"provider" json:"provider"`
 
-	// MaxRelatedEvents Provider 抽取时读取的近邻事件上限
+	// MaxRelatedEvents 已废弃：外部模型只接收当前事件正文，不再读取近邻事件。
 	MaxRelatedEvents int `yaml:"max_related_events" json:"max_related_events"`
 
 	// MaxCandidatesPerEvent 单个事件最多生成候选数量
@@ -388,9 +389,8 @@ type OpenAIProcessorConfig struct {
 	// 为空时 OpenAI provider 使用内置默认提示词
 	ExtractEvidencePrompt string `yaml:"extract_evidence_prompt" json:"extract_evidence_prompt"`
 
-	// GenerateCandidatesPrompt candidate 生成提示词
-	// 为空时 OpenAI provider 使用内置默认提示词
-	GenerateCandidatesPrompt string `yaml:"generate_candidates_prompt" json:"generate_candidates_prompt"`
+	// GenerateCandidatesPrompt 候选记忆生成提示词；provider=openai 时生效，为空使用内置默认
+	GenerateCandidatesPrompt string `yaml:"generate_candidates_prompt" json:"generate_candidates_prompt,omitempty"`
 
 	// SemanticEnhancePrompt 旧版 observe 语义等价简化提示词。
 	// capture 主链路不再使用；仅保留给兼容 provider EnhanceObserve 能力。

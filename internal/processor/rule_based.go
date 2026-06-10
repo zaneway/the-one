@@ -162,22 +162,34 @@ func (RuleBasedProvider) GenerateCandidates(ctx context.Context, input Candidate
 		return []MemoryCandidate{baseCandidate(input, statement, memory.TypeTemporaryState, memory.ScopeSession, keywords, evidenceIDs, "session_only_state", eventScore)}, nil
 	case capture.EventTaskResult:
 		// 设计复查结果：生成 review_checkpoint 记忆（含 target_docs 和 hash）
-		if isDesignReview(input.RawEvent, input.Task, statement) {
-			return checkpointCandidate(input, statement, keywords, evidenceIDs)
+		if candidates, handled, err := tryDesignReviewCandidates(input, statement, keywords, evidenceIDs); err != nil {
+			return nil, err
+		} else if handled {
+			return candidates, nil
 		}
 		return []MemoryCandidate{baseCandidate(input, statement, memory.TypeSessionSummary, memory.ScopeSession, keywords, evidenceIDs, "task_result_summary", eventScore)}, nil
 	case capture.EventSessionEnd:
-		if isDesignReview(input.RawEvent, input.Task, statement) {
-			return checkpointCandidate(input, statement, keywords, evidenceIDs)
+		if candidates, handled, err := tryDesignReviewCandidates(input, statement, keywords, evidenceIDs); err != nil {
+			return nil, err
+		} else if handled {
+			return candidates, nil
 		}
 		return []MemoryCandidate{baseCandidate(input, statement, memory.TypeSessionSummary, memory.ScopeSession, keywords, evidenceIDs, "session_summary", eventScore)}, nil
 	case capture.EventTurnCompleted, capture.EventAgentResponseSummary:
-		if isDesignReview(input.RawEvent, input.Task, statement) {
-			return checkpointCandidate(input, statement, keywords, evidenceIDs)
+		if candidates, handled, err := tryDesignReviewCandidates(input, statement, keywords, evidenceIDs); err != nil {
+			return nil, err
+		} else if handled {
+			return candidates, nil
 		}
 		// 包含决策信号：归类为架构决策
 		if hasAnySignal(statement, "决策", "decision") {
 			return []MemoryCandidate{baseCandidate(input, statement, memory.TypeDecision, memory.ScopeProjectLocal, keywords, evidenceIDs, "architecture_decision", eventScore)}, nil
+		}
+		// 与 ExtractEvidence 高信号门槛对齐：对 turn/响应摘要复用声明分类规则
+		if hasSemanticSignal(statement) || hasAnySignal(statement, "结论", "约束", "假设", "待确认", "禁止", "conclusion", "constraint", "review", "assumption") {
+			if candidate, ok := classifyDeclaration(input, statement, keywords, evidenceIDs, eventScore); ok {
+				return []MemoryCandidate{candidate}, nil
+			}
 		}
 	}
 	return nil, nil
@@ -380,6 +392,23 @@ func scopedIdentity(event capture.RawEvent, scope string) (workspaceID, userID, 
 	}
 }
 
+// tryDesignReviewCandidates 在命中设计复查信号时尝试生成 checkpoint 候选。
+// 若 source_refs 缺少完整 checkpoint 元数据则返回 handled=false，由调用方继续常规分类，
+// 避免 evidence 已写入但 candidate 为空的管道断裂。
+func tryDesignReviewCandidates(input CandidateInput, statement string, keywords, evidenceIDs []string) ([]MemoryCandidate, bool, error) {
+	if !isDesignReview(input.RawEvent, input.Task, statement) {
+		return nil, false, nil
+	}
+	candidates, err := checkpointCandidate(input, statement, keywords, evidenceIDs)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(candidates) > 0 {
+		return candidates, true, nil
+	}
+	return nil, false, nil
+}
+
 // checkpointCandidate 构造设计复查类型的候选记忆。
 // 设计复查记忆包含 ReviewCheckpoint 结构，记录 target_docs、review_intent、conclusion 等
 // 用于 Doc Index 策略中对比文档变更。
@@ -475,8 +504,10 @@ func isFailedToolEvent(event capture.RawEvent, ref map[string]any) bool {
 // 判断条件：存在相关历史失败记忆，或输出/任务摘要包含重复信号。
 // 重复失败会上升为 TypeFailure（跨 session），单次失败仅为 TypeTemporaryState。
 func isRepeatedFailure(event capture.RawEvent, task capture.AgentTask, related []memory.MemoryItem) bool {
-	if len(related) > 0 {
-		return true
+	for _, item := range related {
+		if item.MemoryType == memory.TypeFailure {
+			return true
+		}
 	}
 	return hasAnySignal(event.OutputSummary, "again", "repeated", "多次", "重复") || hasAnySignal(task.OutcomeSummary, "again", "repeated", "多次", "重复")
 }
@@ -489,7 +520,8 @@ func isDesignReview(event capture.RawEvent, task capture.AgentTask, statement st
 	if len(sourceMapSlice(ref, "target_docs")) > 0 {
 		return true
 	}
-	return hasAnySignal(strings.Join([]string{statement, task.TaskSummary}, " "), "架构设计", "分期规划", "详细设计", "复查", "逻辑缺失", "验收", "review", "design", "architecture")
+	// 不含 target_docs 时只用更具体的设计复查短语，避免「验收」等泛化词误判后阻断常规分类。
+	return hasAnySignal(strings.Join([]string{statement, task.TaskSummary}, " "), "架构设计", "分期规划", "详细设计", "设计复查", "逻辑缺失", "review", "design", "architecture")
 }
 
 func inheritedCorrectionType(ref map[string]any) string {

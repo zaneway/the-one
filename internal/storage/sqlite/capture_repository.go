@@ -403,28 +403,6 @@ func (s *Store) ListOrphanRawEvents(ctx context.Context, req automation.OrphanRa
 	return scanEventRows(rows)
 }
 
-// ListRelatedEvents 读取同 session/task 的近邻事件，用于 Provider 抽取上下文。
-func (s *Store) ListRelatedEvents(ctx context.Context, req automation.RelatedEventsRequest) ([]capture.RawEvent, error) {
-	query := baseEventSelect() + " where 1 = 1"
-	args := make([]any, 0)
-	if req.SessionID != "" {
-		query += " and session_id = ?"
-		args = append(args, req.SessionID)
-	}
-	if req.TaskID != "" {
-		query += " and task_id = ?"
-		args = append(args, req.TaskID)
-	}
-	query += " order by occurred_at desc limit ?"
-	args = append(args, automationLimit(req.Limit))
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, storageErr(err)
-	}
-	defer rows.Close()
-	return scanEventRows(rows)
-}
-
 func (s *Store) getSession(ctx context.Context, sessionID string) (capture.AgentSession, error) {
 	session, err := scanSession(s.db.QueryRowContext(ctx, baseSessionSelect()+" where id = ?", sessionID))
 	if err == sql.ErrNoRows {

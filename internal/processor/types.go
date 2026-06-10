@@ -17,7 +17,7 @@ type Provider interface {
 	// 只抽取有记忆价值的事件，低信号事件返回空切片。
 	ExtractEvidence(ctx context.Context, input EvidenceInput) ([]EvidenceDraft, error)
 	// GenerateCandidates 从 evidence 中生成候选记忆。
-	// 按事件类型路由到不同的候选分类策略。
+	// rule_based 走本地规则；openai 走外部模型结构化输出。
 	GenerateCandidates(ctx context.Context, input CandidateInput) ([]MemoryCandidate, error)
 }
 
@@ -53,7 +53,6 @@ type EvidenceInput struct {
 	Session        capture.AgentSession   // 所属会话
 	Task           capture.AgentTask      // 所属任务
 	CaptureQuality CaptureQualitySnapshot // 捕获质量快照
-	RelatedEvents  []capture.RawEvent     // 相关历史事件（用于重复失败检测）
 	Now            time.Time              // 当前时间，用于分数计算
 }
 

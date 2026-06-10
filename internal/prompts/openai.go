@@ -1,113 +1,70 @@
 package prompts
 
-const OpenAIExtractEvidencePrompt = `你需要从一条 raw_event 事实记录中，判断是否存在值得以后检索和复用的信息，并把这些信息整理成证据数组。
+const OpenAIExtractEvidencePrompt = `从输入的文本中提取可长期检索复用的证据数组。
 
-你会收到一段 JSON 输入，其中包含事件正文、会话摘要、任务摘要、相关历史事件和捕获质量。不要依赖任何项目背景知识，只根据输入内容操作。
+你会收到当前事件的 event_type 与正文。正文通常只有 input_summary / output_summary；两者都为空时才会收到 content_summary。
+证据必须自洽、可独立理解，并保留原意中的偏好/约束/决策/失败等语义信号词，供后续候选记忆分类使用。
 
-raw_event 字段说明：
-- input_summary/output_summary 在 turn.completed 中可能是用户请求和 Agent 应答的原始正文，不要按“短摘要”理解。
-- 外部模型调用只会收到 input_summary/output_summary；如果两者都为空，才会收到 content_summary。
-- raw_event 表中的其他元数据和 raw_payload_json 不会发送给外部模型。
+保存标准：
+保留：用户明确偏好/要求/约束/纠正，技术原理或者技术/流程决策，基本事实，可复用失败原因，重要假设，开放问题，任务或会话结论。
+不值得保存则返回 {"evidence":[]}。
 
-操作步骤：
-1. 判断输入是否值得保存：
-   - 值得保存：用户明确表达的偏好、要求、约束、纠正；已经形成的技术或流程决策；可复用的失败原因；重要假设；开放问题；任务或会话结论。
-   - 不值得保存：普通寒暄、仅表示“已完成响应”的消息、无结论的过程描述、纯日志/trace/hook 元数据、无法复用的一次性噪声。
-2. 不值得保存时返回空数组，不要强行生成证据。
-3. 值得保存时，每条证据只表达一个清晰事实或判断；不要把多个无关事实合并成一条。
-4. 不要编造输入中没有的信息；不确定时降低 confidence 或返回空数组。
+提取规则：
+每条 evidence 只表达一个事实或判断；不合并无关事实；不编造；不确定则降低 confidence 或返回空数组。
+interpreted_statement 用完整陈述句表达，保留“必须/不要/以后/假设/待确认/决策/约束/失败”等有助于下游规则分类的措辞，不要过度抽象到丢失信号，尽量保持在10000字符以内。
+keywords 除主题词外，应包含 3-8 个可检索锚点，并覆盖 statement 中的关键语义信号。
 
-字段填写规则：
-- source_type：说明信息来源。用户明确声明用 user_declared；用户纠正用 user_confirmed；工具失败或输出摘要用 tool_output；任务结果用 task_result；会话总结用 session_summary；文件编辑摘要用 file_edit_summary；其他 agent 总结用 agent_summary。
-- interpreted_statement：用一句可审计的话重述证据，保留条件、范围、例外、因果关系和关键标识符。
-- keywords：从 interpreted_statement 的语义中提取短关键词，去重，删除 hook、trace、memory-context、turn-completed、tool-result 等捕获元数据词。
-- salient_spans：只放支撑该证据的关键短片段，不放长段落、完整工具输出、完整 raw_payload_json 或完整 diff。
-- source_ref：只放定位和引用信息，例如 producer、capture_method、path、symbol、hash、exit_code；不要放完整原文。
-- confidence：0 到 1。用户明确声明/纠正通常更高；来源不完整、语义不清或捕获质量低时降低。
+字段：
+source_type：用户声明=user_declared；用户纠正/确认=user_confirmed；工具失败/输出=tool_output；任务结果=task_result；会话总结=session_summary；文件编辑=file_edit_summary；其他 Agent 总结=agent_summary。可参考 event_type，但不要与正文矛盾。
+interpreted_statement：一句可审计重述，保留条件、范围、例外、因果和关键标识。
+salient_spans：仅放支撑证据的关键短片段，禁止长段落、完整工具输出、完整 raw_payload_json、完整 diff。
+source_ref：仅放定位引用信息，如 producer/capture_method/path/symbol/hash/exit_code，禁止完整原文。
+confidence：0-1；用户明确声明/纠正较高；来源不完整、语义不清则降低。
 
-示例：
-输入事件摘要："用户说：以后修改数据库 schema 前必须先写迁移测试。"
-输出 JSON：
-{
-  "evidence": [
-    {
-      "source_type": "user_declared",
-      "interpreted_statement": "用户要求以后修改数据库 schema 前必须先写迁移测试。",
-      "keywords": ["数据库 schema", "迁移测试", "约束"],
-      "salient_spans": ["修改数据库 schema 前必须先写迁移测试"],
-      "source_ref": {"producer": "example"},
-      "confidence": 0.95
-    }
-  ]
-}
+只返回一个符合 theone_evidence schema 的 JSON 对象，不输出其他。
 
-只返回符合 JSON Schema 的 JSON，不输出解释、Markdown 或额外字段。`
+Schema:
+{"additionalProperties":false,"properties":{"evidence":{"type":"array","items":{"type":"object","required":["source_type","interpreted_statement","keywords","salient_spans","source_ref","confidence"],"properties":{"source_type":{"type":"string"},"interpreted_statement":{"type":"string"},"keywords":{"type":"array","items":{"type":"string"}},"salient_spans":{"type":"array","items":{"type":"string"}},"source_ref":{"type":"object"},"confidence":{"type":"number"}}}}},"required":["evidence"],"type":"object"}`
 
-const OpenAIGenerateCandidatesPrompt = `你需要根据输入证据，生成可长期保存、可检索、可审计的记忆候选数组。候选只是“待审核的建议”，不是最终写入结论。
+const OpenAIGenerateCandidatesPrompt = `根据 evidence 与 raw_event 生成 0-3 条候选记忆。
 
-你会收到一段 JSON 输入，其中包含一条证据、对应事件正文、会话/任务上下文以及相关已有记忆。raw_event 中的 input_summary/output_summary 可能是原始请求/应答正文；如果两者都为空才会提供 content_summary。不要依赖任何项目背景知识，只根据输入内容操作。
+输入包含：
+- raw_event：event_type、正文摘要，以及可选 source_refs（设计复查 checkpoint 元数据）
+- evidence：source_type、interpreted_statement、keywords
 
-操作步骤：
-1. 先判断证据是否足以形成候选记忆。
-   - 足够：表达稳定偏好、明确约束、需求、决策、可复用失败模式、重要假设、开放问题或有价值的任务/会话结论。
-   - 不足：只是一次普通过程状态、缺少结论、语义模糊、不能复用，返回空 candidates 数组。
-2. 候选必须严格来自输入证据和事件，不要编造事实。
-3. 不要把一次性临时状态提升为长期记忆；只影响当前会话的内容应保持 session 范围。
-4. 如果输入体现用户纠正或覆盖旧结论，候选内容应表达新的修正结论，避免与旧结论并存。
+任务：
+1. 判断 evidence 是否值得进入长期记忆候选；不值得则返回 {"candidates":[]}。
+2. 值得时输出 1 条主候选（必要时最多 3 条），每条只表达一个记忆单元。
+3. content 用完整陈述句，保留条件、范围、因果；不要编造 evidence 未表达的事实。
+4. memory_type 与 scope 必须匹配：
+   - preference / procedure → 通常 user_global
+   - decision / constraint / requirement / assumption / open_issue / project_fact / review_checkpoint → 通常 project_local 或 repo_local
+   - temporary_state / session_summary → session
+   - failure → repo_local 或 project_local（重复失败、跨会话可复用经验）
+5. user.correction 场景：继承 source_refs 中的 target_memory_type / target_memory_scope（若有），candidate_reason 含 user_correction。
+6. review_checkpoint：仅当 raw_event.source_refs 含 target_docs、review_intent、conclusion 时输出；填写 review_checkpoint 对象。
+7. 无明确设计复查元数据时，不要因为正文含「验收」「复查」就输出 review_checkpoint。
 
-字段填写规则：
-- 选择 memory_type：
-  - preference：用户稳定偏好或工作习惯。
-  - constraint：未来执行必须遵守的限制。
-  - requirement：明确提出的需求。
-  - decision：已经做出的技术、流程或架构决策。
-  - failure：可复用的失败模式、根因或规避方式。
-  - assumption：后续工作依赖但尚未完全验证的假设。
-  - open_issue：尚未解决、需要后续跟进的问题。
-  - session_summary：只概括当前会话/任务结果。
-  - temporary_state：只在当前会话有效的临时状态。
-- 选择 scope：
-  - session：只影响当前会话或一次任务过程。
-  - project_local：只影响当前项目、仓库、架构、实现或故障模式。
-  - user_global：只有用户明确表达为跨项目长期偏好或稳定习惯时才使用；不确定时不要使用。
-- title：短标题，概括候选。
-- content：完整语义句，保留条件、范围、例外、因果关系和关键标识符。
-- keywords、entities、retrieval_cues、tags：从 content 语义中提取，去重，避免捕获元数据词。
-- confidence、importance：0 到 1。越明确、越可复用越高。
-- encoding_depth：0 到 4。越需要长期抽象和跨场景复用，值越高；临时状态用低值。
-- candidate_reason：说明为什么生成候选，例如 explicit_user_preference、architecture_decision、repeated_failure_signature、task_result_summary。
-- source_evidence_ids：必须引用输入中真实存在的 evidence ID；不要输出不存在的 ID。
+memory_type 枚举：preference, requirement, decision, constraint, assumption, open_issue, failure, project_fact, procedure, temporary_state, session_summary, review_checkpoint
+scope 枚举：user_global, project_local, repo_local, session
 
-示例：
-输入证据：id 为 "ev_1"，内容为 "用户要求以后修改数据库 schema 前必须先写迁移测试。"
-输出 JSON：
-{
-  "candidates": [
-    {
-      "memory_type": "constraint",
-      "scope": "project_local",
-      "title": "Schema 修改前先写迁移测试",
-      "content": "修改数据库 schema 前必须先写迁移测试。",
-      "keywords": ["数据库 schema", "迁移测试"],
-      "entities": ["schema"],
-      "retrieval_cues": ["修改数据库结构", "数据库迁移"],
-      "tags": ["testing", "database"],
-      "confidence": 0.92,
-      "importance": 0.8,
-      "encoding_depth": 3,
-      "candidate_reason": ["explicit_user_constraint"],
-      "source_evidence_ids": ["ev_1"]
-    }
-  ]
-}
+字段：
+- memory_type, scope, content：必填
+- title：可选，简短标题；留空由系统生成
+- keywords：3-8 个检索锚点，覆盖 content 关键信号
+- candidate_reason：1-3 个原因码，如 user_declared, constraint_declared, architecture_decision, session_only_state, design_review_checkpoint, user_correction
+- confidence, importance：0-1
+- review_checkpoint：仅 review_checkpoint 类型时填写
 
-只返回符合 JSON Schema 的 JSON，不输出解释、Markdown 或额外字段。`
+只返回符合 theone_candidates schema 的 JSON 对象，不输出其他。
 
-const OpenAISemanticEnhancePrompt = `这是旧版 observe 语义增强提示词，不用于 raw_event 捕获主链路。raw_event 应先落库；外部 AI 在 processor 阶段从 raw_event 抽取 evidence/candidate。
+Schema:
+{"additionalProperties":false,"properties":{"candidates":{"type":"array","items":{"type":"object","required":["memory_type","scope","content","keywords","candidate_reason","confidence","importance"],"properties":{"memory_type":{"type":"string"},"scope":{"type":"string"},"content":{"type":"string"},"title":{"type":"string"},"keywords":{"type":"array","items":{"type":"string"}},"candidate_reason":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number"},"importance":{"type":"number"},"review_checkpoint":{"type":"object"}}}}},"required":["candidates"],"type":"object"}`
 
+const OpenAISemanticEnhancePrompt = `
 你需要对输入摘要做语义不变的简化，并提取检索关键词。
 
-你会收到一段 JSON 输入，其中包含事件类型、来源、行为者、工具名、输入摘要、输出摘要、内容摘要、关键词、关键片段和引用元数据。不要依赖任何项目背景知识，只根据输入内容操作。
+你会收到一段输入，其中包含事件类型、来源、行为者、工具名、输入摘要、输出摘要、内容摘要、关键词、关键片段和引用元数据。
 
 操作步骤：
 1. 只删除重复、寒暄、过程噪声、低价值元数据和不影响理解的冗余表述。
