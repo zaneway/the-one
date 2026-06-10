@@ -2,7 +2,12 @@ package prompts
 
 const OpenAIExtractEvidencePrompt = `你需要从一条 raw_event 事实记录中，判断是否存在值得以后检索和复用的信息，并把这些信息整理成证据数组。
 
-你会收到一段 JSON 输入，其中可能包含事件摘要、原始或脱敏后的 raw_payload_json、payload_schema、redaction_state、truncation、会话摘要、任务摘要、相关历史事件和捕获质量。不要依赖任何项目背景知识，只根据输入内容操作。
+你会收到一段 JSON 输入，其中包含事件正文、会话摘要、任务摘要、相关历史事件和捕获质量。不要依赖任何项目背景知识，只根据输入内容操作。
+
+raw_event 字段说明：
+- input_summary/output_summary 在 turn.completed 中可能是用户请求和 Agent 应答的原始正文，不要按“短摘要”理解。
+- 外部模型调用只会收到 input_summary/output_summary；如果两者都为空，才会收到 content_summary。
+- raw_event 表中的其他元数据和 raw_payload_json 不会发送给外部模型。
 
 操作步骤：
 1. 判断输入是否值得保存：
@@ -40,7 +45,7 @@ const OpenAIExtractEvidencePrompt = `你需要从一条 raw_event 事实记录�
 
 const OpenAIGenerateCandidatesPrompt = `你需要根据输入证据，生成可长期保存、可检索、可审计的记忆候选数组。候选只是“待审核的建议”，不是最终写入结论。
 
-你会收到一段 JSON 输入，其中包含一条证据、对应事件、会话/任务上下文以及相关已有记忆。不要依赖任何项目背景知识，只根据输入内容操作。
+你会收到一段 JSON 输入，其中包含一条证据、对应事件正文、会话/任务上下文以及相关已有记忆。raw_event 中的 input_summary/output_summary 可能是原始请求/应答正文；如果两者都为空才会提供 content_summary。不要依赖任何项目背景知识，只根据输入内容操作。
 
 操作步骤：
 1. 先判断证据是否足以形成候选记忆。

@@ -204,6 +204,9 @@ func TestTurnRuntimeCarriesRawPayloadMetadata(t *testing.T) {
 	if string(raw["user"]) != `{"message":"用户要求保留原始输入"}` || string(raw["agent"]) != `{"message":"已保留原始输出"}` {
 		t.Fatalf("raw payload = %q", turnReq.RawPayloadJSON)
 	}
+	if turnReq.InputSummary != "用户要求保留原始输入" || turnReq.OutputSummary != "已保留原始输出" {
+		t.Fatalf("input/output = %q/%q, want original user/agent payload text", turnReq.InputSummary, turnReq.OutputSummary)
+	}
 	if turnReq.PayloadSchema != "turn.completed.v1" {
 		t.Fatalf("payload schema=%q", turnReq.PayloadSchema)
 	}

@@ -16,29 +16,20 @@ var forbiddenRawFields = []string{"full_text", "full_output", "full_diff"}
 
 // CheckMinimizedObserve 执行 observe 内容最小化硬边界检查
 // 校验规则：
-// 1. input_summary 字符数不超过 max_input_summary_chars（默认1200）
-// 2. output_summary 字符数不超过 max_output_summary_chars（默认2000）
-// 3. content_summary 字符数不超过 max_content_summary_chars（默认6000）
-// 4. keywords 数组长度不超过 max_keyword_count（默认30）
-// 5. salient_spans 数组长度不超过 max_salient_span_count（默认10）
-// 6. 单个 salient_span 字符数不超过 max_salient_span_chars（默认500）
-// 7. source_refs JSON 序列化后长度不超过 max_source_refs_chars（默认4000）
-// 8. source_refs 中禁止包含 full_text/full_output/full_diff 字段
-// 9. raw_payload_json 必须是合法 JSON 且不超过 max_raw_payload_chars（默认1MiB）
+// 1. content_summary 字符数不超过 max_content_summary_chars（默认6000）
+// 2. keywords 数组长度不超过 max_keyword_count（默认30）
+// 3. salient_spans 数组长度不超过 max_salient_span_count（默认10）
+// 4. 单个 salient_span 字符数不超过 max_salient_span_chars（默认500）
+// 5. source_refs JSON 序列化后长度不超过 max_source_refs_chars（默认4000）
+// 6. source_refs 中禁止包含 full_text/full_output/full_diff 字段
+// 7. raw_payload_json 必须是合法 JSON 且不超过 max_raw_payload_chars（默认1MiB）
 // 设计说明：
-// - 不做复杂脱敏和自动摘要，Adapter 可发送有界 raw payload、摘要、关键片段、hash 和 source ref
+// - input_summary/output_summary 可保存原始请求/应答正文，不再作为摘要字段限制长度
+// - 不做复杂脱敏和自动摘要，Adapter 可发送有界 raw payload、原始正文、关键片段、hash 和 source ref
 // - 服务端发现完整全文字段、超长摘要或超长引用时直接拒绝
 // - raw_payload_json 用于事实层可重放，不直接提升为 memory_item
 // - 使用 rune 长度而非字节长度，正确处理中文等多字节字符
 func CheckMinimizedObserve(cfg config.CaptureConfig, req ObserveRequest) error {
-	// 校验输入摘要长度
-	if len([]rune(req.InputSummary)) > cfg.MaxInputSummaryChars {
-		return fmt.Errorf("CONTENT_TOO_LARGE: input_summary exceeds max_input_summary_chars=%d", cfg.MaxInputSummaryChars)
-	}
-	// 校验输出摘要长度
-	if len([]rune(req.OutputSummary)) > cfg.MaxOutputSummaryChars {
-		return fmt.Errorf("CONTENT_TOO_LARGE: output_summary exceeds max_output_summary_chars=%d", cfg.MaxOutputSummaryChars)
-	}
 	// 校验内容摘要长度
 	if len([]rune(req.ContentSummary)) > cfg.MaxContentSummaryChars {
 		return fmt.Errorf("CONTENT_TOO_LARGE: content_summary exceeds max_content_summary_chars=%d", cfg.MaxContentSummaryChars)

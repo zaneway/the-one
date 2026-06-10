@@ -189,15 +189,109 @@ func TestOpenAIProviderExtractEvidenceUsesChatCompletionsAPI(t *testing.T) {
 	if !strings.Contains(userContent, "以后先设计再实现") {
 		t.Fatalf("user content = %#v, want serialized event content", userContent)
 	}
-	for _, want := range []string{"raw_payload_json", "payload_schema", "raw_payload_hash", "redaction_state", "truncation", "sha256:raw-openai", "conversation_message.v1"} {
-		if !strings.Contains(userContent, want) {
-			t.Fatalf("user content = %s, want raw event payload metadata %q", userContent, want)
+	for _, notWant := range []string{"raw_payload_json", "payload_schema", "raw_payload_hash", "redaction_state", "truncation", "sha256:raw-openai", "conversation_message.v1", "event_type"} {
+		if strings.Contains(userContent, notWant) {
+			t.Fatalf("user content = %s, should only include event body, found %q", userContent, notWant)
 		}
 	}
 	systemContent := requestSystemContent(request)
 	for _, want := range []string{"判断输入是否值得保存", "不值得保存时返回空数组", "source_ref", "confidence"} {
 		if !strings.Contains(systemContent, want) {
 			t.Fatalf("system content = %q, want to contain %q", systemContent, want)
+		}
+	}
+}
+
+func TestOpenAIProviderExtractEvidenceSendsSingleTurnBodyToModel(t *testing.T) {
+	var request map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(chatCompletionResponseJSON(`{"evidence":[]}`)))
+	}))
+	defer server.Close()
+
+	provider, err := NewOpenAIProvider(OpenAIProviderConfig{
+		APIKey:          "test-key",
+		BaseURL:         server.URL,
+		Model:           "gpt-5-mini",
+		Timeout:         time.Second,
+		MaxOutputTokens: 400,
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIProvider() error = %v", err)
+	}
+
+	if _, err := provider.ExtractEvidence(context.Background(), EvidenceInput{
+		RawEvent: capture.RawEvent{
+			ID:               "evt_turn",
+			EventType:        capture.EventTurnCompleted,
+			InputSummary:     "用户原始请求：请合并 raw_event。",
+			OutputSummary:    "助手原始应答：已采用 turn.completed。",
+			ContentSummary:   "【事件】用户请求合并 raw_event。\n【结论/决策】采用 turn.completed。",
+			RawPayloadJSON:   `{"user":{"prompt":"用户原始请求：请合并 raw_event。"},"agent":{"response":"助手原始应答：已采用 turn.completed。"}}`,
+			PayloadSchema:    "turn.completed.v1",
+			RawPayloadHash:   "sha256:turn-payload",
+			RedactionState:   capture.RedactionStateRaw,
+			SourceRefsJSON:   `[{"source_type":"agent_session"}]`,
+			KeywordsJSON:     `["raw_event","turn.completed"]`,
+			SalientSpansJSON: `["采用 turn.completed"]`,
+		},
+	}); err != nil {
+		t.Fatalf("ExtractEvidence() error = %v", err)
+	}
+	userContent := requestUserContent(request)
+	if !strings.Contains(userContent, "用户原始请求：请合并 raw_event。") || !strings.Contains(userContent, "助手原始应答：已采用 turn.completed。") {
+		t.Fatalf("user content = %s, want original input/output bodies", userContent)
+	}
+	for _, notWant := range []string{"content_summary", "raw_payload_json", "raw_payload_hash", "payload_schema", "redaction_state", "truncation", "keywords_json", "source_refs_json", "event_type", "用户请求合并 raw_event"} {
+		if strings.Contains(userContent, notWant) {
+			t.Fatalf("user content = %s, should only include input/output body, found %q", userContent, notWant)
+		}
+	}
+}
+
+func TestOpenAIProviderExtractEvidenceFallsBackToContentSummaryOnly(t *testing.T) {
+	var request map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(chatCompletionResponseJSON(`{"evidence":[]}`)))
+	}))
+	defer server.Close()
+
+	provider, err := NewOpenAIProvider(OpenAIProviderConfig{
+		APIKey:          "test-key",
+		BaseURL:         server.URL,
+		Model:           "gpt-5-mini",
+		Timeout:         time.Second,
+		MaxOutputTokens: 400,
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIProvider() error = %v", err)
+	}
+
+	if _, err := provider.ExtractEvidence(context.Background(), EvidenceInput{
+		RawEvent: capture.RawEvent{
+			ID:             "evt_content",
+			EventType:      capture.EventUserDeclaration,
+			ContentSummary: "【事实】用户要求外部 AI 只接收必要正文。",
+			RawPayloadJSON: `{"message":"raw duplicate"}`,
+		},
+	}); err != nil {
+		t.Fatalf("ExtractEvidence() error = %v", err)
+	}
+	userContent := requestUserContent(request)
+	if !strings.Contains(userContent, "【事实】用户要求外部 AI 只接收必要正文。") {
+		t.Fatalf("user content = %s, want content_summary fallback", userContent)
+	}
+	for _, notWant := range []string{"raw_payload_json", "event_type", "evt_content"} {
+		if strings.Contains(userContent, notWant) {
+			t.Fatalf("user content = %s, should only include content_summary fallback, found %q", userContent, notWant)
 		}
 	}
 }

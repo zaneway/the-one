@@ -220,6 +220,15 @@ func TestValidateRejectsInvalidCaptureRawPayloadLimit(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsDisabledInputOutputSummaryLimits(t *testing.T) {
+	cfg := Default()
+	cfg.Capture.MaxInputSummaryChars = 0
+	cfg.Capture.MaxOutputSummaryChars = 0
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate() error = %v, want nil for deprecated input/output limits", err)
+	}
+}
+
 func TestValidateRejectsInvalidProcessorConfig(t *testing.T) {
 	cfg := Default()
 	cfg.Processor.Provider = ""

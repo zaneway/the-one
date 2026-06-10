@@ -318,12 +318,12 @@ type ObserveRequest struct {
 	// tool.call和tool.result.summary事件时填写
 	ToolName string `json:"tool_name"`
 
-	// InputSummary 输入摘要
-	// 工具输入摘要，不超过max_input_summary_chars限制
+	// InputSummary 输入正文
+	// turn.completed 中保存用户原始请求；工具事件中保存工具输入正文或摘要
 	InputSummary string `json:"input_summary"`
 
-	// OutputSummary 输出摘要
-	// 工具输出摘要，不超过max_output_summary_chars限制
+	// OutputSummary 输出正文
+	// turn.completed 中保存 Agent 原始应答；工具事件中保存工具输出正文或摘要
 	OutputSummary string `json:"output_summary"`
 
 	// ContentSummary 内容摘要
@@ -583,12 +583,12 @@ type RawEvent struct {
 	// tool.call和tool.result.summary事件时填写
 	ToolName string `json:"tool_name,omitempty"`
 
-	// InputSummary 输入摘要
-	// 工具输入摘要，不超过max_input_summary_chars限制
+	// InputSummary 输入正文
+	// turn.completed 中保存用户原始请求；工具事件中保存工具输入正文或摘要
 	InputSummary string `json:"input_summary,omitempty"`
 
-	// OutputSummary 输出摘要
-	// 工具输出摘要，不超过max_output_summary_chars限制
+	// OutputSummary 输出正文
+	// turn.completed 中保存 Agent 原始应答；工具事件中保存工具输出正文或摘要
 	OutputSummary string `json:"output_summary,omitempty"`
 
 	// ContentSummary 内容摘要

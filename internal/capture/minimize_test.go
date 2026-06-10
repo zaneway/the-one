@@ -87,6 +87,22 @@ func TestCheckMinimizedObserveAcceptsStructuredShortContentSummary(t *testing.T)
 	}
 }
 
+func TestCheckMinimizedObserveDoesNotLimitInputOutputBodyLength(t *testing.T) {
+	cfg := config.Default().Capture
+	req := ObserveRequest{
+		EventType:      EventTurnCompleted,
+		SourceChannel:  SourceChannelAgentSession,
+		InputSummary:   strings.Repeat("用户原始请求", cfg.MaxInputSummaryChars+1),
+		OutputSummary:  strings.Repeat("助手原始应答", cfg.MaxOutputSummaryChars+1),
+		ContentSummary: "【事件】用户提出长请求。\n【结论/决策】助手完成长应答。",
+		SalientSpans:   []string{"用户提出长请求"},
+	}
+
+	if err := CheckMinimizedObserve(cfg, req); err != nil {
+		t.Fatalf("CheckMinimizedObserve() error = %v, want nil for long input/output bodies", err)
+	}
+}
+
 func TestContentHashAndDedupKeyAreStable(t *testing.T) {
 	req := ObserveRequest{
 		SessionID:     "sess_001",

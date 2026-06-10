@@ -246,6 +246,8 @@ func buildBaseTurnRequest(common capture.ObserveRequest, payload TurnPayload) (c
 		firstNonEmptySlice(payload.AgentSalientSpans, payload.SalientSpans),
 	)
 	req.ContentSummary = turnContentSummary(userEventType, userSummary, agentSummary)
+	req.InputSummary = firstNonEmpty(rawPayloadText(payload.UserRawPayload, "prompt", "message", "input", "user_message", "userMessage"), userSummary)
+	req.OutputSummary = firstNonEmpty(rawPayloadText(payload.AgentRawPayload, "response", "message", "output", "assistant_message", "assistantMessage"), agentSummary)
 	req.SourceRefs = appendSemanticDigestSourceRef(req.SourceRefs, "user_prompt", payload.UserPromptChars, payload.SemanticSummaryVersion)
 	req.SourceRefs = appendSemanticDigestSourceRef(req.SourceRefs, "agent_response", payload.AgentResponseChars, payload.SemanticSummaryVersion)
 	req.SourceRefs = appendRetrievalSourceRefs(req.SourceRefs, payload)
@@ -342,6 +344,32 @@ func rawPayloadValue(raw string) any {
 		return json.RawMessage(raw)
 	}
 	return raw
+}
+
+func rawPayloadText(raw string, keys ...string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return raw
+	}
+	return firstTextValue(decoded, keys...)
+}
+
+func firstTextValue(value any, keys ...string) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case map[string]any:
+		for _, key := range keys {
+			if text := firstTextValue(typed[key], keys...); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
 }
 
 func mergeTruncation(base capture.TruncationPolicy, values ...capture.TruncationPolicy) capture.TruncationPolicy {

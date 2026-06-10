@@ -175,12 +175,12 @@ type CaptureConfig struct {
 	// 默认true，Agent自动捕获事件必须绑定session
 	RequireSessionForAgentEvents bool `yaml:"require_session_for_agent_events" json:"require_session_for_agent_events"`
 
-	// MaxInputSummaryChars 最大输入摘要字符数
-	// input_summary字段的长度限制，默认1200
+	// MaxInputSummaryChars 兼容旧配置项
+	// input_summary 不再限制长度，该字段仅保留用于读取旧配置
 	MaxInputSummaryChars int `yaml:"max_input_summary_chars" json:"max_input_summary_chars"`
 
-	// MaxOutputSummaryChars 最大输出摘要字符数
-	// output_summary字段的长度限制，默认2000
+	// MaxOutputSummaryChars 兼容旧配置项
+	// output_summary 不再限制长度，该字段仅保留用于读取旧配置
 	MaxOutputSummaryChars int `yaml:"max_output_summary_chars" json:"max_output_summary_chars"`
 
 	// MaxContentSummaryChars 最大内容摘要字符数
@@ -628,7 +628,7 @@ func validate(cfg Config) error {
 	if cfg.Memory.MaxContentChars <= 0 || cfg.Memory.MaxEvidenceChars <= 0 || cfg.Memory.MaxKeywordCount <= 0 || cfg.Memory.MaxSalientSpanCount <= 0 {
 		return errors.New("CONFIG_INVALID: memory content limits must be positive")
 	}
-	if cfg.Capture.MaxInputSummaryChars <= 0 || cfg.Capture.MaxOutputSummaryChars <= 0 || cfg.Capture.MaxContentSummaryChars <= 0 ||
+	if cfg.Capture.MaxContentSummaryChars <= 0 ||
 		cfg.Capture.MaxSourceRefsChars <= 0 || cfg.Capture.MaxRawPayloadChars <= 0 || cfg.Capture.MaxSalientSpanChars <= 0 ||
 		cfg.Capture.MaxSalientSpanCount <= 0 || cfg.Capture.MaxKeywordCount <= 0 {
 		return errors.New("CONFIG_INVALID: capture content limits must be positive")

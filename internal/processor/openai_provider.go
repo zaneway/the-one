@@ -134,11 +134,11 @@ func (p OpenAIProvider) EnhanceObserve(ctx context.Context, input capture.Semant
 func (p OpenAIProvider) ExtractEvidence(ctx context.Context, input EvidenceInput) ([]EvidenceDraft, error) {
 	payload := map[string]any{
 		"task":            "extract_evidence",
-		"raw_event":       input.RawEvent,
+		"raw_event":       openAIRawEventView(input.RawEvent),
 		"session":         input.Session,
 		"agent_task":      input.Task,
 		"capture_quality": input.CaptureQuality,
-		"related_events":  input.RelatedEvents,
+		"related_events":  openAIRawEventViews(input.RelatedEvents),
 		"now":             input.Now,
 	}
 	raw, err := p.callStructured(ctx, p.extractEvidencePrompt, payload, "theone_evidence", evidenceSchema())
@@ -173,7 +173,7 @@ func (p OpenAIProvider) GenerateCandidates(ctx context.Context, input CandidateI
 	payload := map[string]any{
 		"task":           "generate_memory_candidates",
 		"evidence":       input.Evidence,
-		"raw_event":      input.RawEvent,
+		"raw_event":      openAIRawEventView(input.RawEvent),
 		"session":        input.Session,
 		"agent_task":     input.Task,
 		"related_memory": input.RelatedMemory,
@@ -199,6 +199,33 @@ func (p OpenAIProvider) GenerateCandidates(ctx context.Context, input CandidateI
 		out = append(out, mapped)
 	}
 	return out, nil
+}
+
+func openAIRawEventViews(events []capture.RawEvent) []map[string]any {
+	if len(events) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(events))
+	for _, event := range events {
+		out = append(out, openAIRawEventView(event))
+	}
+	return out
+}
+
+func openAIRawEventView(event capture.RawEvent) map[string]any {
+	out := map[string]any{}
+	if input := strings.TrimSpace(event.InputSummary); input != "" {
+		out["input_summary"] = input
+	}
+	if output := strings.TrimSpace(event.OutputSummary); output != "" {
+		out["output_summary"] = output
+	}
+	if len(out) == 0 {
+		if summary := strings.TrimSpace(event.ContentSummary); summary != "" {
+			out["content_summary"] = summary
+		}
+	}
+	return out
 }
 
 type openAIEvidenceDraft struct {
