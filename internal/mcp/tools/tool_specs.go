@@ -160,9 +160,8 @@ func memoryReviewSpec(handler mcp.Handler) mcp.ToolSpec {
 // captureObserveSpec 构建 "memory.observe" 工具规格。
 // 该工具用于捕获 Agent 的事件到原始事件存储（raw_event），是事件采集管道的入口。
 // 设计思路是：
-//   - 核心原则是"最小化采集"：不存储完整的 prompt、工具输出、diff 或源代码，
-//     只保存摘要（summary）、关键词（keywords）和显著片段（salient_spans），
-//     在可观测性和隐私/存储成本之间取得平衡。
+//   - 核心原则是"事实层有界采集"：摘要（summary）、关键词（keywords）和显著片段（salient_spans）
+//     用于检索，raw_payload_json 可保存有界原始事实并用 redaction/truncation 元数据描述处理状态。
 //   - event_type 枚举覆盖了 Agent 交互的完整生命周期：会话开始/结束、任务开始/结果、
 //     对话消息、工具调用/结果、文件编辑、用户纠正/声明、Agent 决策等。
 //   - source_channel 区分事件来源（Agent 会话 / MCP 工具调用 / 手动 CLI），
@@ -171,12 +170,12 @@ func memoryReviewSpec(handler mcp.Handler) mcp.ToolSpec {
 //     为下游的存储策略和保留策略提供决策依据。
 //
 // 参数:
-//   - handler: MCP 调用处理器，执行事件的最小化处理和持久化存储。
+//   - handler: MCP 调用处理器，执行事件的有界事实采集和持久化存储。
 func captureObserveSpec(handler mcp.Handler) mcp.ToolSpec {
 	return mcp.ToolSpec{
 		Name:        "memory.observe",
 		Title:       "Observe agent event",
-		Description: "Capture a minimized agent event into raw_event storage without full prompts, full tool output, full diffs, or source code.",
+		Description: "Capture a bounded agent event into raw_event storage with summaries plus optional raw_payload_json metadata for replayable evidence extraction.",
 		InputSchema: mcp.ObjectSchema([]string{"event_type"}, map[string]any{
 			"session_id":           mcp.StringProp("Agent session id."),
 			"task_id":              mcp.StringProp("Agent task id."),
@@ -195,6 +194,12 @@ func captureObserveSpec(handler mcp.Handler) mcp.ToolSpec {
 			"keywords":             mcp.StringArrayProp("Keywords for downstream retrieval."),
 			"salient_spans":        mcp.StringArrayProp("Short salient spans, not full original content."),
 			"source_refs":          mcp.ObjectArrayProp("Source references such as hashes, paths, symbols, exit_code, and capture_method."),
+			"raw_payload_json":     mcp.StringProp("Optional bounded raw or near-raw event payload JSON for replayable evidence extraction."),
+			"payload_schema":       mcp.StringProp("Schema/version for raw_payload_json, such as turn.completed.v1 or tool_result.v1."),
+			"raw_payload_hash":     mcp.StringProp("SHA256 hash of raw_payload_json. If empty, server computes it."),
+			"redaction_state":      mcp.EnumStringProp("Raw payload redaction state.", "raw", "redacted", "minimized"),
+			"redaction_policy":     mcp.StringProp("Optional redaction policy/version applied before capture."),
+			"truncation":           mcp.ObjectProp("Raw payload truncation metadata: truncated, original_size_bytes, stored_size_bytes, max_size_bytes, reason."),
 			"content_hash":         mcp.StringProp("Content hash for idempotent deduplication."),
 			"sensitivity":          mcp.StringProp("Sensitivity label such as normal."),
 			"retention_hint":       mcp.StringProp("Retention hint such as short_term or long_term."),

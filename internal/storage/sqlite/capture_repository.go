@@ -194,14 +194,19 @@ func (s *Store) InsertRawEvent(ctx context.Context, event capture.RawEvent) erro
 	_, err := s.db.ExecContext(ctx, `insert into raw_event(
 		id, session_id, task_id, workspace_id, project_id, repo_id, agent_type, event_type,
 		source_channel, occurred_at, actor, tool_name, input_summary, output_summary, content_summary,
-		keywords_json, salient_spans_json, source_refs_json, content_hash, sensitivity, retention_hint, created_at
-	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		keywords_json, salient_spans_json, source_refs_json, raw_payload_json, payload_schema, raw_payload_hash,
+		redaction_state, redaction_policy, truncated, original_size_bytes, stored_size_bytes, max_size_bytes,
+		truncation_reason, content_hash, sensitivity, retention_hint, created_at
+	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID, nullString(event.SessionID), nullString(event.TaskID), nullString(event.WorkspaceID),
 		nullString(event.ProjectID), nullString(event.RepoID), nullString(event.AgentType), event.EventType,
 		nullString(event.SourceChannel), event.OccurredAt.Format(time.RFC3339Nano), nullString(event.Actor),
 		nullString(event.ToolName), nullString(event.InputSummary), nullString(event.OutputSummary),
 		nullString(event.ContentSummary), nullString(event.KeywordsJSON), nullString(event.SalientSpansJSON),
-		nullString(event.SourceRefsJSON), nullString(event.ContentHash), nullString(event.Sensitivity),
+		nullString(event.SourceRefsJSON), nullString(event.RawPayloadJSON), nullString(event.PayloadSchema),
+		nullString(event.RawPayloadHash), nullString(event.RedactionState), nullString(event.RedactionPolicy),
+		event.Truncation.Truncated, nullInt(event.Truncation.OriginalSizeBytes), nullInt(event.Truncation.StoredSizeBytes),
+		nullInt(event.Truncation.MaxSizeBytes), nullString(event.Truncation.Reason), nullString(event.ContentHash), nullString(event.Sensitivity),
 		nullString(event.RetentionHint), event.CreatedAt.Format(time.RFC3339Nano),
 	)
 	return storageErr(err)
@@ -456,6 +461,10 @@ func baseEventSelect() string {
 		coalesce(source_channel, ''), occurred_at, coalesce(actor, ''), coalesce(tool_name, ''),
 		coalesce(input_summary, ''), coalesce(output_summary, ''), coalesce(content_summary, ''),
 		coalesce(keywords_json, ''), coalesce(salient_spans_json, ''), coalesce(source_refs_json, ''),
+		coalesce(raw_payload_json, ''), coalesce(payload_schema, ''), coalesce(raw_payload_hash, ''),
+		coalesce(redaction_state, ''), coalesce(redaction_policy, ''), coalesce(truncated, 0),
+		coalesce(original_size_bytes, 0), coalesce(stored_size_bytes, 0), coalesce(max_size_bytes, 0),
+		coalesce(truncation_reason, ''),
 		coalesce(content_hash, ''), coalesce(sensitivity, ''), coalesce(retention_hint, ''), created_at
 		from raw_event`
 }
@@ -497,7 +506,10 @@ func scanEvent(row rowScanner) (capture.RawEvent, error) {
 	err := row.Scan(&event.ID, &event.SessionID, &event.TaskID, &event.WorkspaceID, &event.ProjectID,
 		&event.RepoID, &event.AgentType, &event.EventType, &event.SourceChannel, &occurredAt,
 		&event.Actor, &event.ToolName, &event.InputSummary, &event.OutputSummary, &event.ContentSummary,
-		&event.KeywordsJSON, &event.SalientSpansJSON, &event.SourceRefsJSON, &event.ContentHash,
+		&event.KeywordsJSON, &event.SalientSpansJSON, &event.SourceRefsJSON, &event.RawPayloadJSON,
+		&event.PayloadSchema, &event.RawPayloadHash, &event.RedactionState, &event.RedactionPolicy,
+		&event.Truncation.Truncated, &event.Truncation.OriginalSizeBytes, &event.Truncation.StoredSizeBytes,
+		&event.Truncation.MaxSizeBytes, &event.Truncation.Reason, &event.ContentHash,
 		&event.Sensitivity, &event.RetentionHint, &createdAt)
 	if err != nil {
 		return capture.RawEvent{}, err
@@ -548,6 +560,13 @@ func nullableTime(value time.Time) any {
 		return nil
 	}
 	return value.Format(time.RFC3339Nano)
+}
+
+func nullInt(value int) any {
+	if value == 0 {
+		return nil
+	}
+	return value
 }
 
 func parseTime(value string) time.Time {

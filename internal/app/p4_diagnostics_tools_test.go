@@ -2,7 +2,11 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -199,6 +203,57 @@ func TestAppStatusReportsP4Capabilities(t *testing.T) {
 	}
 }
 
+func TestAppHealthChecksOpenAIProviderWhenConfigured(t *testing.T) {
+	ctx := context.Background()
+	var requestCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if r.URL.Path != "/responses" {
+			t.Fatalf("path = %q, want /responses", r.URL.Path)
+		}
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if _, ok := request["text"].(map[string]any); !ok {
+			t.Fatalf("request text config missing JSON schema: %+v", request)
+		}
+		if input, ok := request["input"].(string); !ok || !strings.Contains(input, "health_check") {
+			t.Fatalf("input = %#v, want health check payload", request["input"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(openAIHealthResponseJSON(`{"ok":true}`)))
+	}))
+	defer server.Close()
+
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
+	cfg.Processor.Provider = "openai"
+	cfg.Processor.OpenAI.APIKey = "test-key"
+	cfg.Processor.OpenAI.BaseURL = server.URL
+	cfg.Processor.OpenAI.Model = "gpt-5-mini"
+	app, err := New(ctx, cfg, "test")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer app.Close()
+
+	raw, toolErr := app.CallTool(ctx, "memory.health", nil)
+	if toolErr != nil {
+		t.Fatalf("memory.health error = %v", toolErr)
+	}
+	health := raw.(diagnostics.HealthResponse)
+	if !health.OK || health.AI == nil || !health.AI.Supported || !health.AI.OK {
+		t.Fatalf("health = %+v, want ok health with AI availability", health)
+	}
+	if health.AI.Provider != "openai" || health.AI.Model != "gpt-5-mini" {
+		t.Fatalf("ai health = %+v, want openai model", health.AI)
+	}
+	if requestCount != 1 {
+		t.Fatalf("requestCount = %d, want one provider health request", requestCount)
+	}
+}
+
 func TestAppP4DiagnosticsRejectsUnboundedTraceQuery(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Default()
@@ -213,4 +268,24 @@ func TestAppP4DiagnosticsRejectsUnboundedTraceQuery(t *testing.T) {
 	if toolErr == nil || toolErr.ErrorCode != "VALIDATION_FAILED" {
 		t.Fatalf("toolErr = %+v, want validation failure for missing workspace_id", toolErr)
 	}
+}
+
+func openAIHealthResponseJSON(outputText string) string {
+	escaped, _ := json.Marshal(outputText)
+	return `{
+		"id": "resp_health",
+		"object": "response",
+		"created_at": 1781000000,
+		"model": "gpt-5-mini",
+		"output": [{
+			"id": "msg_health",
+			"type": "message",
+			"role": "assistant",
+			"status": "completed",
+			"content": [{
+				"type": "output_text",
+				"text": ` + string(escaped) + `
+			}]
+		}]
+	}`
 }

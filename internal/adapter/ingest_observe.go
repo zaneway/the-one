@@ -23,6 +23,7 @@ func observeFromLifecycle(env IngestEnvelope, sessionID, taskID string) (capture
 		ContentSummary: stringFromPayload(env.Payload, "content_summary"),
 		SourceRefs:     defaultSourceRefs(env.Producer),
 	}
+	applyRawPayloadFromMap(&req, env.Payload)
 	if req.EventType == capture.EventSessionStart {
 		req.CaptureCapabilities = defaultCaptureCapabilities()
 	}
@@ -60,6 +61,7 @@ func observeFromAtomic(env IngestEnvelope, sessionID, taskID string) (capture.Ob
 		SalientSpans:   stringSliceFromPayload(env.Payload, "salient_spans"),
 		SourceRefs:     defaultSourceRefs(env.Producer),
 	}
+	applyRawPayloadFromMap(&req, env.Payload)
 	switch eventType {
 	case capture.EventToolResultSummary:
 		req.Actor = capture.ActorTool
@@ -91,6 +93,34 @@ func observeFromAtomic(env IngestEnvelope, sessionID, taskID string) (capture.Ob
 	}
 	req.ContentSummary = capture.EnsureStructuredContentSummary(req.EventType, req.ContentSummary)
 	return req, nil
+}
+
+func applyRawPayloadFromMap(req *capture.ObserveRequest, payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	req.RawPayloadJSON = stringFromPayload(payload, "raw_payload_json")
+	req.PayloadSchema = stringFromPayload(payload, "payload_schema")
+	req.RawPayloadHash = stringFromPayload(payload, "raw_payload_hash")
+	req.RedactionState = stringFromPayload(payload, "redaction_state")
+	req.RedactionPolicy = stringFromPayload(payload, "redaction_policy")
+	req.TruncationPolicy = truncationFromPayload(payload)
+}
+
+func truncationFromPayload(payload map[string]any) capture.TruncationPolicy {
+	raw, ok := payload["truncation"]
+	if !ok || raw == nil {
+		return capture.TruncationPolicy{}
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return capture.TruncationPolicy{}
+	}
+	var out capture.TruncationPolicy
+	if err := json.Unmarshal(data, &out); err != nil {
+		return capture.TruncationPolicy{}
+	}
+	return out
 }
 
 func bootstrapObserveRequest(env IngestEnvelope, sessionID, taskID, producer string) capture.ObserveRequest {

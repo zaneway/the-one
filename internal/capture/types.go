@@ -164,10 +164,42 @@ const (
 	SensitivityNormal = "normal"
 )
 
+// ============================================================================
+// 原始载荷处理状态常量定义
+// ============================================================================
+const (
+	// RedactionStateRaw 表示 raw_event 持有未经脱敏的原始载荷。
+	RedactionStateRaw = "raw"
+
+	// RedactionStateRedacted 表示 raw_event 持有已脱敏的原始载荷。
+	RedactionStateRedacted = "redacted"
+
+	// RedactionStateMinimized 表示 raw_event 只持有最小化后的载荷。
+	RedactionStateMinimized = "minimized"
+)
+
 // SourceRef 来源引用
 // 保存事件事实的外部引用、hash 和摘要元数据
-// 设计约束：禁止放入完整输出、完整 diff 或完整 prompt
+// 设计约束：只保存来源定位和校验信息，完整 payload 应放入 RawPayloadJSON 并标记脱敏/截断状态。
 type SourceRef map[string]any
+
+// TruncationPolicy 描述 raw_event 原始载荷的截断策略和结果。
+type TruncationPolicy struct {
+	// Truncated 是否发生截断
+	Truncated bool `json:"truncated"`
+
+	// OriginalSizeBytes 原始载荷字节数
+	OriginalSizeBytes int `json:"original_size_bytes,omitempty"`
+
+	// StoredSizeBytes 实际保存字节数
+	StoredSizeBytes int `json:"stored_size_bytes,omitempty"`
+
+	// MaxSizeBytes 策略允许保存的最大字节数
+	MaxSizeBytes int `json:"max_size_bytes,omitempty"`
+
+	// Reason 截断原因，如 max_raw_payload_bytes
+	Reason string `json:"reason,omitempty"`
+}
 
 // CaptureCapabilities 捕获能力声明
 // Adapter 在 session.start 或首次 observe 时声明的捕获能力
@@ -235,8 +267,8 @@ type TaskInput struct {
 }
 
 // ObserveRequest memory.observe 请求结构体
-// 服务层 DTO，只承载最小化后的事件事实
-// 设计原则：不保存完整会话、完整工具输出、完整diff或完整源码
+// 服务层 DTO，承载摘要索引卡和可选有界 raw payload 事实
+// 设计原则：raw payload 只进入 raw_event 事实层，不直接提升为 memory_item
 type ObserveRequest struct {
 	// SessionID 会话ID
 	// Agent自动捕获事件必填，手动CLI写入可空
@@ -305,6 +337,29 @@ type ObserveRequest struct {
 	// SourceRefs 来源引用列表
 	// 保存hash、路径、符号、exit_code等引用，不保存全文
 	SourceRefs []SourceRef `json:"source_refs"`
+
+	// RawPayloadJSON 原始事件载荷JSON
+	// 可保存完整或准完整事实输入，必须配合redaction/truncation元数据使用
+	RawPayloadJSON string `json:"raw_payload_json"`
+
+	// PayloadSchema 原始载荷schema版本
+	// 如 tool_result.v1、conversation_message.v1
+	PayloadSchema string `json:"payload_schema"`
+
+	// RawPayloadHash 原始载荷hash
+	// 用于审计、去重和后续重放校验
+	RawPayloadHash string `json:"raw_payload_hash"`
+
+	// RedactionState 脱敏状态
+	// raw、redacted、minimized
+	RedactionState string `json:"redaction_state"`
+
+	// RedactionPolicy 脱敏策略版本
+	// 如 theone.default.v1
+	RedactionPolicy string `json:"redaction_policy"`
+
+	// TruncationPolicy 原始载荷截断策略
+	TruncationPolicy TruncationPolicy `json:"truncation"`
 
 	// ContentHash 内容哈希
 	// 推荐必填，用于幂等去重；为空时服务端用最小化字段计算
@@ -475,7 +530,7 @@ type AgentTask struct {
 
 // RawEvent 原始事件结构体
 // raw_event 表的领域对象，表示 append-only 事件事实
-// 设计原则：不代表长期记忆，只保存最小化后的事件事实
+// 设计原则：不代表长期记忆，保存摘要索引卡和可重放 raw payload 事实
 type RawEvent struct {
 	// ID 事件ID
 	// 全局唯一标识，格式如evt_001
@@ -547,6 +602,26 @@ type RawEvent struct {
 	// SourceRefsJSON 来源引用JSON
 	// 保存hash、路径、符号、exit_code等引用
 	SourceRefsJSON string `json:"source_refs_json,omitempty"`
+
+	// RawPayloadJSON 原始事件载荷JSON
+	// 作为事实层可重放输入，不直接进入memory_item
+	RawPayloadJSON string `json:"raw_payload_json,omitempty"`
+
+	// PayloadSchema 原始载荷schema版本
+	PayloadSchema string `json:"payload_schema,omitempty"`
+
+	// RawPayloadHash 原始载荷hash
+	RawPayloadHash string `json:"raw_payload_hash,omitempty"`
+
+	// RedactionState 脱敏状态
+	// raw、redacted、minimized
+	RedactionState string `json:"redaction_state,omitempty"`
+
+	// RedactionPolicy 脱敏策略版本
+	RedactionPolicy string `json:"redaction_policy,omitempty"`
+
+	// Truncation 原始载荷截断策略和结果
+	Truncation TruncationPolicy `json:"truncation,omitempty"`
 
 	// ContentHash 内容哈希
 	// 用于幂等去重

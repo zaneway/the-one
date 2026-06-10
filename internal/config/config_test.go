@@ -33,6 +33,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Capture.MaxOutputSummaryChars != 2000 {
 		t.Fatalf("capture max output summary = %d, want 2000", cfg.Capture.MaxOutputSummaryChars)
 	}
+	if cfg.Capture.MaxRawPayloadChars != 1048576 {
+		t.Fatalf("capture max raw payload chars = %d, want 1048576", cfg.Capture.MaxRawPayloadChars)
+	}
 	if cfg.Automation.PollIntervalMS != 1000 || cfg.Automation.BatchSize != 10 || cfg.Automation.MaxAttempts != 3 || cfg.Automation.RetryBaseDelayMS != 1000 {
 		t.Fatalf("automation defaults = %+v, want poll=1000 batch=10 attempts=3 retry=1000", cfg.Automation)
 	}
@@ -206,6 +209,14 @@ func TestValidateRejectsInvalidAdapterPromptCacheUserSummaryLimit(t *testing.T) 
 	cfg.Adapter.PromptCacheUserSummaryMaxChars = 0
 	if err := validate(cfg); err == nil {
 		t.Fatal("validate() error = nil, want invalid adapter prompt cache limit")
+	}
+}
+
+func TestValidateRejectsInvalidCaptureRawPayloadLimit(t *testing.T) {
+	cfg := Default()
+	cfg.Capture.MaxRawPayloadChars = 0
+	if err := validate(cfg); err == nil {
+		t.Fatal("validate() error = nil, want invalid capture raw payload limit")
 	}
 }
 

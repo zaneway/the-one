@@ -10,6 +10,7 @@ import (
 	"github.com/zaneway/theone/internal/docindex"
 	"github.com/zaneway/theone/internal/mcp"
 	"github.com/zaneway/theone/internal/memory"
+	"github.com/zaneway/theone/internal/processor"
 	"github.com/zaneway/theone/internal/retrieval"
 	"github.com/zaneway/theone/internal/storage/sqlite"
 )
@@ -26,19 +27,36 @@ type Store interface {
 
 // Service 聚合 health/status 所需的运行时状态。
 type Service struct {
-	version   string
-	cfg       config.Config
-	store     Store
-	startedAt time.Time
+	version         string
+	cfg             config.Config
+	store           Store
+	startedAt       time.Time
+	aiHealthChecker processor.HealthChecker
 }
 
 // NewService 创建诊断服务。该服务只暴露非敏感配置摘要和存储能力。
-func NewService(version string, cfg config.Config, store Store) *Service {
-	return &Service{
+func NewService(version string, cfg config.Config, store Store, opts ...ServiceOption) *Service {
+	service := &Service{
 		version:   version,
 		cfg:       cfg,
 		store:     store,
 		startedAt: time.Now(),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(service)
+		}
+	}
+	return service
+}
+
+type ServiceOption func(*Service)
+
+// WithAIHealthChecker 注入外部 AI 可用性探测器。
+// diagnostics 只依赖该只读接口，不创建 provider，也不接触 API Key。
+func WithAIHealthChecker(checker processor.HealthChecker) ServiceOption {
+	return func(s *Service) {
+		s.aiHealthChecker = checker
 	}
 }
 
@@ -60,6 +78,7 @@ type HealthResponse struct {
 	Version   string        `json:"version"`
 	UptimeMS  int64         `json:"uptime_ms"`
 	Storage   HealthStorage `json:"storage"`
+	AI        *HealthAI     `json:"ai,omitempty"`
 	Error     *mcp.Error    `json:"error,omitempty"`
 }
 
@@ -69,9 +88,19 @@ type HealthStorage struct {
 	Backend string `json:"backend"`
 }
 
-// HealthTool 执行轻量 SQLite ping 验证存储层可用性。
-// 处理流程：调用 store.Ping() -> 返回 ok/version/uptime/storage 状态。
-// 设计说明：ping 失败不 panic，返回结构化错误供 Agent 重试或降级。
+// HealthAI 描述 health 响应中的外部 AI 可用性摘要。
+type HealthAI struct {
+	Supported bool   `json:"supported"`
+	OK        bool   `json:"ok"`
+	Provider  string `json:"provider,omitempty"`
+	Model     string `json:"model,omitempty"`
+	LatencyMS int64  `json:"latency_ms,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// HealthTool 执行轻量 SQLite ping，并在 Provider 支持时验证外部 AI 可用性。
+// 处理流程：调用 store.Ping() -> 可选调用 aiHealthChecker.CheckHealth() -> 返回 ok/version/uptime/storage/ai 状态。
+// 设计说明：health 不写入存储，不触发 evidence/candidate；外部 AI 失败会返回结构化错误供 Agent 重试或降级。
 func (s *Service) HealthTool(ctx context.Context, _ json.RawMessage) (any, *mcp.Error) {
 	if err := s.store.Ping(ctx); err != nil {
 		return HealthResponse{
@@ -84,6 +113,44 @@ func (s *Service) HealthTool(ctx context.Context, _ json.RawMessage) (any, *mcp.
 				Message:      "sqlite ping failed",
 				Retryable:    true,
 				FallbackHint: "restart theone or check db path",
+			},
+		}, nil
+	}
+	if s.aiHealthChecker != nil {
+		status, err := s.aiHealthChecker.CheckHealth(ctx)
+		if err != nil {
+			return HealthResponse{
+				OK:       false,
+				Version:  s.version,
+				UptimeMS: time.Since(s.startedAt).Milliseconds(),
+				Storage:  HealthStorage{OK: true, Backend: "sqlite"},
+				AI: &HealthAI{
+					Supported: true,
+					OK:        false,
+					Provider:  status.Provider,
+					Model:     status.Model,
+					LatencyMS: status.LatencyMS,
+					Error:     err.Error(),
+				},
+				Error: &mcp.Error{
+					ErrorCode:    "AI_UNAVAILABLE",
+					Message:      "external AI provider health check failed",
+					Retryable:    true,
+					FallbackHint: "check processor provider credentials, model, base_url, or network reachability",
+				},
+			}, nil
+		}
+		return HealthResponse{
+			OK:       true,
+			Version:  s.version,
+			UptimeMS: time.Since(s.startedAt).Milliseconds(),
+			Storage:  HealthStorage{OK: true, Backend: "sqlite"},
+			AI: &HealthAI{
+				Supported: true,
+				OK:        true,
+				Provider:  status.Provider,
+				Model:     status.Model,
+				LatencyMS: status.LatencyMS,
 			},
 		}, nil
 	}

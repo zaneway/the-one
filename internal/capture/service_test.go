@@ -105,6 +105,103 @@ func TestServiceObserveDedupesRawEvent(t *testing.T) {
 	}
 }
 
+func TestServiceObservePreservesRawPayloadMetadata(t *testing.T) {
+	repo := newFakeRepository()
+	service := NewService(config.Default(), repo)
+
+	resp, err := service.Observe(context.Background(), ObserveRequest{
+		EventType:       EventToolResultSummary,
+		SourceChannel:   SourceChannelMCPTool,
+		WorkspaceID:     "ws",
+		AgentType:       "codex",
+		Actor:           ActorTool,
+		ToolName:        "go test",
+		OutputSummary:   "测试失败",
+		ContentSummary:  "【事实】go test 失败，原始 payload 已脱敏保存。",
+		RawPayloadJSON:  `{"argv":["go","test","./..."],"stderr":"panic: redacted token"}`,
+		PayloadSchema:   "tool_result.v1",
+		RawPayloadHash:  "sha256:raw-payload",
+		RedactionState:  RedactionStateRedacted,
+		RedactionPolicy: "theone.default.v1",
+		TruncationPolicy: TruncationPolicy{
+			Truncated:         true,
+			OriginalSizeBytes: 8192,
+			StoredSizeBytes:   2048,
+			MaxSizeBytes:      2048,
+			Reason:            "max_raw_payload_bytes",
+		},
+		CaptureCapabilities: CaptureCapabilities{
+			ToolOutputCapture: true,
+			MCPObserve:        true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+
+	event := repo.events[resp.RawEventID]
+	if event.RawPayloadJSON != `{"argv":["go","test","./..."],"stderr":"panic: redacted token"}` ||
+		event.PayloadSchema != "tool_result.v1" ||
+		event.RawPayloadHash != "sha256:raw-payload" ||
+		event.RedactionState != RedactionStateRedacted ||
+		event.RedactionPolicy != "theone.default.v1" {
+		t.Fatalf("raw payload metadata = %+v, want preserved payload metadata", event)
+	}
+	if !event.Truncation.Truncated || event.Truncation.OriginalSizeBytes != 8192 || event.Truncation.StoredSizeBytes != 2048 || event.Truncation.MaxSizeBytes != 2048 {
+		t.Fatalf("truncation = %+v, want preserved truncation policy", event.Truncation)
+	}
+}
+
+func TestServiceObserveDefaultsRawPayloadMetadataWithoutRedaction(t *testing.T) {
+	repo := newFakeRepository()
+	service := NewService(config.Default(), repo)
+
+	resp, err := service.Observe(context.Background(), ObserveRequest{
+		EventType:      EventUserDeclaration,
+		SourceChannel:  SourceChannelMCPTool,
+		WorkspaceID:    "ws",
+		AgentType:      "codex",
+		Actor:          ActorUser,
+		ContentSummary: "【事实】用户要求尽量保留 raw payload。",
+		RawPayloadJSON: `{"message":"用户要求尽量保留 raw payload。","nested":{"ok":true}}`,
+	})
+	if err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+	event := repo.events[resp.RawEventID]
+	if event.RedactionState != RedactionStateRaw {
+		t.Fatalf("redaction_state = %q, want raw", event.RedactionState)
+	}
+	if event.RawPayloadHash == "" || !strings.HasPrefix(event.RawPayloadHash, "sha256:") {
+		t.Fatalf("raw_payload_hash = %q, want computed sha256", event.RawPayloadHash)
+	}
+	if event.Truncation.Truncated {
+		t.Fatalf("truncation = %+v, want not truncated", event.Truncation)
+	}
+	if event.Truncation.OriginalSizeBytes != len([]byte(event.RawPayloadJSON)) ||
+		event.Truncation.StoredSizeBytes != len([]byte(event.RawPayloadJSON)) {
+		t.Fatalf("truncation = %+v, want raw payload byte sizes", event.Truncation)
+	}
+}
+
+func TestServiceObserveRejectsInvalidRawPayloadJSON(t *testing.T) {
+	repo := newFakeRepository()
+	service := NewService(config.Default(), repo)
+
+	_, err := service.Observe(context.Background(), ObserveRequest{
+		EventType:      EventUserDeclaration,
+		SourceChannel:  SourceChannelMCPTool,
+		WorkspaceID:    "ws",
+		AgentType:      "codex",
+		Actor:          ActorUser,
+		ContentSummary: "【事实】invalid raw payload should be rejected.",
+		RawPayloadJSON: `{"message":`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "raw_payload_json must be valid JSON") {
+		t.Fatalf("Observe() error = %v, want raw payload json validation", err)
+	}
+}
+
 func TestServiceObserveEnqueuesAutomationForNewRawEventOnly(t *testing.T) {
 	repo := newFakeRepository()
 	enqueuer := &fakeJobEnqueuer{}
@@ -158,15 +255,15 @@ func TestServiceObserveEnqueuesAutomationForNewRawEventOnly(t *testing.T) {
 	}
 }
 
-func TestServiceObserveAppliesSemanticEnhancerBeforeContentBoundaryAndHash(t *testing.T) {
+func TestServiceObserveDoesNotCallSemanticEnhancerBeforeRawEventPersistence(t *testing.T) {
 	repo := newFakeRepository()
 	enhancer := &fakeSemanticEnhancer{
 		output: SemanticEnhanceOutput{
-			InputSummary:       "用户输入强调自动化记忆要先语义简化。",
-			OutputSummary:      "Agent确认会在写入前简化并抽取关键词。",
-			ContentSummary:     "【事实】用户要求记忆写入前先做语义等价简化。\n【约束】根据简化后的语义提取关键词。",
-			Keywords:           []string{"语义简化", "关键词提取", "记忆写入"},
-			SalientSpans:       []string{"写入前先做语义等价简化"},
+			InputSummary:       "模型生成的输入摘要不应进入 raw_event。",
+			OutputSummary:      "模型生成的输出摘要不应进入 raw_event。",
+			ContentSummary:     "【事实】模型生成的语义简化不应进入 raw_event。",
+			Keywords:           []string{"模型关键词"},
+			SalientSpans:       []string{"模型生成片段"},
 			SemanticEquivalent: true,
 		},
 	}
@@ -178,59 +275,66 @@ func TestServiceObserveAppliesSemanticEnhancerBeforeContentBoundaryAndHash(t *te
 		WorkspaceID:    "ws",
 		AgentType:      "codex",
 		Actor:          ActorUser,
-		InputSummary:   strings.Repeat("用户输入强调自动化记忆要先语义简化。", 80),
-		OutputSummary:  strings.Repeat("Agent确认会在写入前简化并抽取关键词。", 80),
-		ContentSummary: strings.Repeat("【事实】用户要求记忆写入前先做语义等价简化。【约束】根据简化后的语义提取关键词。", 160),
+		InputSummary:   "用户输入强调 raw_event 必须先保存原始事实。",
+		OutputSummary:  "Agent确认会把外部 AI 处理后置到 processor。",
+		ContentSummary: "【事实】用户要求 raw_event 先保存原始事实。\n【约束】外部 AI 只能在 raw_event 落库后处理 evidence/candidate。",
+		Keywords:       []string{"raw_event", "processor", "evidence"},
+		SalientSpans:   []string{"raw_event 先保存原始事实"},
 		ContentHash:    "sha256:pre-enhance-hash",
+		RawPayloadJSON: `{"turn":{"user":"raw_event 必须先保存原始事实","assistant":"外部 AI 后置处理"}}`,
 	})
 	if err != nil {
 		t.Fatalf("Observe() error = %v", err)
 	}
-	event := repo.events[resp.RawEventID]
-	if event.ContentSummary != enhancer.output.ContentSummary {
-		t.Fatalf("content_summary = %q, want semantic enhanced summary", event.ContentSummary)
+	if enhancer.called {
+		t.Fatal("semantic enhancer was called before raw_event persistence")
 	}
-	if event.ContentHash == "sha256:pre-enhance-hash" {
-		t.Fatalf("content_hash = %q, want recomputed hash after semantic enhancement", event.ContentHash)
+	event := repo.events[resp.RawEventID]
+	if event.ContentSummary != "【事实】用户要求 raw_event 先保存原始事实。\n【约束】外部 AI 只能在 raw_event 落库后处理 evidence/candidate。" {
+		t.Fatalf("content_summary = %q, want original observe summary", event.ContentSummary)
+	}
+	if event.ContentHash != "sha256:pre-enhance-hash" {
+		t.Fatalf("content_hash = %q, want caller-provided hash preserved", event.ContentHash)
 	}
 	var keywords []string
 	if err := json.Unmarshal([]byte(event.KeywordsJSON), &keywords); err != nil {
 		t.Fatalf("decode keywords: %v", err)
 	}
-	if strings.Join(keywords, ",") != "语义简化,关键词提取,记忆写入" {
-		t.Fatalf("keywords = %+v, want model semantic keywords", keywords)
-	}
-	if enhancer.input.ContentSummary == "" || enhancer.input.EventType != EventUserDeclaration {
-		t.Fatalf("enhancer input = %+v, want normalized observe request", enhancer.input)
+	if strings.Join(keywords, ",") != "raw_event,processor,evidence" {
+		t.Fatalf("keywords = %+v, want original observe keywords", keywords)
 	}
 }
 
-func TestServiceObserveRejectsSemanticEnhancerOutputWhenSemanticsChanged(t *testing.T) {
+func TestServiceObservePersistsRawEventWhenConfiguredEnhancerWouldReject(t *testing.T) {
 	repo := newFakeRepository()
-	service := NewService(config.Default(), repo, WithSemanticEnhancer(&fakeSemanticEnhancer{
+	enhancer := &fakeSemanticEnhancer{
 		output: SemanticEnhanceOutput{
 			ContentSummary:     "【事实】模型输出了不同语义",
 			SemanticEquivalent: false,
 		},
-	}))
+	}
+	service := NewService(config.Default(), repo, WithSemanticEnhancer(enhancer))
 
-	_, err := service.Observe(context.Background(), ObserveRequest{
+	resp, err := service.Observe(context.Background(), ObserveRequest{
 		EventType:      EventUserDeclaration,
 		SourceChannel:  SourceChannelMCPTool,
 		WorkspaceID:    "ws",
 		AgentType:      "codex",
 		Actor:          ActorUser,
-		ContentSummary: "【事实】用户要求保持语义不变地简化内容。",
+		ContentSummary: "【事实】用户要求保持 raw_event 原始事实完整。",
 	})
-	if err == nil || !strings.Contains(err.Error(), "SEMANTIC_ENHANCE_FAILED") {
-		t.Fatalf("Observe() error = %v, want semantic enhancement rejection", err)
+	if err != nil {
+		t.Fatalf("Observe() error = %v", err)
 	}
-	if len(repo.events) != 0 {
-		t.Fatalf("events = %d, want no raw_event when semantic equivalence fails", len(repo.events))
+	if enhancer.called {
+		t.Fatal("semantic enhancer was called before raw_event persistence")
+	}
+	if _, ok := repo.events[resp.RawEventID]; !ok {
+		t.Fatalf("raw_event %q not persisted", resp.RawEventID)
 	}
 }
 
-func TestServiceObserveRejectsForbiddenSourceRefsBeforeSemanticEnhancer(t *testing.T) {
+func TestServiceObserveRejectsForbiddenSourceRefsWithoutCallingSemanticEnhancer(t *testing.T) {
 	repo := newFakeRepository()
 	enhancer := &fakeSemanticEnhancer{
 		output: SemanticEnhanceOutput{SemanticEquivalent: true},

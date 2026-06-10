@@ -1,0 +1,10 @@
+alter table raw_event add column raw_payload_json text;
+alter table raw_event add column payload_schema text;
+alter table raw_event add column raw_payload_hash text;
+alter table raw_event add column redaction_state text;
+alter table raw_event add column redaction_policy text;
+alter table raw_event add column truncated integer not null default 0;
+alter table raw_event add column original_size_bytes integer;
+alter table raw_event add column stored_size_bytes integer;
+alter table raw_event add column max_size_bytes integer;
+alter table raw_event add column truncation_reason text;

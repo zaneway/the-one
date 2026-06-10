@@ -67,24 +67,36 @@ func TestCaptureRepositorySessionTaskEventFlow(t *testing.T) {
 	}
 
 	event := capture.RawEvent{
-		ID:             "evt_001",
-		SessionID:      session.ID,
-		TaskID:         task.ID,
-		WorkspaceID:    "ws",
-		ProjectID:      "project_a",
-		RepoID:         "repo_a",
-		AgentType:      "codex",
-		EventType:      capture.EventToolResultSummary,
-		SourceChannel:  capture.SourceChannelAgentSession,
-		OccurredAt:     time.Date(2026, 5, 23, 20, 0, 0, 0, time.UTC),
-		Actor:          capture.ActorTool,
-		ToolName:       "go test",
-		OutputSummary:  "测试通过",
-		KeywordsJSON:   `["go test"]`,
-		SourceRefsJSON: `[{"source_type":"tool_output","exit_code":0}]`,
-		ContentHash:    "sha256:test",
-		Sensitivity:    capture.SensitivityNormal,
-		RetentionHint:  "short_term",
+		ID:              "evt_001",
+		SessionID:       session.ID,
+		TaskID:          task.ID,
+		WorkspaceID:     "ws",
+		ProjectID:       "project_a",
+		RepoID:          "repo_a",
+		AgentType:       "codex",
+		EventType:       capture.EventToolResultSummary,
+		SourceChannel:   capture.SourceChannelAgentSession,
+		OccurredAt:      time.Date(2026, 5, 23, 20, 0, 0, 0, time.UTC),
+		Actor:           capture.ActorTool,
+		ToolName:        "go test",
+		OutputSummary:   "测试通过",
+		KeywordsJSON:    `["go test"]`,
+		SourceRefsJSON:  `[{"source_type":"tool_output","exit_code":0}]`,
+		RawPayloadJSON:  `{"argv":["go","test","./..."],"stderr":"panic: redacted token"}`,
+		PayloadSchema:   "tool_result.v1",
+		RawPayloadHash:  "sha256:raw-payload",
+		RedactionState:  capture.RedactionStateRedacted,
+		RedactionPolicy: "theone.default.v1",
+		Truncation: capture.TruncationPolicy{
+			Truncated:         true,
+			OriginalSizeBytes: 8192,
+			StoredSizeBytes:   2048,
+			MaxSizeBytes:      2048,
+			Reason:            "max_raw_payload_bytes",
+		},
+		ContentHash:   "sha256:test",
+		Sensitivity:   capture.SensitivityNormal,
+		RetentionHint: "short_term",
 	}
 	if err := store.InsertRawEvent(ctx, event); err != nil {
 		t.Fatalf("InsertRawEvent() error = %v", err)
@@ -107,6 +119,16 @@ func TestCaptureRepositorySessionTaskEventFlow(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].ID != event.ID {
 		t.Fatalf("events = %+v, want evt_001", events)
+	}
+	if events[0].RawPayloadJSON != event.RawPayloadJSON ||
+		events[0].PayloadSchema != event.PayloadSchema ||
+		events[0].RawPayloadHash != event.RawPayloadHash ||
+		events[0].RedactionState != event.RedactionState ||
+		events[0].RedactionPolicy != event.RedactionPolicy {
+		t.Fatalf("raw payload metadata = %+v, want %+v", events[0], event)
+	}
+	if !events[0].Truncation.Truncated || events[0].Truncation.OriginalSizeBytes != 8192 || events[0].Truncation.StoredSizeBytes != 2048 || events[0].Truncation.MaxSizeBytes != 2048 {
+		t.Fatalf("truncation = %+v, want preserved truncation policy", events[0].Truncation)
 	}
 	tasks, err := store.ListTasks(ctx, capture.ListTasksRequest{SessionID: session.ID})
 	if err != nil {

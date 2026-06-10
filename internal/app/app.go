@@ -57,10 +57,22 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 	// Step 3: 创建 MCP 工具注册中心，所有工具通过 registry.Register 注册
 	registry := mcp.NewRegistry(logger)
-	// Step 4: 注册诊断工具（memory.health / memory.status）
-	diagnosticService := diagnostics.NewService(version, cfg, store)
+	// Step 4: 初始化 processor provider。外部 AI provider 会复用于自动处理和 health 探测。
+	provider, err := newProcessorProvider(cfg, logger)
+	if err != nil {
+		logger.Error("processor provider init failed", "provider", cfg.Processor.Provider, "error", err)
+		_ = store.Close()
+		_ = logCloser.Close()
+		return nil, err
+	}
+	diagnosticOptions := make([]diagnostics.ServiceOption, 0, 1)
+	if checker, ok := provider.(processor.HealthChecker); ok {
+		diagnosticOptions = append(diagnosticOptions, diagnostics.WithAIHealthChecker(checker))
+	}
+	// Step 5: 注册诊断工具（memory.health / memory.status）
+	diagnosticService := diagnostics.NewService(version, cfg, store, diagnosticOptions...)
 	diagnostics.RegisterTools(registry, diagnosticService)
-	// Step 5: 注册记忆工具（remember/review/search/context）
+	// Step 6: 注册记忆工具（remember/review/search/context）
 	var codeIndexAdapter retrieval.CodeIndexAdapter
 	if cfg.CodeIndex.Provider != "none" {
 		codeIndexAdapter = codeindex.NewLocalBasicAdapter(cfg.CodeIndex, "")
@@ -76,14 +88,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		retrieval.WithRawEventRepository(store),
 		retrieval.WithLogger(logger),
 	)
-	// Step 6: 注册 自动化服务（observe 入队、准入管道、remember 准入）
-	provider, err := newProcessorProvider(cfg, logger)
-	if err != nil {
-		logger.Error("processor provider init failed", "provider", cfg.Processor.Provider, "error", err)
-		_ = store.Close()
-		_ = logCloser.Close()
-		return nil, err
-	}
+	// Step 7: 注册 自动化服务（observe 入队、准入管道、remember 准入）
 	automationService := automation.NewService(cfg, store, provider)
 	memoryService := memory.NewService(cfg, store,
 		memory.WithRetrievalOrchestrator(retrievalOrchestrator),
@@ -92,18 +97,15 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	)
 	tools.RegisterMemoryTools(registry, memoryService, logger)
 	tools.RegisterAutomationTools(registry, automationService, logger)
-	// Step 7: 注册 MVP 验收模型工具（run.start / task.record）
+	// Step 8: 注册 MVP 验收模型工具（run.start / task.record）
 	mvpService := mvp.NewService(store)
 	tools.RegisterMVPTools(registry, mvpService, logger)
-	// Step 8: 注册捕获工具（memory.observe）
+	// Step 9: 注册捕获工具（memory.observe）
 	// captureService 持有 automationService 引用，raw_event 写入后可触发自动入队
-	var semanticEnhancer capture.SemanticEnhancer
-	if enhancer, ok := provider.(capture.SemanticEnhancer); ok {
-		semanticEnhancer = enhancer
-	}
-	captureService := capture.NewServiceWithAutomation(cfg, store, automationService, capture.WithSemanticEnhancer(semanticEnhancer))
+	// 外部 AI 处理只在 processor/evidence/candidate 阶段执行，避免 raw_event 落库前被改写或拒绝。
+	captureService := capture.NewServiceWithAutomation(cfg, store, automationService)
 	tools.RegisterCaptureTools(registry, captureService, logger)
-	// Step 9: 创建异步 Worker（后台 goroutine，轮询 pending jobs 并执行）
+	// Step 10: 创建异步 Worker（后台 goroutine，轮询 pending jobs 并执行）
 	worker := automation.NewWorker(automationService, store, automation.WorkerConfig{
 		PollIntervalMS:   cfg.Automation.PollIntervalMS,
 		BatchSize:        cfg.Automation.BatchSize,

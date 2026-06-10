@@ -117,6 +117,34 @@ func TestRegistryToolSpecsExposeRequiredIdentifiers(t *testing.T) {
 	}
 }
 
+func TestRegistryMemoryObserveExposesRawPayloadFields(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
+	app, err := New(ctx, cfg, "test")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer app.Close()
+
+	var observe mcp.ToolSpec
+	for _, spec := range app.registry.Tools() {
+		if spec.Name == "memory.observe" {
+			observe = spec
+			break
+		}
+	}
+	if observe.Name == "" {
+		t.Fatal("memory.observe not registered")
+	}
+	properties := schemaPropertiesSet(t, observe.InputSchema)
+	for _, field := range []string{"raw_payload_json", "payload_schema", "raw_payload_hash", "redaction_state", "redaction_policy", "truncation"} {
+		if !properties[field] {
+			t.Fatalf("memory.observe properties = %+v, want %s", properties, field)
+		}
+	}
+}
+
 func schemaRequiredSet(t *testing.T, raw json.RawMessage) map[string]bool {
 	t.Helper()
 	var schema struct {
@@ -127,6 +155,21 @@ func schemaRequiredSet(t *testing.T, raw json.RawMessage) map[string]bool {
 	}
 	out := make(map[string]bool, len(schema.Required))
 	for _, field := range schema.Required {
+		out[field] = true
+	}
+	return out
+}
+
+func schemaPropertiesSet(t *testing.T, raw json.RawMessage) map[string]bool {
+	t.Helper()
+	var schema struct {
+		Properties map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("unmarshal input schema: %v", err)
+	}
+	out := make(map[string]bool, len(schema.Properties))
+	for field := range schema.Properties {
 		out[field] = true
 	}
 	return out

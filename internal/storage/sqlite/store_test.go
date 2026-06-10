@@ -26,7 +26,7 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	status := store.Status()
-	wantVersion := 10
+	wantVersion := 11
 	if status.Migrations.CurrentVersion != wantVersion {
 		t.Fatalf("current version = %d, want %d", status.Migrations.CurrentVersion, wantVersion)
 	}
@@ -73,6 +73,7 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		"doc_snapshot":         {"workspace_id", "project_id", "repo_id", "doc_path", "content_hash", "section_count"},
 		"doc_section_snapshot": {"snapshot_id", "section_id", "heading_path_json", "content_hash", "summary"},
 		"memory_provenance":    {"memory_id", "raw_event_id", "evidence_id", "candidate_id", "source_producer", "hook_phase", "provider", "derivation_stage", "admission_decision"},
+		"raw_event":            {"raw_payload_json", "payload_schema", "raw_payload_hash", "redaction_state", "redaction_policy", "truncated", "original_size_bytes", "stored_size_bytes", "max_size_bytes", "truncation_reason"},
 		"mvp_acceptance_run":   {"name", "mode", "workspace_id", "baseline_type", "candidate_type", "status", "summary_json", "report_path"},
 		"mvp_acceptance_task": {
 			"run_id", "scenario_id", "round", "agent_type", "baseline", "retrieval_trace_id",

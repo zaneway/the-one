@@ -1,6 +1,8 @@
 package capture
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -36,6 +38,12 @@ func NormalizeObserve(cfg config.CaptureConfig, req *ObserveRequest) error {
 	req.InputSummary = strings.TrimSpace(req.InputSummary)
 	req.OutputSummary = strings.TrimSpace(req.OutputSummary)
 	req.ContentSummary = strings.TrimSpace(req.ContentSummary)
+	req.RawPayloadJSON = strings.TrimSpace(req.RawPayloadJSON)
+	req.PayloadSchema = strings.TrimSpace(req.PayloadSchema)
+	req.RawPayloadHash = strings.TrimSpace(req.RawPayloadHash)
+	req.RedactionState = strings.TrimSpace(req.RedactionState)
+	req.RedactionPolicy = strings.TrimSpace(req.RedactionPolicy)
+	req.TruncationPolicy.Reason = strings.TrimSpace(req.TruncationPolicy.Reason)
 	req.ContentHash = strings.TrimSpace(req.ContentHash)
 	req.Sensitivity = strings.TrimSpace(req.Sensitivity)
 	req.RetentionHint = strings.TrimSpace(req.RetentionHint)
@@ -54,6 +62,27 @@ func NormalizeObserve(cfg config.CaptureConfig, req *ObserveRequest) error {
 	}
 	if req.Sensitivity == "" {
 		req.Sensitivity = SensitivityNormal
+	}
+	if req.RawPayloadJSON != "" {
+		if req.RedactionState == "" {
+			req.RedactionState = RedactionStateRaw
+		}
+		if req.RawPayloadHash == "" {
+			req.RawPayloadHash = hashRawPayload(req.RawPayloadJSON)
+		}
+		rawSize := len([]byte(req.RawPayloadJSON))
+		if req.TruncationPolicy.OriginalSizeBytes == 0 {
+			req.TruncationPolicy.OriginalSizeBytes = rawSize
+		}
+		if req.TruncationPolicy.StoredSizeBytes == 0 {
+			req.TruncationPolicy.StoredSizeBytes = rawSize
+		}
+		if req.TruncationPolicy.MaxSizeBytes == 0 {
+			req.TruncationPolicy.MaxSizeBytes = cfg.MaxRawPayloadChars
+		}
+	}
+	if req.RedactionState != "" && !validRedactionState(req.RedactionState) {
+		return fmt.Errorf("VALIDATION_FAILED: unsupported redaction_state %q", req.RedactionState)
 	}
 	if req.Actor != "" && !validActor(req.Actor) {
 		return fmt.Errorf("VALIDATION_FAILED: unsupported actor %q", req.Actor)
@@ -134,6 +163,22 @@ func validActor(actor string) bool {
 	default:
 		return false
 	}
+}
+
+// validRedactionState 校验原始载荷脱敏状态是否合法
+// 合法值：raw、redacted、minimized
+func validRedactionState(state string) bool {
+	switch state {
+	case RedactionStateRaw, RedactionStateRedacted, RedactionStateMinimized:
+		return true
+	default:
+		return false
+	}
+}
+
+func hashRawPayload(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // normalizeList 归一化字符串列表，去除每个元素的空白字符

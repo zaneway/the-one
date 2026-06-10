@@ -156,10 +156,22 @@ func TestOpenAIProviderExtractEvidenceUsesResponsesAPI(t *testing.T) {
 
 	out, err := provider.ExtractEvidence(context.Background(), EvidenceInput{
 		RawEvent: capture.RawEvent{
-			ID:             "evt_1",
-			EventType:      capture.EventUserDeclaration,
-			ContentSummary: "以后先设计再实现。",
-			SourceRefsJSON: `{"producer":"test"}`,
+			ID:              "evt_1",
+			EventType:       capture.EventUserDeclaration,
+			ContentSummary:  "以后先设计再实现。",
+			SourceRefsJSON:  `{"producer":"test"}`,
+			RawPayloadJSON:  `{"message":"以后先设计再实现。","trace_id":"raw-1"}`,
+			PayloadSchema:   "conversation_message.v1",
+			RawPayloadHash:  "sha256:raw-openai",
+			RedactionState:  capture.RedactionStateRedacted,
+			RedactionPolicy: "theone.default.v1",
+			Truncation: capture.TruncationPolicy{
+				Truncated:         true,
+				OriginalSizeBytes: 4096,
+				StoredSizeBytes:   1024,
+				MaxSizeBytes:      1024,
+				Reason:            "max_raw_payload_bytes",
+			},
 		},
 		Now: time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC),
 	})
@@ -177,6 +189,12 @@ func TestOpenAIProviderExtractEvidenceUsesResponsesAPI(t *testing.T) {
 	}
 	if input, ok := request["input"].(string); !ok || !strings.Contains(input, "以后先设计再实现") {
 		t.Fatalf("input = %#v, want serialized event content", request["input"])
+	}
+	input := request["input"].(string)
+	for _, want := range []string{"raw_payload_json", "payload_schema", "raw_payload_hash", "redaction_state", "truncation", "sha256:raw-openai", "conversation_message.v1"} {
+		if !strings.Contains(input, want) {
+			t.Fatalf("input = %s, want raw event payload metadata %q", input, want)
+		}
 	}
 	instructions, ok := request["instructions"].(string)
 	if !ok {
@@ -315,6 +333,52 @@ func TestOpenAIProviderExtractAndCandidateUseConfiguredPrompts(t *testing.T) {
 	}
 	if requests[1]["instructions"] != "CUSTOM CANDIDATE PROMPT" {
 		t.Fatalf("candidate instructions = %q, want configured prompt", requests[1]["instructions"])
+	}
+}
+
+func TestOpenAIProviderCheckHealthUsesResponsesAPI(t *testing.T) {
+	var request map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("path = %q, want /responses", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Fatalf("authorization = %q, want bearer test-key", got)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(responseJSON(`{"ok":true}`)))
+	}))
+	defer server.Close()
+
+	provider, err := NewOpenAIProvider(OpenAIProviderConfig{
+		APIKey:          "test-key",
+		BaseURL:         server.URL,
+		Model:           "gpt-5-mini",
+		Timeout:         time.Second,
+		MaxOutputTokens: 400,
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIProvider() error = %v", err)
+	}
+
+	status, err := provider.CheckHealth(context.Background())
+	if err != nil {
+		t.Fatalf("CheckHealth() error = %v", err)
+	}
+	if status.Provider != "openai" || status.Model != "gpt-5-mini" || status.LatencyMS < 0 {
+		t.Fatalf("status = %+v, want openai model and latency", status)
+	}
+	if request["model"] != "gpt-5-mini" {
+		t.Fatalf("model = %v, want gpt-5-mini", request["model"])
+	}
+	if _, ok := request["text"].(map[string]any); !ok {
+		t.Fatalf("request text config missing JSON schema: %+v", request)
+	}
+	if input, ok := request["input"].(string); !ok || !strings.Contains(input, "health_check") {
+		t.Fatalf("input = %#v, want health check payload", request["input"])
 	}
 }
 

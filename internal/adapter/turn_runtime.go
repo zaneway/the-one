@@ -27,19 +27,31 @@ func NewTurnRuntimeWithExpandMode(store StateStore, expandMode string) *TurnRunt
 }
 
 type ToolResultInput struct {
-	ToolName      string `json:"tool_name"`
-	InputSummary  string `json:"input_summary"`
-	OutputSummary string `json:"output_summary"`
-	ExitCode      int    `json:"exit_code"`
+	ToolName         string                   `json:"tool_name"`
+	InputSummary     string                   `json:"input_summary"`
+	OutputSummary    string                   `json:"output_summary"`
+	ExitCode         int                      `json:"exit_code"`
+	RawPayloadJSON   string                   `json:"raw_payload_json"`
+	PayloadSchema    string                   `json:"payload_schema"`
+	RawPayloadHash   string                   `json:"raw_payload_hash"`
+	RedactionState   string                   `json:"redaction_state"`
+	RedactionPolicy  string                   `json:"redaction_policy"`
+	TruncationPolicy capture.TruncationPolicy `json:"truncation"`
 }
 
 type FileEditInput struct {
-	FilePath       string `json:"file_path"`
-	ContentSummary string `json:"content_summary"`
-	Symbol         string `json:"symbol"`
-	BeforeHash     string `json:"before_hash"`
-	AfterHash      string `json:"after_hash"`
-	ChangeType     string `json:"change_type"`
+	FilePath         string                   `json:"file_path"`
+	ContentSummary   string                   `json:"content_summary"`
+	Symbol           string                   `json:"symbol"`
+	BeforeHash       string                   `json:"before_hash"`
+	AfterHash        string                   `json:"after_hash"`
+	ChangeType       string                   `json:"change_type"`
+	RawPayloadJSON   string                   `json:"raw_payload_json"`
+	PayloadSchema    string                   `json:"payload_schema"`
+	RawPayloadHash   string                   `json:"raw_payload_hash"`
+	RedactionState   string                   `json:"redaction_state"`
+	RedactionPolicy  string                   `json:"redaction_policy"`
+	TruncationPolicy capture.TruncationPolicy `json:"truncation"`
 }
 
 type TurnPayload struct {
@@ -82,6 +94,17 @@ type TurnPayload struct {
 	SemanticSummaryVersion string `json:"semantic_summary_version"`
 	UserPromptChars        int    `json:"user_prompt_chars"`
 	AgentResponseChars     int    `json:"agent_response_chars"`
+
+	UserRawPayload      string                   `json:"user_raw_payload"`
+	AgentRawPayload     string                   `json:"agent_raw_payload"`
+	UserRawPayloadHash  string                   `json:"user_raw_payload_hash"`
+	AgentRawPayloadHash string                   `json:"agent_raw_payload_hash"`
+	PayloadSchema       string                   `json:"payload_schema"`
+	RedactionState      string                   `json:"redaction_state"`
+	RedactionPolicy     string                   `json:"redaction_policy"`
+	TruncationPolicy    capture.TruncationPolicy `json:"truncation"`
+	UserTruncation      capture.TruncationPolicy `json:"user_truncation"`
+	AgentTruncation     capture.TruncationPolicy `json:"agent_truncation"`
 
 	// SkipBaseTurn 为 true 时仅展开 tool/file/decision 等增量事件，不写 conversation/agent 回合。
 	SkipBaseTurn bool `json:"skip_base_turn"`
@@ -150,6 +173,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 			userReq.Keywords = semanticKeywords(firstNonEmptySlice(payload.UserKeywords, payload.Keywords))
 			userReq.SalientSpans = firstNonEmptySlice(payload.UserSalientSpans, payload.SalientSpans)
 			userReq.ContentSummary = capture.EnsureStructuredContentSummary(userReq.EventType, payload.UserCorrectionSummary)
+			applyTurnRawPayload(&userReq, payload, payload.UserRawPayload, payload.UserRawPayloadHash, payload.UserTruncation)
 			requests = append(requests, userReq)
 		} else if strings.TrimSpace(payload.UserDeclarationSummary) != "" {
 			userReq := common
@@ -158,6 +182,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 			userReq.Keywords = semanticKeywords(firstNonEmptySlice(payload.UserKeywords, payload.Keywords))
 			userReq.SalientSpans = firstNonEmptySlice(payload.UserSalientSpans, payload.SalientSpans)
 			userReq.ContentSummary = capture.EnsureStructuredContentSummary(userReq.EventType, payload.UserDeclarationSummary)
+			applyTurnRawPayload(&userReq, payload, payload.UserRawPayload, payload.UserRawPayloadHash, payload.UserTruncation)
 			requests = append(requests, userReq)
 		} else if strings.TrimSpace(payload.UserSummary) != "" {
 			userReq := common
@@ -167,6 +192,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 			userReq.SalientSpans = firstNonEmptySlice(payload.UserSalientSpans, payload.SalientSpans)
 			userReq.ContentSummary = capture.EnsureStructuredContentSummary(userReq.EventType, payload.UserSummary)
 			userReq.SourceRefs = appendSemanticDigestSourceRef(userReq.SourceRefs, "user_prompt", payload.UserPromptChars, payload.SemanticSummaryVersion)
+			applyTurnRawPayload(&userReq, payload, payload.UserRawPayload, payload.UserRawPayloadHash, payload.UserTruncation)
 			requests = append(requests, userReq)
 		}
 		if strings.TrimSpace(payload.AgentSummary) != "" {
@@ -178,6 +204,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 			agentReq.ContentSummary = capture.EnsureStructuredContentSummary(agentReq.EventType, payload.AgentSummary)
 			agentReq.SourceRefs = appendSemanticDigestSourceRef(agentReq.SourceRefs, "agent_response", payload.AgentResponseChars, payload.SemanticSummaryVersion)
 			agentReq.SourceRefs = appendRetrievalSourceRefs(agentReq.SourceRefs, payload)
+			applyTurnRawPayload(&agentReq, payload, payload.AgentRawPayload, payload.AgentRawPayloadHash, payload.AgentTruncation)
 			requests = append(requests, agentReq)
 		}
 		state.LastTurnID = payload.TurnID
@@ -193,6 +220,7 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 			editReq.EventType = capture.EventFileEditSummary
 			editReq.Actor = capture.ActorAgent
 			editReq.ContentSummary = capture.EnsureStructuredContentSummary(editReq.EventType, firstNonEmpty(item.ContentSummary, "文件修改："+item.FilePath))
+			applyAtomicRawPayload(&editReq, item.RawPayloadJSON, item.PayloadSchema, item.RawPayloadHash, item.RedactionState, item.RedactionPolicy, item.TruncationPolicy)
 			editReq.SourceRefs = append(editReq.SourceRefs, capture.SourceRef{
 				"source_type": "file_edit_summary",
 				"file_path":   item.FilePath,
@@ -235,6 +263,22 @@ func (r *TurnRuntime) BuildObserveRequests(payload TurnPayload) ([]capture.Obser
 		return nil, err
 	}
 	return requests, nil
+}
+
+func applyTurnRawPayload(req *capture.ObserveRequest, payload TurnPayload, rawPayload, rawPayloadHash string, truncation capture.TruncationPolicy) {
+	if truncation == (capture.TruncationPolicy{}) {
+		truncation = payload.TruncationPolicy
+	}
+	applyAtomicRawPayload(req, rawPayload, payload.PayloadSchema, rawPayloadHash, payload.RedactionState, payload.RedactionPolicy, truncation)
+}
+
+func applyAtomicRawPayload(req *capture.ObserveRequest, rawPayload, payloadSchema, rawPayloadHash, redactionState, redactionPolicy string, truncation capture.TruncationPolicy) {
+	req.RawPayloadJSON = strings.TrimSpace(rawPayload)
+	req.PayloadSchema = strings.TrimSpace(payloadSchema)
+	req.RawPayloadHash = strings.TrimSpace(rawPayloadHash)
+	req.RedactionState = strings.TrimSpace(redactionState)
+	req.RedactionPolicy = strings.TrimSpace(redactionPolicy)
+	req.TruncationPolicy = truncation
 }
 
 // isTerminalStatus 判断任务状态是否为终态。

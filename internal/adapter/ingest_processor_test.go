@@ -110,6 +110,41 @@ func TestObserveFromAtomicFileEditCarriesChangeMetadata(t *testing.T) {
 	t.Fatalf("missing file_edit_summary source ref: %+v", req.SourceRefs)
 }
 
+func TestObserveFromAtomicCarriesRawPayloadMetadata(t *testing.T) {
+	req, err := observeFromAtomic(IngestEnvelope{
+		Producer:  "codex_hook:PostToolUse",
+		AgentType: "codex",
+		EventType: capture.EventToolResultSummary,
+		Payload: map[string]any{
+			"workspace_id":     "ws",
+			"project_id":       "project",
+			"repo_id":          "repo",
+			"tool_name":        "Bash",
+			"content_summary":  "【事实】go test ./... 输出 ok",
+			"raw_payload_json": `{"tool_name":"Bash","stdout":"ok","stderr":""}`,
+			"payload_schema":   "tool_result.v1",
+			"raw_payload_hash": "sha256:tool-raw",
+			"redaction_state":  capture.RedactionStateRaw,
+			"redaction_policy": "",
+			"truncation":       map[string]any{"truncated": false, "original_size_bytes": 43, "stored_size_bytes": 43, "max_size_bytes": 1048576},
+			"keywords":         []any{"go test"},
+			"salient_spans":    []any{"go test ./... 输出 ok"},
+		},
+	}, "sess_test", "task_test")
+	if err != nil {
+		t.Fatalf("observeFromAtomic() error = %v", err)
+	}
+	if req.RawPayloadJSON != `{"tool_name":"Bash","stdout":"ok","stderr":""}` ||
+		req.PayloadSchema != "tool_result.v1" ||
+		req.RawPayloadHash != "sha256:tool-raw" ||
+		req.RedactionState != capture.RedactionStateRaw {
+		t.Fatalf("raw payload metadata = %+v", req)
+	}
+	if req.TruncationPolicy.Truncated || req.TruncationPolicy.OriginalSizeBytes != 43 || req.TruncationPolicy.StoredSizeBytes != 43 || req.TruncationPolicy.MaxSizeBytes != 1048576 {
+		t.Fatalf("truncation = %+v, want propagated", req.TruncationPolicy)
+	}
+}
+
 func TestBuildRequestsCarriesEnvelopeProducerForTurnCompleted(t *testing.T) {
 	dir := t.TempDir()
 	p := &IngestProcessor{

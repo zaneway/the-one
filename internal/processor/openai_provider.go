@@ -88,6 +88,30 @@ func (p OpenAIProvider) Name() string {
 	return OpenAIProviderName
 }
 
+// CheckHealth 对 OpenAI Responses API 执行轻量结构化探测。
+// 该方法只验证外部模型可达性、认证和模型配置，不抽取业务 evidence，也不写入任何存储。
+func (p OpenAIProvider) CheckHealth(ctx context.Context) (HealthStatus, error) {
+	startedAt := time.Now()
+	raw, err := p.callStructured(ctx, "Return a JSON object with ok=true. Do not include any other text.", map[string]any{
+		"task":     "health_check",
+		"provider": OpenAIProviderName,
+		"model":    p.model,
+	}, "theone_provider_health", healthSchema())
+	if err != nil {
+		return HealthStatus{Provider: OpenAIProviderName, Model: p.model, LatencyMS: time.Since(startedAt).Milliseconds()}, err
+	}
+	var decoded struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return HealthStatus{Provider: OpenAIProviderName, Model: p.model, LatencyMS: time.Since(startedAt).Milliseconds()}, fmt.Errorf("PROVIDER_INVALID_OUTPUT: decode openai health response: %w", err)
+	}
+	if !decoded.OK {
+		return HealthStatus{Provider: OpenAIProviderName, Model: p.model, LatencyMS: time.Since(startedAt).Milliseconds()}, fmt.Errorf("PROVIDER_INVALID_OUTPUT: openai health response ok=false")
+	}
+	return HealthStatus{Provider: OpenAIProviderName, Model: p.model, LatencyMS: time.Since(startedAt).Milliseconds()}, nil
+}
+
 func (p OpenAIProvider) EnhanceObserve(ctx context.Context, input capture.SemanticEnhanceInput) (capture.SemanticEnhanceOutput, error) {
 	raw, err := p.callStructured(ctx, p.semanticEnhancePrompt, map[string]any{
 		"task":  "semantic_preserving_observe_simplification",
@@ -439,6 +463,17 @@ func candidateSchema() map[string]any {
 					},
 				},
 			},
+		},
+	}
+}
+
+func healthSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"ok"},
+		"properties": map[string]any{
+			"ok": map[string]any{"type": "boolean"},
 		},
 	}
 }

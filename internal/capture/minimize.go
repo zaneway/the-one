@@ -24,10 +24,11 @@ var forbiddenRawFields = []string{"full_text", "full_output", "full_diff"}
 // 6. 单个 salient_span 字符数不超过 max_salient_span_chars（默认500）
 // 7. source_refs JSON 序列化后长度不超过 max_source_refs_chars（默认4000）
 // 8. source_refs 中禁止包含 full_text/full_output/full_diff 字段
+// 9. raw_payload_json 必须是合法 JSON 且不超过 max_raw_payload_chars（默认1MiB）
 // 设计说明：
-// - 不做复杂脱敏和自动摘要，Adapter 必须先发送摘要、关键片段、hash 和 source ref
+// - 不做复杂脱敏和自动摘要，Adapter 可发送有界 raw payload、摘要、关键片段、hash 和 source ref
 // - 服务端发现完整全文字段、超长摘要或超长引用时直接拒绝
-// - 目的是避免 raw_event 退化为隐藏日志库，确保存储的都是最小化后的内容
+// - raw_payload_json 用于事实层可重放，不直接提升为 memory_item
 // - 使用 rune 长度而非字节长度，正确处理中文等多字节字符
 func CheckMinimizedObserve(cfg config.CaptureConfig, req ObserveRequest) error {
 	// 校验输入摘要长度
@@ -68,6 +69,15 @@ func CheckMinimizedObserve(cfg config.CaptureConfig, req ObserveRequest) error {
 	if containsForbiddenRawField(string(sourceRefsJSON)) {
 		return fmt.Errorf("CONTENT_TOO_LARGE: source_refs must not contain full_text/full_output/full_diff")
 	}
+	if strings.TrimSpace(req.RawPayloadJSON) != "" {
+		if len([]rune(req.RawPayloadJSON)) > cfg.MaxRawPayloadChars {
+			return fmt.Errorf("CONTENT_TOO_LARGE: raw_payload_json exceeds max_raw_payload_chars=%d", cfg.MaxRawPayloadChars)
+		}
+		var rawPayload any
+		if err := json.Unmarshal([]byte(req.RawPayloadJSON), &rawPayload); err != nil {
+			return fmt.Errorf("VALIDATION_FAILED: raw_payload_json must be valid JSON: %w", err)
+		}
+	}
 	if err := checkStructuredContentSummaryQuality(req); err != nil {
 		return err
 	}
@@ -78,11 +88,11 @@ func CheckMinimizedObserve(cfg config.CaptureConfig, req ObserveRequest) error {
 // 输入字段：event_type、agent_type、workspace_id、project_id、repo_id、actor、
 //
 //	tool_name、input_summary、output_summary、content_summary、
-//	keywords、salient_spans、source_refs
+//	keywords、salient_spans、source_refs、raw_payload_hash
 //
 // 输出格式：sha256:<hex_string>
 // 设计说明：
-// - 不要求 Adapter 回传完整原文，只使用已有的最小化字段计算哈希
+// - 不把完整 raw_payload_json 放入 hash 输入，只使用 raw_payload_hash 参与内容身份判断
 // - 使用 JSON 序列化保证字段顺序一致，确保相同内容生成相同哈希
 // - 用于事件去重（dedup）和幂等写入
 // - 哈希算法选择 SHA256 保证碰撞概率极低
@@ -102,6 +112,7 @@ func ComputeContentHash(req ObserveRequest) (string, error) {
 		Keywords       []string    `json:"keywords"`
 		SalientSpans   []string    `json:"salient_spans"`
 		SourceRefs     []SourceRef `json:"source_refs"`
+		RawPayloadHash string      `json:"raw_payload_hash"`
 	}{
 		EventType:      req.EventType,
 		AgentType:      req.AgentType,
@@ -116,6 +127,7 @@ func ComputeContentHash(req ObserveRequest) (string, error) {
 		Keywords:       req.Keywords,
 		SalientSpans:   req.SalientSpans,
 		SourceRefs:     req.SourceRefs,
+		RawPayloadHash: req.RawPayloadHash,
 	}
 	// 序列化为 JSON 保证字段顺序一致
 	data, err := json.Marshal(payload)

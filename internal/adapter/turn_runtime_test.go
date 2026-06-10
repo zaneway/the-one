@@ -180,6 +180,41 @@ func TestTurnRuntimeRecordsSemanticDigestSourceRefs(t *testing.T) {
 	assertHasSourceRef(t, agentReq, "agent_response", 128)
 }
 
+func TestTurnRuntimeCarriesRawPayloadMetadata(t *testing.T) {
+	store := NewFileStateStore(filepath.Join(t.TempDir(), "runtime-state"))
+	runtime := NewTurnRuntime(store)
+	requests, err := runtime.BuildObserveRequests(TurnPayload{
+		WorkspaceID:     "ws",
+		ProjectID:       "project_a",
+		RepoID:          "repo_a",
+		AgentType:       "codex",
+		SessionID:       "sess_raw_payload",
+		TaskID:          "task_raw_payload",
+		TurnID:          "turn_raw_payload",
+		UserSummary:     "【事件】用户要求保留原始输入",
+		AgentSummary:    "【结论/决策】已保留原始输出",
+		IsSubstantive:   true,
+		UserRawPayload:  `{"message":"用户要求保留原始输入"}`,
+		AgentRawPayload: `{"message":"已保留原始输出"}`,
+		PayloadSchema:   "turn.completed.v1",
+		RedactionState:  capture.RedactionStateRaw,
+	})
+	if err != nil {
+		t.Fatalf("BuildObserveRequests() error = %v", err)
+	}
+	userReq := findEvent(t, requests, capture.EventConversationMessage)
+	agentReq := findEvent(t, requests, capture.EventAgentResponseSummary)
+	if userReq.RawPayloadJSON != `{"message":"用户要求保留原始输入"}` || agentReq.RawPayloadJSON != `{"message":"已保留原始输出"}` {
+		t.Fatalf("raw payloads user=%q agent=%q", userReq.RawPayloadJSON, agentReq.RawPayloadJSON)
+	}
+	if userReq.PayloadSchema != "turn.completed.v1" || agentReq.PayloadSchema != "turn.completed.v1" {
+		t.Fatalf("payload schemas user=%q agent=%q", userReq.PayloadSchema, agentReq.PayloadSchema)
+	}
+	if userReq.RedactionState != capture.RedactionStateRaw || agentReq.RedactionState != capture.RedactionStateRaw {
+		t.Fatalf("redaction states user=%q agent=%q", userReq.RedactionState, agentReq.RedactionState)
+	}
+}
+
 func TestTurnRuntimeRequiresScope(t *testing.T) {
 	store := NewFileStateStore(filepath.Join(t.TempDir(), "runtime-state"))
 	runtime := NewTurnRuntime(store)

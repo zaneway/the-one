@@ -2,8 +2,9 @@ package capture
 
 import "context"
 
-// SemanticEnhancer 在 raw_event 写入前执行语义等价简化和关键词提取。
-// 实现者不得写入存储；失败或无法确认语义等价时，Observe 会拒绝本次写入。
+// SemanticEnhancer 是旧版 observe 写入前语义增强扩展点。
+// 当前 capture 主链路不再调用它；外部 AI 应在 raw_event 落库后通过 processor 抽取 evidence/candidate。
+// 保留该接口仅用于兼容已有 provider 能力和单元测试。
 type SemanticEnhancer interface {
 	EnhanceObserve(ctx context.Context, input SemanticEnhanceInput) (SemanticEnhanceOutput, error)
 }

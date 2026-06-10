@@ -191,6 +191,10 @@ type CaptureConfig struct {
 	// source_refs_json字段的长度限制，默认4000
 	MaxSourceRefsChars int `yaml:"max_source_refs_chars" json:"max_source_refs_chars"`
 
+	// MaxRawPayloadChars 最大原始载荷字符数
+	// raw_payload_json字段的长度限制，默认1MiB，尽量保留原始事实
+	MaxRawPayloadChars int `yaml:"max_raw_payload_chars" json:"max_raw_payload_chars"`
+
 	// MaxSalientSpanChars 最大显著片段字符数
 	// 单个salient_span的长度限制，默认500
 	MaxSalientSpanChars int `yaml:"max_salient_span_chars" json:"max_salient_span_chars"`
@@ -388,8 +392,8 @@ type OpenAIProcessorConfig struct {
 	// 为空时 OpenAI provider 使用内置默认提示词
 	GenerateCandidatesPrompt string `yaml:"generate_candidates_prompt" json:"generate_candidates_prompt"`
 
-	// SemanticEnhancePrompt observe 写入前语义等价简化与关键词提取提示词
-	// 为空时 OpenAI provider 使用内置默认提示词
+	// SemanticEnhancePrompt 旧版 observe 语义等价简化提示词。
+	// capture 主链路不再使用；仅保留给兼容 provider EnhanceObserve 能力。
 	SemanticEnhancePrompt string `yaml:"semantic_enhance_prompt" json:"semantic_enhance_prompt"`
 }
 
@@ -480,6 +484,7 @@ func Default() Config {
 			MaxOutputSummaryChars:        2000,
 			MaxContentSummaryChars:       6000,
 			MaxSourceRefsChars:           4000,
+			MaxRawPayloadChars:           1048576,
 			MaxSalientSpanChars:          500,
 			MaxSalientSpanCount:          10,
 			MaxKeywordCount:              30,
@@ -624,7 +629,8 @@ func validate(cfg Config) error {
 		return errors.New("CONFIG_INVALID: memory content limits must be positive")
 	}
 	if cfg.Capture.MaxInputSummaryChars <= 0 || cfg.Capture.MaxOutputSummaryChars <= 0 || cfg.Capture.MaxContentSummaryChars <= 0 ||
-		cfg.Capture.MaxSourceRefsChars <= 0 || cfg.Capture.MaxSalientSpanChars <= 0 || cfg.Capture.MaxSalientSpanCount <= 0 || cfg.Capture.MaxKeywordCount <= 0 {
+		cfg.Capture.MaxSourceRefsChars <= 0 || cfg.Capture.MaxRawPayloadChars <= 0 || cfg.Capture.MaxSalientSpanChars <= 0 ||
+		cfg.Capture.MaxSalientSpanCount <= 0 || cfg.Capture.MaxKeywordCount <= 0 {
 		return errors.New("CONFIG_INVALID: capture content limits must be positive")
 	}
 	if cfg.Adapter.PrefetchTimeoutMS <= 0 || cfg.Adapter.MaxInjectChars <= 0 || cfg.Adapter.PromptCacheUserSummaryMaxChars <= 0 {

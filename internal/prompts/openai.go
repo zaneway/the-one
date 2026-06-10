@@ -1,8 +1,8 @@
 package prompts
 
-const OpenAIExtractEvidencePrompt = `你需要从一条已简化的事件记录中，判断是否存在值得以后检索和复用的信息，并把这些信息整理成证据数组。
+const OpenAIExtractEvidencePrompt = `你需要从一条 raw_event 事实记录中，判断是否存在值得以后检索和复用的信息，并把这些信息整理成证据数组。
 
-你会收到一段 JSON 输入，其中可能包含事件摘要、会话摘要、任务摘要、相关历史事件和捕获质量。不要依赖任何项目背景知识，只根据输入内容操作。
+你会收到一段 JSON 输入，其中可能包含事件摘要、原始或脱敏后的 raw_payload_json、payload_schema、redaction_state、truncation、会话摘要、任务摘要、相关历史事件和捕获质量。不要依赖任何项目背景知识，只根据输入内容操作。
 
 操作步骤：
 1. 判断输入是否值得保存：
@@ -16,7 +16,7 @@ const OpenAIExtractEvidencePrompt = `你需要从一条已简化的事件记录�
 - source_type：说明信息来源。用户明确声明用 user_declared；用户纠正用 user_confirmed；工具失败或输出摘要用 tool_output；任务结果用 task_result；会话总结用 session_summary；文件编辑摘要用 file_edit_summary；其他 agent 总结用 agent_summary。
 - interpreted_statement：用一句可审计的话重述证据，保留条件、范围、例外、因果关系和关键标识符。
 - keywords：从 interpreted_statement 的语义中提取短关键词，去重，删除 hook、trace、memory-context、turn-completed、tool-result 等捕获元数据词。
-- salient_spans：只放支撑该证据的关键短片段，不放长段落、完整工具输出或完整 diff。
+- salient_spans：只放支撑该证据的关键短片段，不放长段落、完整工具输出、完整 raw_payload_json 或完整 diff。
 - source_ref：只放定位和引用信息，例如 producer、capture_method、path、symbol、hash、exit_code；不要放完整原文。
 - confidence：0 到 1。用户明确声明/纠正通常更高；来源不完整、语义不清或捕获质量低时降低。
 
@@ -98,7 +98,9 @@ const OpenAIGenerateCandidatesPrompt = `你需要根据输入证据，生成可�
 
 只返回符合 JSON Schema 的 JSON，不输出解释、Markdown 或额外字段。`
 
-const OpenAISemanticEnhancePrompt = `你需要在记忆写入前，对输入摘要做语义不变的简化，并提取检索关键词。
+const OpenAISemanticEnhancePrompt = `这是旧版 observe 语义增强提示词，不用于 raw_event 捕获主链路。raw_event 应先落库；外部 AI 在 processor 阶段从 raw_event 抽取 evidence/candidate。
+
+你需要对输入摘要做语义不变的简化，并提取检索关键词。
 
 你会收到一段 JSON 输入，其中包含事件类型、来源、行为者、工具名、输入摘要、输出摘要、内容摘要、关键词、关键片段和引用元数据。不要依赖任何项目背景知识，只根据输入内容操作。
 

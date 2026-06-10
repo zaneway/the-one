@@ -8,7 +8,7 @@ import (
 	"github.com/zaneway/theone/internal/memory"
 )
 
-// Provider 将最小化后的 raw_event 转换为可解释的 evidence 和 memory candidate。
+// Provider 将 raw_event 事实层事件转换为可解释的 evidence 和 memory candidate。
 // 设计约束：Provider 不得写入存储、决定准入或调用外部索引；只负责信号抽取和候选生成。
 type Provider interface {
 	// Name 返回 Provider 名称，如 "rule_based"。
@@ -19,6 +19,20 @@ type Provider interface {
 	// GenerateCandidates 从 evidence 中生成候选记忆。
 	// 按事件类型路由到不同的候选分类策略。
 	GenerateCandidates(ctx context.Context, input CandidateInput) ([]MemoryCandidate, error)
+}
+
+// HealthChecker 表示 Provider 支持轻量可用性探测。
+// 该接口只验证外部依赖是否可调用，不产生 evidence/candidate，也不写入存储。
+type HealthChecker interface {
+	CheckHealth(ctx context.Context) (HealthStatus, error)
+}
+
+// HealthStatus 是外部 Provider 健康探测结果。
+// 不包含 API Key、Base URL 等敏感配置，只返回可排障的非敏感摘要。
+type HealthStatus struct {
+	Provider  string
+	Model     string
+	LatencyMS int64
 }
 
 // CaptureQualitySnapshot 是 capture quality 的轻量快照。

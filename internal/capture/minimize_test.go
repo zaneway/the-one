@@ -122,3 +122,27 @@ func TestContentHashAndDedupKeyAreStable(t *testing.T) {
 		t.Fatalf("dedup key = %q, want session/event suffix", key)
 	}
 }
+
+func TestContentHashIncludesRawPayloadHash(t *testing.T) {
+	req := ObserveRequest{
+		EventType:      EventConversationMessage,
+		AgentType:      "codex",
+		WorkspaceID:    "ws_local",
+		Actor:          ActorUser,
+		ContentSummary: "【事实】用户要求 raw_event 先保存原始事实。",
+		SourceChannel:  SourceChannelAgentSession,
+		RawPayloadHash: "sha256:payload-a",
+	}
+	first, err := ComputeContentHash(req)
+	if err != nil {
+		t.Fatalf("ComputeContentHash() first error = %v", err)
+	}
+	req.RawPayloadHash = "sha256:payload-b"
+	second, err := ComputeContentHash(req)
+	if err != nil {
+		t.Fatalf("ComputeContentHash() second error = %v", err)
+	}
+	if first == second {
+		t.Fatalf("hash = %q for different raw_payload_hash values", first)
+	}
+}
