@@ -1,20 +1,21 @@
 ---
-description: theone 记忆捕获：保证入库关键字段完备（非机械全键）；Agent 须在实质对话中调用 memory_observe
+description: theone 记忆捕获：关键字段完备，content_summary 使用结构化索引卡
 alwaysApply: true
 ---
 
-# The One：记忆捕获规则（关键字段完备）
+# The One：memory_observe 捕获规则
 
-目标：**写入 `raw_event` 时，检索与后续自动抽取依赖的字段必须填好**；不追求 JSON 机械凑满所有键，但**禁止**只传 `event_type` + 一句 `content_summary`。
+目标：在有长期价值或检索价值时写入 `raw_event`，保证自动抽取和后续 `memory.context` 注入所需的关键字段完备。禁止只传 `event_type` + 一句自由文本 `content_summary`。
 
-工具名：**`memory_observe`**（Cursor）/ `memory.observe`（内部）。  
-配置见 `doc/Cursor 适配与安装后配置说明.md`。
+结构化 `content_summary` 的单一规范见：`doc/shared/content-summary-structured.md`。本 Rule 只维护 Cursor 端调用约束，不维护另一套摘要标准。
 
-> Rule 不能代替系统钩子；须 **Agent 模式 + MCP `theone` 已连接 + 仓库根打开**。
+`content_summary` 负责检索索引卡；需要保留原始事实时使用 `raw_payload_json`。当前默认不脱敏，`redaction_state=raw`；服务端默认 raw payload 上限为 1MiB，应尽量不截断。
 
----
+`memory_observe` 只保存 `raw_event`，不要求也不等待外部 AI 在写入前做语义简化。后续自动链路从已落库的 `raw_event` 抽取 evidence / candidate，再决定是否晋升为 `memory_item`。
 
-## 1. 线程级常量（同一线程复用）
+> Rule 不能代替系统 Hook；须 Agent 模式 + MCP `theone` 已连接 + 仓库根打开。
+
+## 1. 线程级常量
 
 | 字段 | 值 |
 |------|-----|
@@ -23,195 +24,152 @@ alwaysApply: true
 | `project_id` | `the-one` |
 | `repo_id` | `the-one` |
 | `source_channel` | `agent_session` |
-| `session_id` | 首条 `session.start` 响应中的值；或自命名 `sess_cursor_<YYYYMMDD>_<topic>` |
-| `task_id` | 首条响应中的值；或 `task_<topic>`，全线程不变 |
+| `session_id` | Hook 建立的 binding 中的值；手动调用时可自命名 `sess_cursor_<YYYYMMDD>_<topic>` |
+| `task_id` | Hook 建立的 task 值；手动调用时可用 `task_<topic>`，全线程不变 |
 
-除 `session.start` 外，`session_id` **必填**（`require_session_for_agent_events=true`）。
+`session_id` 必填。不要用 `memory_observe` 主动写 `session.start`。
 
----
+## 2. L1：每次 observe 必填
 
-## 2. 三级字段（入库质量要求）
-
-### L1 — 每次 observe 必填（归属 + 事件类型）
-
-缺少任一项 → **不要调用**，先补全再提交。
+缺少任一项时不要调用，先补全再提交。
 
 | 字段 | 要求 |
 |------|------|
 | `event_type` | 合法枚举值 |
-| `actor` | `user` / `agent` / `tool` |
+| `actor` | `user` / `agent` / `tool` / `adapter` |
 | `agent_type` | `cursor` |
 | `workspace_id` | `local_default_workspace` |
 | `project_id` / `repo_id` | `the-one` |
 | `source_channel` | `agent_session` |
-| `content_summary` | **非空**，≤2000 字，写清「发生了什么」 |
+| `content_summary` | 非空结构化索引卡，建议 200-800 字，硬上限 6000 |
 
-### L2 — 对话/结论类事件必填（检索 + 抽取）
+## 2.1 raw_payload_json
 
-适用于：`conversation.message`、`user.*`、`agent.response.summary`、`agent.decision`、`task.result`。
+对高价值事件建议携带 `raw_payload_json`：
 
 | 字段 | 要求 |
 |------|------|
-| `keywords` | **3–8 个**有区分度的检索词（模块名、概念、文件名、错误码） |
-| `salient_spans` | **1–5 条**短句，每条 ≤500 字，便于下游抽取 |
-| `source_refs` | **≥1 条**，含 `source_type` + `capture_method`（见 §4） |
-| `retention_hint` | `short_term`（一般）/ `long_term`（偏好、纠正、架构结论） |
-| `session` | `{ "goal_summary": "...", "status": "active|completed|..." }` |
-| `task` | `{ "task_summary": "...", "status": "...", "outcome_summary": "..." }`（无结论可 `""`） |
+| `raw_payload_json` | JSON 字符串，保存原始/准原始事实；不要放到 `source_refs` |
+| `payload_schema` | 如 `turn.completed.v1`、`tool_result.v1`、`file_edit.v1` |
+| `raw_payload_hash` | 可省略，服务端会自动计算 |
+| `redaction_state` | 当前填 `raw` |
+| `truncation` | 未截断时 `{ "truncated": false }`；超过上限才标记原因 |
 
-### L3 — 按事件类型额外必填
+建议：
+
+- `turn.completed`：保存同一轮用户请求和 Agent 应答的原文或准原文。
+- `user.declaration` / `user.correction`：仅在需要单独记录高优先级声明/纠正时保存用户原文或准原文。
+- `conversation.message` / `agent.response.summary`：仅用于兼容旧的单边消息路径。
+- 普通工具结果由 Hook 控制面处理，不要求 Agent 主动写 `tool.result.summary`；只有失败根因、重复错误、关键测试结论值得长期复用时，才用 `turn.completed`、`agent.decision`、`user.declaration` 或 `memory_remember` 记录结论。
+- `file.edit.summary`：系统 Hook 可产生该事件用于链路诊断，但默认不进入 `raw_event`；Agent 不要通过 MCP 主动补写文件路径、hash、change_type 或 diff 摘要。
+
+## 3. 结构化 content_summary
+
+必须遵守 `doc/shared/content-summary-structured.md`：
+
+- `content_summary` 使用固定标签：`【事件】`、`【事实】`、`【结论/决策】`、`【约束】`、`【关联】`、`【状态】`。
+- 无内容的标签段可省略。
+- 高价值信息必须前置；超过 400 字时，前 400 字内必须出现 `【结论` 或 `【约束】`。
+- 禁止对话复述、代码块、`full_diff`、长日志、流水账，禁止为填满 6000 写长文。
+- `salient_spans` 写 1-5 条原子事实，每条 <=500 字，不得粘贴全文。
+- `keywords` 写 3-8 个检索锚点。
+- `memory_remember.content` 只写长期结论，建议 <=1500 字。
+
+当前 `memory.context` 仍可能头部截断；结构化索引卡的目的，是缩小入库体积并把高价值信息放到截断前部。
+
+## 4. L2：对话/结论类事件必填
+
+适用于：`turn.completed`、`conversation.message`、`user.*`、`agent.response.summary`、`agent.decision`、`task.result`。
+
+| 字段 | 要求 |
+|------|------|
+| `keywords` | 3-8 个有区分度的检索词 |
+| `salient_spans` | 1-5 条短句，每条 <=500 字 |
+| `source_refs` | 至少 1 条，含 `source_type` + `capture_method` |
+| `retention_hint` | `short_term` / `long_term` |
+| `session` | `{ "goal_summary": "...", "status": "active|completed|..." }` |
+| `task` | `{ "task_summary": "...", "status": "...", "outcome_summary": "..." }` |
+
+## 5. L3：按事件类型额外必填
 
 | event_type | 额外必填 |
 |------------|----------|
-| `session.start` | `capture_capabilities`（§3）；`session.goal_summary`；`task.task_summary` |
-| `tool.result.summary` | `tool_name`；`input_summary`；`output_summary`（各非空，≤200 字） |
-| `file.edit.summary` | `source_refs` 含 `file_path`、`change_type` |
-| `session.end` | `session.status=completed`；`task.outcome_summary` 非空总结 |
+| `turn.completed` | `input_summary` 保存用户原始请求；`output_summary` 保存 Agent 原始应答 |
+| `file.edit.summary` | Hook 诊断事件，默认不写 `raw_event` |
+| `session.end` | `session.status=completed`；`task.outcome_summary` 非空 |
 
-**可省略（勿为凑键传空对象）**：非工具事件的 `tool_name`/`input_summary`/`output_summary`；`content_hash`（服务端可算）；`occurred_at`（建议 RFC3339，可省略由服务端填）。
+可省略：非工具且非 `turn.completed` 事件的 `tool_name` / `input_summary` / `output_summary`；`content_hash`；`occurred_at`。
 
----
+## 6. source_refs 最低规范
 
-## 3. session.start 的 capture_capabilities（仅首次）
-
-```json
-{
-  "conversation_capture": true,
-  "tool_call_capture": true,
-  "tool_output_capture": true,
-  "file_edit_capture": true,
-  "session_lifecycle": true,
-  "mcp_observe": true
-}
-```
-
----
-
-## 4. source_refs 最低规范
-
-**对话/分析类**（至少 1 条）：
+对话/分析类：
 
 ```json
 [{ "source_type": "agent_session", "capture_method": "cursor_rule", "session_id": "<session_id>" }]
 ```
 
-**工具类**：加 `tool_name`、`exit_code`（禁止 `full_output`）。  
-**改文件**：加 `file_path`、`change_type`，禁止 `full_diff`。
+文件修改信息不要进入 `raw_event`；禁止通过 `source_refs` 或 `raw_payload_json` 保存 `file_path`、`change_type`、hash 或 `full_diff`。普通工具输出不要主动 observe；高价值工具结论写入结构化摘要，不贴完整输出。
 
----
+Agent 通过 MCP 主动调用 `memory_observe` 时，`source_refs.capture_method` 使用 `manual_mcp_call` 或 `cursor_rule`；系统 Hook 采集的事件由 Driver 自动写入 `producer=<agent>_hook:<hook>`，不要在 MCP payload 中伪造 hook producer。
 
-## 5. 何时必须调用（实质工作才记）
+## 7. 何时调用
 
-| 时机 | event_type | L2 是否必填 |
-|------|------------|-------------|
-| 线程开始、有明确任务 | `session.start` | session/task 必填；L2 的 keywords 建议带 |
-| 用户提出新问题/约束 | `conversation.message` / `user.correction` | **是** |
-| 完成一轮分析或实现 | `agent.response.summary` | **是**，更新 `task.outcome_summary` |
-| 跑完测试/构建/MCP 等 | `tool.result.summary` | L3 工具字段 |
-| 改了代码 | `file.edit.summary` | L3 文件 ref |
-| 架构/取舍结论 | `agent.decision` | **是**，`retention_hint: long_term` |
-| 用户表示结束 | `session.end` | L3 |
+| 时机 | event_type |
+|------|------------|
+| 用户提出新问题/约束并完成本轮应答 | `turn.completed` |
+| 仅记录用户高优先级纠正/声明 | `user.correction` / `user.declaration` |
+| 兼容旧路径的单边用户消息 | `conversation.message` |
+| 兼容旧路径的单边助手摘要 | `agent.response.summary` |
+| 改了代码 | 汇入本轮 `turn.completed` 的结果/验证；架构取舍写 `agent.decision`；不要单独写 `file.edit.summary` |
+| 架构/取舍结论 | `agent.decision` |
+| 用户表示结束 | `session.end` |
 
-**可不调用**：纯「好/继续」且无新信息；用户明确「不要记录」。
+可不调用：纯“好/继续”且无新信息；用户明确“不要记录”。
 
-**有实质内容的任务**（代码分析、排障、Retention 检查、配置排查等）→ 至少 **`session.start` + 本轮 `conversation.message` + `agent.response.summary`**。
+有实质内容的任务优先记录本轮 `turn.completed`。不要把同一轮用户请求和助手应答拆成 `conversation.message` + `agent.response.summary` 两条 raw_event。
 
----
-
-## 6. 提交前自检（静默，≤5 秒）
-
-调用 `memory_observe` 前自问：
-
-1. L1 是否齐全？`content_summary` 是否能让陌生人看懂本条事实？  
-2. 对话/结论类是否满足 L2（keywords ≥3、salient_spans ≥1、source_refs ≥1、session/task）？  
-3. 工具/改文件类是否满足 L3？  
-4. 是否误把全文、完整 diff、密钥写进 summary 或 source_refs？
-
-任一为否 → 补字段后再调工具。
-
-线程结束前：`memory_capture_events`（`session_id`, `limit: 5`），若仅有 `session.start` 无后续事件 → 补打 `agent.response.summary`。
-
----
-
-## 7. 示例（conversation.message，关键字段完备）
+## 8. 示例
 
 ```json
 {
-  "session_id": "sess_cursor_20260528_rule_opt",
-  "task_id": "task_rule_opt",
+  "session_id": "sess_cursor_20260603_structured_summary",
+  "task_id": "task_structured_summary",
   "agent_type": "cursor",
   "workspace_id": "local_default_workspace",
   "project_id": "the-one",
   "repo_id": "the-one",
-  "event_type": "conversation.message",
+  "event_type": "turn.completed",
   "source_channel": "agent_session",
-  "actor": "user",
-  "content_summary": "用户要求优化 Rule：入库时关键字段完备，而非机械传全键。",
-  "keywords": ["memory_observe", "raw_event", "Rule", "关键字段", "Cursor"],
-  "salient_spans": ["优化记忆捕获 Rule", "关键字段三级模型 L1/L2/L3"],
+  "actor": "adapter",
+  "input_summary": "用户要求三端 Agent 将 content_summary 从自由文本改为结构化索引卡。",
+  "output_summary": "本轮已采用结构化索引卡规范记录。",
+  "content_summary": "【约束】不新增 DB 字段，不修改 search_text 拼接，不修改 memory.context 截断策略。\n【事件】用户要求三端 Agent 将 content_summary 从自由文本改为结构化索引卡。\n【结论/决策】本轮已采用结构化索引卡规范记录。\n【关联】doc/shared/content-summary-structured.md",
+  "raw_payload_json": "{\"user\":{\"message\":\"用户要求三端 Agent 将 content_summary 从自由文本改为结构化索引卡。\"},\"agent\":{\"message\":\"本轮已采用结构化索引卡规范记录。\"}}",
+  "payload_schema": "turn.completed.v1",
+  "redaction_state": "raw",
+  "truncation": { "truncated": false },
+  "keywords": ["content_summary", "structured", "memory_observe", "cursor", "memory.context"],
+  "salient_spans": [
+    "三端 Agent 的 content_summary 必须结构化",
+    "结构化标准以 doc/shared/content-summary-structured.md 为单一真相"
+  ],
   "source_refs": [
-    { "source_type": "agent_session", "capture_method": "cursor_rule", "session_id": "sess_cursor_20260528_rule_opt" }
+    { "source_type": "agent_session", "capture_method": "cursor_rule", "session_id": "sess_cursor_20260603_structured_summary" },
+    { "source_type": "user_prompt", "capture_method": "cursor_rule" },
+    { "source_type": "agent_response", "capture_method": "cursor_rule" }
   ],
   "retention_hint": "short_term",
-  "session": { "goal_summary": "优化 theone Cursor Rule 以提升入库字段质量", "status": "active" },
-  "task": { "task_summary": "重写 theone-memory-observe.mdc", "status": "active", "outcome_summary": "" }
+  "session": { "goal_summary": "统一三端结构化 content_summary", "status": "active" },
+  "task": { "task_summary": "实现结构化摘要捕获规范", "status": "active", "outcome_summary": "" }
 }
 ```
 
----
-
-## 8. 与 memory_remember 的分工
+## 9. 与 memory_remember 的分工
 
 | 场景 | 工具 |
 |------|------|
-| 过程轨迹、工具结果、对话摘要 | `memory_observe`（按上表保证 L1–L3） |
+| 高价值过程轨迹、对话摘要、失败根因 | `memory_observe` |
 | 应长期保留的稳定结论 | 额外 `memory_remember` |
 | 新任务前召回 | `memory_search` / `memory_context` |
 
----
-
-## 9. 默认“自动记住学习内容”（observe + remember 联动）
-
-目标：用户让 Agent“学习/沉淀”的内容，默认进入可命中记忆，而不是只停留在 `raw_event`。
-
-### 9.1 触发 `memory_remember` 的默认时机
-
-当满足任一条件时，在本轮 `memory_observe` 之后，额外调用一次 `memory_remember`：
-
-1. 用户明确表达长期偏好（例如代码风格、沟通风格、测试偏好）。
-2. 用户明确给出稳定约束（例如禁止项、发布规范、安全边界）。
-3. 形成可复用决策（技术路线取舍、架构结论、回滚策略）。
-4. 形成可复用流程（排障步骤、验收步骤、操作手册）。
-5. 形成高价值失败经验（根因 + 规避方式）。
-6. 用户明确要求“记住/后续按这个执行”。
-
-### 9.2 `memory_remember` 推荐字段模板
-
-- `scope`: 默认 `project_local`
-- `memory_type`: 按语义选 `preference` / `constraint` / `decision` / `procedure` / `failure` / `project_fact`
-- `project_id`: `the-one`
-- `repo_id`: `the-one`
-- `workspace_id`: `local_default_workspace`
-- `source_type`: `agent_summary` 或 `user_declared`
-- `importance`: 0.7 起（关键规范可 0.8~0.95）
-- `confidence`: 0.7 起（用户明确确认可提高）
-- `keywords`: 3~8 个可检索词
-- `retrieval_cues`: 2~6 个任务触发短语（例如“上线前检查”“架构复查”）
-
-### 9.3 不要 remember 的情况
-
-- 纯寒暄、无约束“继续/好的”。
-- 一次性临时状态（无复用价值）。
-- 含敏感信息且用户未授权持久化。
-- 尚未确认、且容易误导后续任务的猜测性结论。
-
----
-
-## 10. 回合末一致性自检（避免“聊完库里为空”）
-
-每轮有实质工作时，结束前执行：
-
-1. 至少已有一条本轮 `memory_observe`（通常是 `conversation.message` 或 `agent.response.summary`）。
-2. 若本轮产出稳定结论，至少已有一条对应 `memory_remember`。
-3. 若用户要求“后续按此执行”，优先 `memory_remember`，并设置 `retention_hint: long_term`。
-4. 若只打了 `session.start`，必须补打 `agent.response.summary`。
+`memory_remember.content` 只写长期可复用内容，不复制本轮过程；建议 <=1500 字。

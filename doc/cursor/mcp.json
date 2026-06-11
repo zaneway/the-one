@@ -1,17 +1,17 @@
 {
   "mcpServers": {
     "theone": {
-      "command": "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/bin/theone",
+      "command": "__THEONE_REPO__/bin/theone",
       "args": [
         "serve",
         "-config",
-        "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/theone.yaml",
+        "__THEONE_REPO__/theone.yaml",
         "-data-dir",
-        "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/.theone-data"
+        "__THEONE_REPO__/.theone-data"
       ],
       "env": {
         "THEONE_DISABLE_PID": "1",
-        "THEONE_LOG_PATH": "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/.theone-data/logs/theone.log"
+        "THEONE_LOG_PATH": "__THEONE_REPO__/.theone-data/logs/theone.log"
       }
     }
   }

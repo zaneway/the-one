@@ -1,0 +1,8 @@
+---
+description: The One 本轮记忆上下文（beforeSubmitPrompt 自动刷新，勿手工编辑）
+alwaysApply: true
+---
+
+# The One 记忆上下文（Cursor 自动注入）
+
+_（暂无命中记忆；`beforeSubmitPrompt` prefetch 后将由系统自动更新。请勿手工编辑。）_
