@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -27,7 +26,8 @@ def _load_runtime():
 
 _rt = _load_runtime()
 pick = _rt.pick
-prompt_fingerprint = _rt.prompt_fingerprint
+
+DEFAULT_PROMPT_CACHE_USER_SUMMARY_MAX_CHARS = 3000
 
 
 def _read_stdin_json() -> dict:
@@ -39,6 +39,34 @@ def _read_stdin_json() -> dict:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _prompt_cache_user_summary_max_chars(config_path: str) -> int:
+    if not config_path:
+        return DEFAULT_PROMPT_CACHE_USER_SUMMARY_MAX_CHARS
+    try:
+        with open(os.path.expanduser(config_path), "r", encoding="utf-8") as handle:
+            section = ""
+            for raw_line in handle:
+                line = raw_line.split("#", 1)[0].rstrip()
+                if not line.strip():
+                    continue
+                if not raw_line.startswith((" ", "\t")) and line.endswith(":"):
+                    section = line[:-1].strip()
+                    continue
+                if section != "adapter":
+                    continue
+                stripped = line.strip()
+                key = "prompt_cache_user_summary_max_chars:"
+                if not stripped.startswith(key):
+                    continue
+                value = stripped[len(key):].strip().strip("\"'")
+                parsed = int(value)
+                if parsed > 0:
+                    return parsed
+    except Exception:
+        pass
+    return DEFAULT_PROMPT_CACHE_USER_SUMMARY_MAX_CHARS
 
 
 def cmd_prepare(args: argparse.Namespace) -> int:
@@ -59,23 +87,21 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         )
 
     generation_id = pick(data, ["generation_id", "generationId"], "")
-    user_summary = prompt[:1000] if prompt else "用户输入摘要未直接可见"
-    prompt_fp = prompt_fingerprint(prompt)
-    if agent in {"claude_code", "codex"} and not generation_id and prompt_fp:
-        generation_id = "gen_" + prompt_fp
+    user_summary_max_chars = _prompt_cache_user_summary_max_chars(args.config)
+    user_summary = prompt[:user_summary_max_chars] if prompt else "用户输入摘要未直接可见"
+    if not generation_id:
+        generation_id = "gen_" + datetime.now().strftime("%Y%m%d%H%M%S%f")
 
     turn_id = ""
     if generation_id:
         turn_id = "turn_" + generation_id
-    elif prompt_fp:
-        turn_id = "turn_" + prompt_fp
 
     cache_payload = {
         "user_summary": user_summary,
+        "user_prompt_chars": len(prompt or ""),
         "session_id": conversation_id,
         "conversation_id": conversation_id,
         "generation_id": generation_id,
-        "prompt_fingerprint": prompt_fp,
         "turn_id": turn_id,
         "captured_at": datetime.now().astimezone().isoformat(),
     }
@@ -155,6 +181,7 @@ def main() -> int:
     prep.add_argument("--agent", required=True)
     prep.add_argument("--prompt-cache", required=True)
     prep.add_argument("--surface", required=True)
+    prep.add_argument("--config", default="")
     prep.set_defaults(func=cmd_prepare)
 
     fmt = sub.add_parser("format-response", help="stdin=prefetch-context JSON; stdout=hook response")

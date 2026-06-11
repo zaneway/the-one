@@ -127,69 +127,6 @@ def cmd_start(args: argparse.Namespace) -> int:
 
 
 def cmd_end(args: argparse.Namespace) -> int:
-    data = _read_stdin_json()
-    agent = (args.agent or "cursor").strip() or "cursor"
-    binding = _load_binding(args.binding)
-
-    session_id = pick(
-        data,
-        ["session_id", "sessionId", "conversation_id", "conversationId"],
-        pick(binding, ["session_id"], ""),
-    )
-    if not session_id:
-        return 0
-
-    default_task = f"task_{agent}_auto" if agent != "cursor" else "task_cursor_auto"
-    task_id = pick(data, ["task_id", "taskId"], pick(binding, ["task_id"], default_task))
-
-    if agent == "claude_code":
-        reason = pick(data, ["reason"], "other")
-        summary = f"Claude Code 会话结束（{reason}）"
-        producer = f"{agent}_hook:sessionEnd"
-    elif agent == "codex":
-        reason = pick(data, ["reason"], "stop")
-        summary = f"Codex 会话结束（{reason}）"
-        producer = "codex_hook:SessionEnd"
-    else:
-        summary = pick(data, ["summary", "result", "message"], "Cursor 会话结束")
-        producer = "cursor_hook:sessionEnd"
-    content_summary, spans = format_structured_content_summary(
-        "session.end",
-        summary,
-        status_text="completed",
-        max_chars=800,
-        max_spans=2,
-    )
-
-    envelope = {
-        "ingest_id": "ing_" + uuid.uuid4().hex[:16],
-        "protocol_version": "v1",
-        "producer": producer,
-        "agent_type": agent,
-        "session_id": session_id,
-        "events": [
-            {
-                "kind": "session.lifecycle",
-                "event_type": "session.end",
-                "payload": {
-                    "agent_type": agent,
-                    "workspace_id": "local_default_workspace",
-                    "project_id": "the-one",
-                    "repo_id": "the-one",
-                    "conversation_id": session_id,
-                    "content_summary": content_summary,
-                    "salient_spans": spans,
-                    "session": {"status": "completed"},
-                    "task": {
-                        "task_summary": task_id,
-                        "status": "completed",
-                        "outcome_summary": content_summary,
-                    },
-                },
-            }
-        ],
-    }
-    print(json.dumps(envelope, ensure_ascii=False))
     return 0
 
 
