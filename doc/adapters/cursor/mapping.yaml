@@ -5,25 +5,37 @@ expand_mode: v2
 
 hooks:
   sessionStart:
+    producer: cursor_hook:sessionStart
+    raw_event: suppressed
+    note: bind session/task only; keep hook for lifecycle diagnostics
     emit:
       - kind: session.lifecycle
         event_type: session.start
   beforeSubmitPrompt:
     action: prefetch-context
   afterAgentResponse:
+    producer: cursor_hook:afterAgentResponse
     emit:
       - kind: turn.completed
-        event_type: agent.response.summary
+        event_type: turn.completed
+        # payload.agent_summary 应为结构化文本，遵守 doc/shared/content-summary-structured.md
         # v2：不含 tool_results / file_edits
   afterFileEdit:
+    producer: cursor_hook:afterFileEdit
+    raw_event: stored
+    note: file edit summary enters raw_event; keep path/change_type/hash/summary only, never full diff
     emit:
       - kind: capture.atomic
         event_type: file.edit.summary
   afterMCPExecution:
+    producer: cursor_hook:afterMCPExecution
+    raw_event: suppressed
+    note: tool result is control-plane diagnostics; high-value conclusions should be captured by turn.completed or memory_remember
     emit:
       - kind: capture.atomic
         event_type: tool.result.summary
   sessionEnd:
+    producer: cursor_hook:sessionEnd
     emit:
       - kind: session.lifecycle
         event_type: session.end

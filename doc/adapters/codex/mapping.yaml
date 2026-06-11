@@ -1,0 +1,49 @@
+# Codex Hook / Wrapper → theone ingest
+agent_type: codex
+primary_producer: codex_hook:<HookEvent>
+fallback_producer: codex_wrapper
+
+surface:
+  path: .codex/theone-context.md
+  inject_via: UserPromptSubmit.hookSpecificOutput.additionalContext
+
+binding:
+  file: binding.codex.json
+
+hooks:
+  SessionStart:
+    script: drivers/codex/hooks/theone-session-start.sh
+    producer: codex_hook:SessionStart
+    emit:
+      - kind: session.lifecycle
+        event_type: session.start
+  UserPromptSubmit:
+    script: drivers/codex/hooks/theone-user-prompt-submit.sh
+    action: prefetch-context
+  PostToolUse:
+    script: drivers/codex/hooks/theone-post-tool-use.sh
+    producer: codex_hook:PostToolUse
+    emit:
+      - kind: capture.atomic
+        event_type: file.edit.summary
+        when_tool: [apply_patch]
+      - kind: capture.atomic
+        event_type: tool.result.summary
+        otherwise: true
+  Stop:
+    script: drivers/codex/hooks/theone-stop.sh
+    producer: codex_hook:Stop
+    emit:
+      - kind: turn.completed
+        event_type: turn.completed
+        # payload.agent_summary 应为结构化文本，遵守 doc/shared/content-summary-structured.md
+
+wrapper:
+  producer: codex_wrapper
+  kind: turn.completed
+  event_type: turn.completed
+  payload:
+    user_summary: structured_text
+    agent_summary: structured_text
+    keywords: search_anchors
+    salient_spans: atomic_facts

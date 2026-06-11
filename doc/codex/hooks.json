@@ -1,0 +1,49 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "drivers/codex/hooks/theone-session-start.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "drivers/codex/hooks/theone-user-prompt-submit.sh",
+            "timeout": 45
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "drivers/codex/hooks/theone-post-tool-use.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "drivers/codex/hooks/theone-stop.sh",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

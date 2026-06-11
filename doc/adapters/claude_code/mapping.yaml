@@ -13,6 +13,7 @@ binding:
 hooks:
   SessionStart:
     script: drivers/claude_code/hooks/theone-session-start.sh
+    producer: claude_code_hook:SessionStart
     emit:
       - kind: session.lifecycle
         event_type: session.start
@@ -21,6 +22,7 @@ hooks:
     action: prefetch-context
   PostToolUse:
     script: drivers/claude_code/hooks/theone-post-tool-use.sh
+    producer: claude_code_hook:PostToolUse
     emit:
       - kind: capture.atomic
         event_type: file.edit.summary
@@ -30,16 +32,20 @@ hooks:
         otherwise: true
   PostToolUseFailure:
     script: drivers/claude_code/hooks/theone-post-tool-use-failure.sh
+    producer: claude_code_hook:PostToolUseFailure
     emit:
       - kind: capture.atomic
         event_type: tool.result.summary
   Stop:
     script: drivers/claude_code/hooks/theone-stop.sh
+    producer: claude_code_hook:Stop
     emit:
       - kind: turn.completed
-        event_type: agent.response.summary
+        event_type: turn.completed
+        # payload.agent_summary 应为结构化文本，遵守 doc/shared/content-summary-structured.md
   SessionEnd:
     script: drivers/claude_code/hooks/theone-session-end.sh
+    producer: claude_code_hook:SessionEnd
     emit:
       - kind: session.lifecycle
         event_type: session.end
