@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "__THEONE_REPO__/drivers/claude_code/hooks/theone-session-start.sh",
+            "command": "__THEONE_PROJECT__/.theone-data/drivers/claude_code/hooks/theone-session-start.sh",
             "timeout": 30
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "__THEONE_REPO__/drivers/claude_code/hooks/theone-user-prompt-submit.sh",
+            "command": "__THEONE_PROJECT__/.theone-data/drivers/claude_code/hooks/theone-user-prompt-submit.sh",
             "timeout": 45
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "__THEONE_REPO__/drivers/claude_code/hooks/theone-post-tool-use.sh",
+            "command": "__THEONE_PROJECT__/.theone-data/drivers/claude_code/hooks/theone-post-tool-use.sh",
             "timeout": 30
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "__THEONE_REPO__/drivers/claude_code/hooks/theone-post-tool-use-failure.sh",
+            "command": "__THEONE_PROJECT__/.theone-data/drivers/claude_code/hooks/theone-post-tool-use-failure.sh",
             "timeout": 30
           }
         ]
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "__THEONE_REPO__/drivers/claude_code/hooks/theone-stop.sh",
+            "command": "__THEONE_PROJECT__/.theone-data/drivers/claude_code/hooks/theone-stop.sh",
             "timeout": 60
           }
         ]
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "__THEONE_REPO__/drivers/claude_code/hooks/theone-session-end.sh",
+            "command": "__THEONE_PROJECT__/.theone-data/drivers/claude_code/hooks/theone-session-end.sh",
             "timeout": 10
           }
         ]

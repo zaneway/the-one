@@ -31,7 +31,7 @@ make package-cursor VERSION=1.0.0
 ```bash
 tar -xzf theone-cursor-1.0.0-darwin-arm64.tar.gz
 cd theone-cursor-1.0.0-darwin-arm64
-./install-cursor.sh --project /path/to/your/project
+./install-cursor.sh --project ~/
 ```
 
 如果已经在目标项目目录下，也可以：
@@ -44,15 +44,16 @@ cd theone-cursor-1.0.0-darwin-arm64
 
 | 目标路径 | 内容 |
 |----------|------|
-| `bin/theone` | 发布包中的二进制 |
-| `theone.yaml` | 默认配置；已存在时默认保留 |
-| `drivers/cursor/` | Cursor Hook 脚本 |
-| `drivers/shared/` | Hook 共享脚本 |
-| `.cursor/mcp.json` | MCP 配置，指向目标项目内的 `bin/theone` |
+| `.cursor/mcp.json` | MCP 配置；`command` / `-config` 指向**发布包解压目录** |
 | `.cursor/hooks.json` | Cursor Hooks 配置 |
 | `.cursor/rules/theone-memory-observe.mdc` | Agent 记忆规则 |
 | `.cursor/rules/theone-injected-context.mdc` | prefetch 注入面初始文件 |
+| `.theone-data/drivers/cursor/` | Cursor Hook 脚本（与 logs、数据库同级） |
+| `.theone-data/drivers/shared/` | Hook 共享脚本 |
+| `.theone-data/theone-install.env` | 记录发布包路径与项目路径 |
 | `.theone-data/` | SQLite 数据库、日志、runtime state |
+
+`bin/theone` 与 `theone.yaml` **保留在发布包目录**，不复制进目标项目。
 
 已有 `.cursor/mcp.json` / `.cursor/hooks.json` 时，脚本会在安装了 `jq` 的环境中自动合并；没有 `jq` 时会提示用户手工合并。
 
@@ -149,8 +150,8 @@ tail -n 50 .theone-data/logs/theone.log
 
 | 文件 | 作用 |
 |------|------|
-| `mcp.json` | MCP 配置模板，占位符 `__THEONE_REPO__` 会替换为目标项目绝对路径 |
-| `hooks.json` | Cursor Hooks 配置模板 |
+| `mcp.json` | MCP 配置模板；`__THEONE_PACKAGE__` → 发布包目录，`__THEONE_PROJECT__` → 目标项目 |
+| `hooks.json` | Cursor Hooks 配置模板（路径指向 `.theone-data/drivers/cursor/`） |
 | `rule/theone-memory-observe.mdc` | Agent Rule |
 | `context/theone-injected-context.mdc.template` | 初始注入面 |
 
@@ -169,7 +170,7 @@ tail -n 50 .theone-data/logs/theone.log
 | raw_event 为空 | Hooks 未启用、Agent 未产生有效事件、或只触发了被抑制事件 | 完成一轮有内容的 Agent 回复，再查 `turn.completed` |
 | 看不到 `session.start` / `tool.result.summary` | 当前策略就是不写入 raw_event | 查 binding 和日志，不把它作为 raw_event 验收项 |
 | prefetch 无注入 | 尚无可召回记忆或 binding 未建立 | 先完成一轮高价值对话并让 Agent 调用 `memory_observe` / `memory_remember` |
-| 换目录后失效 | `.cursor/mcp.json` 里仍是旧绝对路径 | 重跑安装脚本 |
+| 换目录后失效 | 发布包或项目路径变更 | 重跑安装脚本（会刷新 `theone-install.env` 与 MCP 路径） |
 
 ---
 

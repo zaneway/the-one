@@ -1,17 +1,17 @@
 {
   "mcpServers": {
     "theone": {
-      "command": "__THEONE_REPO__/bin/theone",
+      "command": "__THEONE_PACKAGE__/bin/theone",
       "args": [
         "serve",
         "-config",
-        "__THEONE_REPO__/theone.yaml",
+        "__THEONE_PACKAGE__/theone.yaml",
         "-data-dir",
-        "__THEONE_REPO__/.theone-data"
+        "__THEONE_PROJECT__/.theone-data"
       ],
       "env": {
         "THEONE_DISABLE_PID": "1",
-        "THEONE_LOG_PATH": "__THEONE_REPO__/.theone-data/logs/theone.log"
+        "THEONE_LOG_PATH": "__THEONE_PROJECT__/.theone-data/logs/theone.log"
       }
     }
   }

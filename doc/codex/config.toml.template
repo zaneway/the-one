@@ -1,16 +1,16 @@
 # Merge this block into ~/.codex/config.toml (or project-level Codex config).
-# Placeholder __THEONE_REPO__ is replaced by install-codex.sh with the target project path.
+# __THEONE_PACKAGE__ = release package directory; __THEONE_PROJECT__ = target project.
 
 [mcp_servers.theone]
-command = "__THEONE_REPO__/bin/theone"
+command = "__THEONE_PACKAGE__/bin/theone"
 args = [
   "serve",
   "-config",
-  "__THEONE_REPO__/theone.yaml",
+  "__THEONE_PACKAGE__/theone.yaml",
   "-data-dir",
-  "__THEONE_REPO__/.theone-data",
+  "__THEONE_PROJECT__/.theone-data",
 ]
-cwd = "__THEONE_REPO__"
+cwd = "__THEONE_PACKAGE__"
 startup_timeout_sec = 20
 tool_timeout_sec = 120
 enabled = true

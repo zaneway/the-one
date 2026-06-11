@@ -3,42 +3,42 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "drivers/cursor/entry.sh sessionStart",
+        "command": ".theone-data/drivers/cursor/entry.sh sessionStart",
         "timeout": 8,
         "failClosed": false
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "drivers/cursor/entry.sh beforeSubmitPrompt",
+        "command": ".theone-data/drivers/cursor/entry.sh beforeSubmitPrompt",
         "timeout": 8,
         "failClosed": false
       }
     ],
     "afterAgentResponse": [
       {
-        "command": "drivers/cursor/entry.sh afterAgentResponse",
+        "command": ".theone-data/drivers/cursor/entry.sh afterAgentResponse",
         "timeout": 8,
         "failClosed": false
       }
     ],
     "afterFileEdit": [
       {
-        "command": "drivers/cursor/entry.sh afterFileEdit",
+        "command": ".theone-data/drivers/cursor/entry.sh afterFileEdit",
         "timeout": 8,
         "failClosed": false
       }
     ],
     "afterMCPExecution": [
       {
-        "command": "drivers/cursor/entry.sh afterMCPExecution",
+        "command": ".theone-data/drivers/cursor/entry.sh afterMCPExecution",
         "timeout": 8,
         "failClosed": false
       }
     ],
     "sessionEnd": [
       {
-        "command": "drivers/cursor/entry.sh sessionEnd",
+        "command": ".theone-data/drivers/cursor/entry.sh sessionEnd",
         "timeout": 8,
         "failClosed": false
       }

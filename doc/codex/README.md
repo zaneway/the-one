@@ -43,14 +43,15 @@ cd theone-codex-1.0.0-darwin-arm64
 
 | 目标路径 | 内容 |
 |----------|------|
-| `bin/theone` | 发布包中的二进制 |
-| `theone.yaml` | 默认配置；已存在时默认保留 |
-| `drivers/codex/` | Codex Hook 脚本 |
-| `drivers/shared/` | Hook 共享脚本 |
 | `.codex/hooks.json` | Codex Hooks 配置 |
 | `.codex/theone-mcp.toml` | 渲染后的 MCP 片段，需合并到 `~/.codex/config.toml` |
 | `.codex/theone-context.md` | prefetch 注入面初始文件 |
+| `.theone-data/drivers/codex/` | Codex Hook 脚本（与 logs、数据库同级） |
+| `.theone-data/drivers/shared/` | Hook 共享脚本 |
+| `.theone-data/theone-install.env` | 记录发布包路径与项目路径 |
 | `.theone-data/` | SQLite 数据库、日志、runtime state |
+
+`bin/theone` 与 `theone.yaml` **保留在发布包目录**，不复制进目标项目。
 
 已有 `.codex/hooks.json` 时，脚本会在安装了 `jq` 的环境中自动合并；没有 `jq` 时会提示用户手工合并。
 
@@ -175,8 +176,8 @@ Wrapper 兼容入口见 `scripts/examples/codex_wrapper_observe_envelope.sh`，�
 
 | 文件 | 作用 |
 |------|------|
-| `hooks.json` | Codex Hooks 配置模板 |
-| `config.toml.template` | MCP 配置模板，占位符 `__THEONE_REPO__` 会替换为目标项目绝对路径 |
+| `hooks.json` | Codex Hooks 模板（路径指向 `.theone-data/drivers/codex/`） |
+| `config.toml.template` | MCP 模板；`__THEONE_PACKAGE__` → 发布包，`__THEONE_PROJECT__` → 目标项目 |
 | `context/theone-context.md.template` | 初始注入面 |
 | `AGENTS.md` | 建议合并进项目 `AGENTS.md` 的记忆捕获说明 |
 
