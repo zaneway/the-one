@@ -414,15 +414,16 @@ func runIngest(ctx context.Context, cfg config.Config) error {
 	_ = adapter.EnsureP1Migration(stateDir)
 	expandMode := adapter.ResolveExpandMode(cfg)
 	processor := &adapter.IngestProcessor{
-		Binder:          adapter.NewSessionBinder(stateDir),
-		Ledger:          adapter.NewIngestLedger(stateDir),
-		Failures:        adapter.NewFailureQueue(stateDir),
-		StateStore:      adapter.NewFileStateStore(stateDir),
-		AtomicDedup:     adapter.NewAtomicDedupStore(stateDir),
-		ExpandMode:      expandMode,
-		AtomicStripTurn: cfg.Adapter.AtomicStripTurnFields,
-		Observe:         observeFromRuntime(runtime),
-		EnsureSession:   runtime.EnsureCaptureSession,
+		Binder:                adapter.NewSessionBinder(stateDir),
+		Ledger:                adapter.NewIngestLedger(stateDir),
+		Failures:              adapter.NewFailureQueue(stateDir),
+		StateStore:            adapter.NewFileStateStore(stateDir),
+		AtomicDedup:           adapter.NewAtomicDedupStore(stateDir),
+		ExpandMode:            expandMode,
+		AtomicStripTurn:       cfg.Adapter.AtomicStripTurnFields,
+		SuppressRawEventTypes: adapter.ResolveSuppressRawEventTypes(cfg),
+		Observe:               observeFromRuntime(runtime),
+		EnsureSession:         runtime.EnsureCaptureSession,
 	}
 	out := processor.Process(ctx, ingestID, items)
 	encoder := json.NewEncoder(os.Stdout)

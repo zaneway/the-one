@@ -166,6 +166,10 @@ type AdapterConfig struct {
 
 	// PromptCacheUserSummaryMaxChars beforeSubmitPrompt 本地 prompt-cache 用户摘要最大字符数
 	PromptCacheUserSummaryMaxChars int `yaml:"prompt_cache_user_summary_max_chars" json:"prompt_cache_user_summary_max_chars"`
+
+	// SuppressRawEventTypes ingest 平面不写 raw_event 的事件类型列表。
+	// 省略时使用内置默认；显式配置 [] 表示不抑制任何事件类型。
+	SuppressRawEventTypes []string `yaml:"suppress_raw_event_types,omitempty" json:"suppress_raw_event_types,omitempty"`
 }
 
 // CaptureConfig 捕获配置结构体
