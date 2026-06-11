@@ -165,11 +165,17 @@ sequenceDiagram
 
 规则引擎（`processor.rule_based`）会过滤多数普通对话与成功工具输出；用户声明、纠正、失败工具、含「记住/约束」等信号的消息更易进入候选。
 
-### Cursor 侧写入说明
+### Agent 发布包安装（Cursor / Claude Code / Codex）
 
-- **IDE 不会自动写库**：需配置 MCP，并由 Agent 按 Rules 调用 `memory_observe` / `memory_remember`。
-- **每条用户消息** → 通常只进 `raw_event`；是否晋升为 `memory_item` 取决于 P3 过滤与准入，或 Agent 显式 `memory.remember`。
-- 详见 `doc/Cursor 适配与安装后配置说明.md`。
+三端均提供与源码解耦的发布包，普通用户不要求克隆仓库或安装 Go：
+
+| Agent | 打包 | 安装 | 手册 |
+|-------|------|------|------|
+| Cursor | `make package-cursor VERSION=<version>` | `./install-cursor.sh --project <dir>` | `doc/cursor/README.md` |
+| Claude Code | `make package-claude VERSION=<version>` | `./install-claude.sh --project <dir>` | `doc/claude/README.md` |
+| Codex | `make package-codex VERSION=<version>` | `./install-codex.sh --project <dir>` | `doc/codex/README.md` |
+
+源码仓库内快速安装：`make install-cursor` / `make install-claude` / `make install-codex`。
 
 ## v1.0.0 本地 
 
