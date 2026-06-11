@@ -605,6 +605,10 @@ func Load(overrides Overrides) (Config, error) {
 	return cfg, validate(cfg)
 }
 
+// loadYAML 从给定路径读取 YAML 配置并反序列化到 cfg。
+// 入参：path（配置文件路径，支持 ~ 展开）、cfg（接收反序列化结果的结构体指针）。
+// 返回：读取/解析错误；所有错误统一以 CONFIG_INVALID 错误码包装，便于上层判断。
+// 设计约束：解析阶段不校验字段，由 validate 在 Load 末尾统一做。
 func loadYAML(path string, cfg *Config) error {
 	data, err := os.ReadFile(expandHome(path))
 	if err != nil {
@@ -697,6 +701,8 @@ func validate(cfg Config) error {
 	return nil
 }
 
+// firstNonEmpty 返回第一个非空字符串；全部为空时返回空串。
+// 与 config/app 的同名函数一致，用于命令行/环境变量/配置文件的优先级合并。
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if value != "" {
@@ -706,6 +712,9 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// expandHome 把 "~" 或 "~/..." 开头的路径展开为 $HOME。
+// 仅处理前缀匹配，不解析中间出现的 ~；解析失败时原样返回，避免 Load 流程中断。
+// 设计约束：不依赖外部 glob 库，使用 filepath.Join 维持跨平台路径拼接行为。
 func expandHome(path string) string {
 	if path == "~" {
 		home, err := os.UserHomeDir()

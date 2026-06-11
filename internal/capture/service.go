@@ -651,7 +651,10 @@ func normalizeOccurredAt(value string) (time.Time, error) {
 	return parsed.In(time.Local), nil
 }
 
-// sessionGoal 从请求中提取会话目标摘要
+// sessionGoal 从请求中提取会话目标摘要。
+// 入参：ObserveRequest。
+// 返回：req.Session.GoalSummary；Session 为 nil 时返回空串。
+// 设计约束：不裁剪空白，由调用方在写入数据库前统一 trim。
 func sessionGoal(req ObserveRequest) string {
 	if req.Session != nil {
 		return req.Session.GoalSummary
@@ -659,8 +662,10 @@ func sessionGoal(req ObserveRequest) string {
 	return ""
 }
 
-// terminalTaskStatus 获取任务终态状态
-// 根据请求中的task.status确定任务结束状态
+// terminalTaskStatus 获取任务终态状态。
+// 入参：ObserveRequest。
+// 返回：req.Task.Status（当任务非活跃时）；活跃或未指定时回退 StatusUnknown。
+// 设计约束：仅在 task 真正结束才返回非 active 状态，确保 lifecycle 与 status 字段一致。
 func terminalTaskStatus(req ObserveRequest) string {
 	if req.Task != nil && req.Task.Status != "" && req.Task.Status != StatusActive {
 		return req.Task.Status
@@ -668,8 +673,10 @@ func terminalTaskStatus(req ObserveRequest) string {
 	return StatusUnknown
 }
 
-// terminalSessionStatus 获取会话终态状态
-// 根据请求中的session.status确定会话结束状态
+// terminalSessionStatus 获取会话终态状态。
+// 入参：ObserveRequest。
+// 返回：req.Session.Status（当非 active 时）；活跃或未指定时回退 StatusCompleted，
+// 让"未显式声明结束"被视作正常完成的兜底。
 func terminalSessionStatus(req ObserveRequest) string {
 	if req.Session != nil && req.Session.Status != "" && req.Session.Status != StatusActive {
 		return req.Session.Status
@@ -677,8 +684,10 @@ func terminalSessionStatus(req ObserveRequest) string {
 	return StatusCompleted
 }
 
-// sessionEndTaskStatus 获取session结束时的任务状态
-// 当session.end事件时，确定活跃任务的结束状态
+// sessionEndTaskStatus 获取 session.end 事件触发时，活跃任务的结束状态。
+// 入参：ObserveRequest。
+// 返回：任务自带的非 active status；活跃任务或缺失 task 时回退 StatusUnknown。
+// 设计约束：与 terminalTaskStatus 行为类似，但专用于"会话级"终结而非任务自身。
 func sessionEndTaskStatus(req ObserveRequest) string {
 	if req.Task != nil && req.Task.Status != "" && req.Task.Status != StatusActive {
 		return req.Task.Status
@@ -686,7 +695,10 @@ func sessionEndTaskStatus(req ObserveRequest) string {
 	return StatusUnknown
 }
 
-// taskOutcome 从请求中提取任务结果摘要
+// taskOutcome 从请求中提取任务结果摘要。
+// 入参：ObserveRequest。
+// 返回：req.Task.OutcomeSummary；Task 为 nil 时返回空串。
+// 设计约束：仅做字段透传，不做语言规范化。
 func taskOutcome(req ObserveRequest) string {
 	if req.Task == nil {
 		return ""
@@ -694,7 +706,10 @@ func taskOutcome(req ObserveRequest) string {
 	return req.Task.OutcomeSummary
 }
 
-// jsonText 将值序列化为JSON文本
+// jsonText 将任意值序列化为 JSON 字符串，失败时返回 VALIDATION_FAILED 错误。
+// 入参：value。
+// 返回：序列化结果与错误。
+// 设计约束：与 internal/app 下的同名函数职责一致；不同包独立实现以避免循环依赖。
 func jsonText(value any) (string, error) {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -703,7 +718,8 @@ func jsonText(value any) (string, error) {
 	return string(data), nil
 }
 
-// mustJSONText 将值序列化为JSON文本，忽略错误
+// mustJSONText 将任意值序列化为 JSON 字符串，忽略错误（失败时返回 "null"）。
+// 用于字段为可选结构、写失败不影响主流程的场景，避免在 hot path 增加错误处理。
 func mustJSONText(value any) string {
 	data, _ := json.Marshal(value)
 	return string(data)

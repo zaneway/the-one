@@ -86,10 +86,14 @@ func ComputeTier(in Input) string {
 	}
 }
 
+// hasTemporaryPersistenceSignal 判断临时层记忆是否具备"值得保留"信号：
+// 强化次数或基础激活度达到阈值，避免临时层在每次重算时被一致地降级到 deleted。
 func hasTemporaryPersistenceSignal(in Input) bool {
 	return in.EffectiveReinforcement >= 3 || in.Access.EffectiveReinforcement >= 3 || in.Access.BaseActivationNorm >= 0.15
 }
 
+// computeSalience 计算 salience 主成分，权重为：memory_type 35%、importance 25%、
+// source_type 20%、scope 20%。结果夹到 [0.1, 1.0] 区间，避免零信号记忆参与后续乘积。
 func computeSalience(in Input) float64 {
 	return clamp(
 		0.35*typeWeight(in.MemoryType)+
@@ -100,6 +104,8 @@ func computeSalience(in Input) float64 {
 	)
 }
 
+// typeWeight 按记忆类型给基础权重：决策/约束最高，临时态最低。
+// 未识别类型走 default=0.65，与"common_knowledge"持平，避免新类型被压成低信号。
 func typeWeight(memoryType string) float64 {
 	switch memoryType {
 	case memory.TypeDecision, memory.TypeConstraint:
@@ -123,6 +129,7 @@ func typeWeight(memoryType string) float64 {
 	}
 }
 
+// sourceWeight 按 source_type 给基础权重：用户显式声明权重最高，自动日志最低。
 func sourceWeight(sourceType string) float64 {
 	switch sourceType {
 	case "user_declared", "user_confirmed":
@@ -144,6 +151,8 @@ func sourceWeight(sourceType string) float64 {
 	}
 }
 
+// scopeWeight 按 scope 给基础权重：项目级最稳定，session 级最易过期。
+// 兼容 "global_common"（已弃用）走 0.70，避免老数据被错误归零。
 func scopeWeight(scope string) float64 {
 	switch scope {
 	case memory.ScopeProjectLocal:
@@ -161,6 +170,8 @@ func scopeWeight(scope string) float64 {
 	}
 }
 
+// encodingDepthFactor 把 encoding_depth 映射为 0.6~1.0 的因子。
+// depth 越深说明记忆经过多轮强化，因子越大；超过 4 按 4 计算。
 func encodingDepthFactor(depth int) float64 {
 	if depth < 0 {
 		depth = 0
@@ -171,6 +182,8 @@ func encodingDepthFactor(depth int) float64 {
 	return 0.6 + 0.1*float64(depth)
 }
 
+// consolidationFactor 按 memory_state 给因子：stable=1.0 满额，provisional/pending_review
+// 打折，archived 取 0.45 让记忆进入低保留区但不为 0，便于 recover 流程介入。
 func consolidationFactor(state string) float64 {
 	switch state {
 	case memory.StateProvisional:
@@ -188,10 +201,13 @@ func consolidationFactor(state string) float64 {
 	}
 }
 
+// confidenceFactor 把置信度夹到 [0.2, 1.0]，避免 0 置信度记忆被一票否决。
 func confidenceFactor(confidence float64) float64 {
 	return clamp(confidence, 0.2, 1.0)
 }
 
+// lifecycleFactor 按 tier 给生命周期因子，durable=1.20 最高，temporary=0.40 最低。
+// archived 状态额外统一为 0.50，保证归档不会被遗忘但也不会回流。
 func lifecycleFactor(tier, state string) float64 {
 	if state == memory.StateArchived {
 		return 0.50
@@ -214,6 +230,8 @@ func lifecycleFactor(tier, state string) float64 {
 	}
 }
 
+// explicitBoost 显式权重加成：pinned/user_declared/user_confirmed/durable 各自加分，
+// 总加成上限 0.4，避免多重强信号叠加突破 [0,1] 区间。
 func explicitBoost(in Input) float64 {
 	boost := 0.0
 	if in.Pinned {
@@ -231,6 +249,13 @@ func explicitBoost(in Input) float64 {
 	return math.Min(0.4, boost)
 }
 
+// stalenessPenalty 根据有效期、supersedes、最后访问/验证时间计算陈旧度惩罚。
+// 入参：in 评分输入，now 当前时间。
+// 优先级：valid_until 过期 > 已 superseded > 已 supersedes 别人 > TTL 接近过期。
+// 关键分支说明：
+//   - LastValidatedAt 非空时返回 0：表示已通过校验，无陈旧度；
+//   - IsSuperseded 时返回 1.0 直接清零；
+//   - 接近 TTL 0.8 阈值时返回 0.2 轻量惩罚，让记忆有机会被强化抵消。
 func stalenessPenalty(in Input, now time.Time) float64 {
 	if !in.ValidUntil.IsZero() && in.ValidUntil.Before(now) {
 		return 0.4
@@ -259,6 +284,8 @@ func stalenessPenalty(in Input, now time.Time) float64 {
 	return 0
 }
 
+// defaultTTLDays 返回不同 memory_type 的默认 TTL 天数。
+// 决策/约束/失败/复查检查点保留最长（365 天），临时态跟随 temporaryTTLDays 配置。
 func defaultTTLDays(memoryType string, temporaryTTL int) int {
 	if temporaryTTL <= 0 {
 		temporaryTTL = 5
@@ -277,6 +304,7 @@ func defaultTTLDays(memoryType string, temporaryTTL int) int {
 	}
 }
 
+// clamp 把 value 限制到 [minValue, maxValue] 区间，超界即截断。
 func clamp(value, minValue, maxValue float64) float64 {
 	if value < minValue {
 		return minValue

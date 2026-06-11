@@ -30,6 +30,9 @@ func BuildSearchText(input SearchTextInput) string {
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
+// labeledPart 把多个字符串拼接为 "label: value1 value2 ..." 的形式，便于在 FTS 文档中
+// 按字段加权检索（不同 label 可以在 FTS5 触发器里区分权重）。空值直接返回空串，
+// 由 BuildSearchText 跳过空段。
 func labeledPart(label string, values []string) string {
 	joined := strings.TrimSpace(strings.Join(values, " "))
 	if joined == "" {
@@ -38,6 +41,8 @@ func labeledPart(label string, values []string) string {
 	return label + ": " + joined
 }
 
+// compactUniqueParts 折叠空段、去重后返回非空段切片。
+// 去重依据是 Fields 化后的字符串，避免"标题 + 正文"拼接时与单独的标题重复出现。
 func compactUniqueParts(values ...string) []string {
 	seen := map[string]struct{}{}
 	parts := make([]string, 0, len(values))
@@ -46,6 +51,7 @@ func compactUniqueParts(values ...string) []string {
 		if part == "" {
 			continue
 		}
+		// 用 Fields 标准化空白，让"  a  b  "与"a b"在去重键上等价
 		key := strings.Join(strings.Fields(part), " ")
 		if _, ok := seen[key]; ok {
 			continue

@@ -130,6 +130,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}, nil
 }
 
+// newProcessorProvider 根据 config.Processor.Provider 构造 processor.Provider 实现。
+// 入参：cfg（已合并的运行时配置）、logger（provider 内部日志）。
+// 返回：构造完成的 Provider 与错误。
+// 当前支持：rule_based（默认本地规则）、openai（外部 OpenAI 兼容模型）。
+// 错误语义：未知 provider 返回 CONFIG_INVALID 错误码；OpenAI 配置非法时透传 OpenAI provider 错误。
 func newProcessorProvider(cfg config.Config, logger *slog.Logger) (processor.Provider, error) {
 	switch cfg.Processor.Provider {
 	case processor.RuleBasedProviderName:
@@ -270,6 +275,9 @@ func (a *App) Close() error {
 	return closeErr
 }
 
+// ensureSessionGoal 在 CaptureSession 建立时给出 GoalSummary 兜底。
+// 优先使用 session.GoalSummary（来自 lifecycle event），缺省时回退到 ContentSummary。
+// 设计约束：两个值都做 trim 处理，避免注入纯空白字符串污染数据库。
 func ensureSessionGoal(req capture.ObserveRequest) string {
 	if req.Session != nil && strings.TrimSpace(req.Session.GoalSummary) != "" {
 		return strings.TrimSpace(req.Session.GoalSummary)
@@ -277,6 +285,10 @@ func ensureSessionGoal(req capture.ObserveRequest) string {
 	return strings.TrimSpace(req.ContentSummary)
 }
 
+// jsonText 把任意值序列化为 JSON 字符串。
+// 入参：value（任意 JSON 可序列化值）。
+// 返回：JSON 文本与序列化错误；错误时返回空串，便于 caller 用 err != nil 判断。
+// 用途：写 SQLite 之前把 map/slice 等结构化字段转成 TEXT。
 func jsonText(value any) (string, error) {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -285,6 +297,9 @@ func jsonText(value any) (string, error) {
 	return string(data), nil
 }
 
+// firstNonEmpty 返回第一个 trim 后非空的字符串。
+// 用于在多个可选来源（如 req.WorkspaceID、stored.WorkspaceID）之间按优先级挑选有效值。
+// 设计约束：返回的字符串已 trim，便于直接写入存储。
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {

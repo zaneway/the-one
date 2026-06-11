@@ -103,6 +103,8 @@ func NewOpenAIProvider(cfg OpenAIProviderConfig) (OpenAIProvider, error) {
 	}, nil
 }
 
+// Name 返回 Provider 名称，匹配 config.Processor.Provider 的取值。
+// 在 automation service 入队、admission 决策与日志关联中都会用到。
 func (p OpenAIProvider) Name() string {
 	return OpenAIProviderName
 }
@@ -131,6 +133,12 @@ func (p OpenAIProvider) CheckHealth(ctx context.Context) (HealthStatus, error) {
 	return HealthStatus{Provider: OpenAIProviderName, Model: p.model, LatencyMS: time.Since(startedAt).Milliseconds()}, nil
 }
 
+// EnhanceObserve 调用外部模型做"语义保留型 observe 简化"。
+// 入参：ctx 与 capture.SemanticEnhanceInput。
+// 返回：capture.SemanticEnhanceOutput，包含 input/output/content 三段摘要与
+// 关键词/显著片段/语义等价标志位。
+// 关键路径：构造 prompt payload → callStructured 走结构化输出 → 解码 → 字段 trim。
+// 失败语义：解码失败返回 PROVIDER_INVALID_OUTPUT；调用失败透传 callStructured 错误。
 func (p OpenAIProvider) EnhanceObserve(ctx context.Context, input capture.SemanticEnhanceInput) (capture.SemanticEnhanceOutput, error) {
 	raw, err := p.callStructured(ctx, p.semanticEnhancePrompt, map[string]any{
 		"task":  "semantic_preserving_observe_simplification",
@@ -154,6 +162,11 @@ func (p OpenAIProvider) EnhanceObserve(ctx context.Context, input capture.Semant
 	return out, nil
 }
 
+// ExtractEvidence 调用外部模型抽取 evidence 草稿。
+// 入参：ctx 与 EvidenceInput（raw_event + session/task + 时间）。
+// 返回：EvidenceDraft 切片；interpreted_statement 为空的 draft 会被过滤。
+// 失败语义：调用失败透传；解码失败返回 PROVIDER_INVALID_OUTPUT。
+// 设计约束：与 GenerateCandidates 拆开，调用方按需选择是否进入下一阶段。
 func (p OpenAIProvider) ExtractEvidence(ctx context.Context, input EvidenceInput) ([]EvidenceDraft, error) {
 	payload := map[string]any{
 		"task":      "extract_evidence",
@@ -193,6 +206,12 @@ func (p OpenAIProvider) ExtractEvidence(ctx context.Context, input EvidenceInput
 	return out, nil
 }
 
+// ProcessRawEvent 一次模型调用同时产出 evidence 与候选记忆。
+// 入参：ctx 与 EvidenceInput。
+// 返回：ProcessedEvidence 列表，每项绑定一条 evidence 与对应的 candidate 列表。
+// 设计约束：automation service 在 provider 实现该接口时跳过 GenerateCandidates job，
+// 持久化仍写入既有 evidence/memory_candidate 表，不引入新表。
+// 关键步骤：构造 prompt → callStructured → 按事件计算 eventScore → materialize 双重过滤。
 func (p OpenAIProvider) ProcessRawEvent(ctx context.Context, input EvidenceInput) ([]ProcessedEvidence, error) {
 	payload := map[string]any{
 		"task":      "process_raw_event_memory",
@@ -256,6 +275,12 @@ func (p OpenAIProvider) ProcessRawEvent(ctx context.Context, input EvidenceInput
 	return out, nil
 }
 
+// GenerateCandidates 调用外部模型从 evidence 派生候选记忆。
+// 入参：ctx 与 CandidateInput（evidence + raw_event + 相关记忆 + 时间）。
+// 返回：MemoryCandidate 切片；interpreted_statement 为空时直接返回 nil。
+// 失败语义：调用/解码失败返回对应错误码。
+// 设计约束：当 provider 同时实现 RawEventProcessor 时，automation service 不会调用本方法，
+// 避免对同一 raw_event 做两次外部模型调用。
 func (p OpenAIProvider) GenerateCandidates(ctx context.Context, input CandidateInput) ([]MemoryCandidate, error) {
 	statement := strings.TrimSpace(input.Evidence.InterpretedStatement)
 	if statement == "" {
@@ -313,6 +338,9 @@ func (p OpenAIProvider) GenerateCandidates(ctx context.Context, input CandidateI
 	return out, nil
 }
 
+// openAIRawEventView 把 raw_event 序列化为只读 view 字典，只暴露模型需要的最小字段。
+// 设计约束：把 input_summary/output_summary/content_summary 中首个非空项作为正文，
+// 避免模型在多次调用间看到重复正文。
 func openAIRawEventView(event capture.RawEvent) map[string]any {
 	out := map[string]any{}
 	if eventType := strings.TrimSpace(event.EventType); eventType != "" {
@@ -335,6 +363,9 @@ func openAIRawEventView(event capture.RawEvent) map[string]any {
 	return out
 }
 
+// openAIRawEventCandidateView 在 openAIRawEventView 基础上追加 scope/scope ID 字段。
+// 给候选生成阶段使用，让模型能感知 workspace/project/repo/session/task 上下文。
+// 设计约束：空字段跳过，避免给模型传递误导性的空字符串。
 func openAIRawEventCandidateView(event capture.RawEvent) map[string]any {
 	out := openAIRawEventView(event)
 	if refs := decodeSourceRefs(event.SourceRefsJSON); len(refs) > 0 {
@@ -370,6 +401,15 @@ type openAIMemoryCandidateDraft struct {
 	ReviewCheckpoint *ReviewCheckpointDraft `json:"review_checkpoint"`
 }
 
+// materializeOpenAICandidate 把模型 draft 投影为强类型 MemoryCandidate。
+// 入参：input（含 evidence/raw_event 上下文）、draft、eventScore、evidenceIDs。
+// 返回：构造完成的 MemoryCandidate 与 ok；任一关键字段非法（type/scope/content）返回 (空, false)。
+// 关键步骤：
+//  1. 校验 memory_type/scope/content 合法性（白名单）；
+//  2. 关键词空时回退到 evidence.Keywords，并走 semanticKeywords 标准化；
+//  3. 标题空时由 candidateTitle 推断；
+//  4. candidate_reason 空时填默认 ["openai_classified"]，便于审计；
+//  5. review_checkpoint 类型且未带合法 checkpoint 草稿时直接拒绝。
 func materializeOpenAICandidate(input CandidateInput, draft openAIMemoryCandidateDraft, eventScore float64, evidenceIDs []string) (MemoryCandidate, bool) {
 	memoryType := strings.TrimSpace(draft.MemoryType)
 	scope := strings.TrimSpace(draft.Scope)
@@ -423,6 +463,8 @@ func materializeOpenAICandidate(input CandidateInput, draft openAIMemoryCandidat
 	}, true
 }
 
+// isAllowedMemoryType 校验 memory_type 是否在白名单内。
+// 维护说明：新增合法类型需要同时更新 memory 包常量；不在白名单的 draft 一律被 materialize 拒绝。
 func isAllowedMemoryType(memoryType string) bool {
 	switch memoryType {
 	case memory.TypePreference, memory.TypeRequirement, memory.TypeDecision, memory.TypeConstraint,
@@ -434,6 +476,8 @@ func isAllowedMemoryType(memoryType string) bool {
 	}
 }
 
+// isAllowedScope 校验 scope 是否在白名单内。
+// 维护说明：scope 决定可见性，扩展时需要同步更新 scope filter。
 func isAllowedScope(scope string) bool {
 	switch scope {
 	case memory.ScopeUserGlobal, memory.ScopeProjectLocal, memory.ScopeRepoLocal, memory.ScopeSession:
@@ -443,6 +487,9 @@ func isAllowedScope(scope string) bool {
 	}
 }
 
+// reviewCheckpointDraftValid 校验复查检查点草稿是否包含必要字段。
+// 当前规则：target_docs / review_intent / conclusion 至少各有一个非空条目。
+// 设计约束：保持"可解释、可追溯"；缺一即在 materialize 阶段被拒绝。
 func reviewCheckpointDraftValid(draft ReviewCheckpointDraft) bool {
 	return len(draft.TargetDocs) > 0 && len(draft.ReviewIntent) > 0 && strings.TrimSpace(draft.Conclusion) != ""
 }
@@ -461,6 +508,10 @@ type openAIProcessedEvidenceDraft struct {
 	Candidates []openAIMemoryCandidateDraft `json:"candidates"`
 }
 
+// materializeOpenAIEvidenceDraft 把模型 evidence draft 投影为强类型 EvidenceDraft。
+// 入参：evidence（来自 openai response 的 decoded 子结构）。
+// 返回：构造完成的 EvidenceDraft 与 ok；interpreted_statement 为空时返回 (空, false)。
+// 关键步骤：trim 字符串字段、clamp 置信度到 [0,1]、原样保留 keywords/spans/source_ref。
 func materializeOpenAIEvidenceDraft(evidence openAIEvidenceDraft) (EvidenceDraft, bool) {
 	statement := strings.TrimSpace(evidence.InterpretedStatement)
 	if statement == "" {
@@ -476,6 +527,9 @@ func materializeOpenAIEvidenceDraft(evidence openAIEvidenceDraft) (EvidenceDraft
 	}, true
 }
 
+// mustJSONText 把任意值序列化为 JSON 字符串；序列化失败时返回 "[]"，避免 panic。
+// 设计约束：用于 evidence/memory_candidate 等结构化字段的 JSON 化，
+// 调用方对失败有兜底（"[]" 仍可被下游反序列化为空切片），不会因此中断 pipeline。
 func mustJSONText(value any) string {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -614,6 +668,8 @@ func normalizeStructuredProviderOutput(raw string) (string, error) {
 	return extracted, nil
 }
 
+// stripReasoningBlocks 反复去除 <think>...</think> 段，返回去除外层空白后的剩余文本。
+// 设计约束：保留其余正文不变（不修改转义、不重排），让后续 JSON 抽取能拿到纯净 payload。
 func stripReasoningBlocks(s string) string {
 	for {
 		lower := strings.ToLower(s)
@@ -631,6 +687,9 @@ func stripReasoningBlocks(s string) string {
 	}
 }
 
+// stripMarkdownJSONFences 去掉 ```json ... ``` 围栏。
+// 仅识别以 ``` 起头的内容，第一行围栏信息（语言标签）会被忽略；尾部孤立的 ``` 也会被 TrimSuffix。
+// 当输入不是围栏结构时原样返回 trim 后的文本。
 func stripMarkdownJSONFences(s string) string {
 	trimmed := strings.TrimSpace(s)
 	if !strings.HasPrefix(trimmed, "```") {
@@ -643,6 +702,9 @@ func stripMarkdownJSONFences(s string) string {
 	return strings.TrimSpace(trimmed)
 }
 
+// extractLastJSONObject 从字符串中倒序定位最后一个平衡的 {...} 子串，并验证其 JSON 合法性。
+// 设计约束：从尾部向前寻找，命中即返回；用于"模型把 JSON 嵌在自然语言尾巴里"的兜底。
+// 错误语义：未找到合法 JSON 时返回 "no valid json object found"，由 normalizeStructuredProviderOutput 转为 PROVIDER_INVALID_OUTPUT。
 func extractLastJSONObject(s string) (string, error) {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
@@ -663,6 +725,10 @@ func extractLastJSONObject(s string) (string, error) {
 	return "", fmt.Errorf("no valid json object found")
 }
 
+// extractBalancedJSONObject 从 start 位置开始扫描，寻找与之配对的 '}'。
+// 入参：s 原文、start 起始 '{' 位置。
+// 返回：从 start 到配对 '}'（含）的子串；找不到合法配对时返回空串。
+// 设计约束：正确处理字符串内转义与嵌套深度，遇到字符串边界时跳过内部大括号。
 func extractBalancedJSONObject(s string, start int) string {
 	if start < 0 || start >= len(s) || s[start] != '{' {
 		return ""
@@ -756,6 +822,10 @@ func providerInputPreview(payloadJSON string) string {
 	return providerLogBody(payloadJSON)
 }
 
+// classifyProviderFailure 把 provider 调用错误归类为 client_timeout 或 provider_error。
+// 入参：err（callStructured 返回的原始错误，可为 nil）。
+// 返回：归类后的字符串；nil 直接返回 ""。
+// 设计约束：仅做粗粒度归类，便于日志按"超时 vs 业务错误"分流，不区分更细的 HTTP 状态码。
 func classifyProviderFailure(err error) string {
 	if err == nil {
 		return ""
@@ -770,6 +840,11 @@ func classifyProviderFailure(err error) string {
 	return "provider_error"
 }
 
+// chatCompletionSystemContent 构造 Chat Completions 的 system 提示词。
+// 由 instructions + schema 提示 + 序列化后的 JSON Schema 拼接而成；
+// 显式声明"只输出一个 JSON 对象，不带围栏或额外文本"，降低模型自由发挥的概率。
+// 入参：instructions（任务说明）、schemaName（业务 schema 名，便于在日志/排障中识别）、schema（JSON Schema 字典）。
+// 返回：完整的 system content；schema 序列化失败时返回错误。
 func chatCompletionSystemContent(instructions, schemaName string, schema map[string]any) (string, error) {
 	schemaJSON, err := json.Marshal(schema)
 	if err != nil {
@@ -797,6 +872,9 @@ func providerChatCompletionLogBody(resp *openai.ChatCompletion, outputText strin
 	return providerLogBody(string(body))
 }
 
+// providerLogBody 限制单条日志字段长度（providerLogBodyMaxChars），超长尾部追加 ...(truncated)。
+// 用于 request/response 日志写入，避免 prompt/事件正文撑爆日志文件。
+// 设计约束：超过 32KB 一律截断，长度为 0 或负数时禁用截断（保留原文）。
 func providerLogBody(value string) string {
 	if providerLogBodyMaxChars <= 0 || len(value) <= providerLogBodyMaxChars {
 		return value
@@ -804,6 +882,8 @@ func providerLogBody(value string) string {
 	return value[:providerLogBodyMaxChars] + "...(truncated)"
 }
 
+// logInfo 封装 slog.Logger.Info 调用，logger 为 nil 时静默返回。
+// 用于所有 callStructured 内部及外部调用方打点；统一传 msg + 任意 key/value 对。
 func (p OpenAIProvider) logInfo(msg string, args ...any) {
 	if p.logger == nil {
 		return
@@ -811,6 +891,8 @@ func (p OpenAIProvider) logInfo(msg string, args ...any) {
 	p.logger.Info(msg, args...)
 }
 
+// logError 封装 slog.Logger.Error 调用，logger 为 nil 时静默返回。
+// 与 logInfo 行为对称；用于 callStructured 失败/响应异常的日志记录。
 func (p OpenAIProvider) logError(msg string, args ...any) {
 	if p.logger == nil {
 		return
@@ -818,6 +900,8 @@ func (p OpenAIProvider) logError(msg string, args ...any) {
 	p.logger.Error(msg, args...)
 }
 
+// clamp01 把浮点数夹到 [0, 1] 区间，常用于把模型输出的 confidence/importance 限制为合法分数。
+// 设计约束：边界值 0/1 不参与任何额外舍入，避免微小噪声被放大到 0.0000/1.0000。
 func clamp01(value float64) float64 {
 	if value < 0 {
 		return 0

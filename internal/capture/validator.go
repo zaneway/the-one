@@ -176,6 +176,10 @@ func validRedactionState(state string) bool {
 	}
 }
 
+// hashRawPayload 计算 raw_payload_json 的 SHA-256 摘要，结果以 "sha256:..." 形式返回。
+// 入参：value（原始 payload 字符串）。
+// 返回：完整摘要（"sha256:<hex>"）；用于 raw_event 写入时的幂等去重键。
+// 设计约束：摘要带算法前缀，便于未来切换到 BLAKE3 等更快的算法时区分历史数据。
 func hashRawPayload(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return "sha256:" + hex.EncodeToString(sum[:])
