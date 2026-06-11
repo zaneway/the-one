@@ -74,10 +74,10 @@ capture:
   # Agent 自动捕获事件是否要求绑定 session
   require_session_for_agent_events: true
 
-  # input_summary 字段最大字符数
+  # 兼容旧配置项：input_summary 已不再限制长度
   max_input_summary_chars: 1200
 
-  # output_summary 字段最大字符数
+  # 兼容旧配置项：output_summary 已不再限制长度
   max_output_summary_chars: 2000
 
   # content_summary 字段最大字符数
@@ -85,6 +85,9 @@ capture:
 
   # source_refs_json 字段最大字符数
   max_source_refs_chars: 4000
+
+  # raw_payload_json 字段最大字符数；默认 1MiB，尽量保留原始事实
+  max_raw_payload_chars: 1048576
 
   # 单个 salient_span 最大字符数
   max_salient_span_chars: 500
@@ -120,9 +123,10 @@ retention:
 # ── 处理器配置 ────────────────────────────────────────────
 # 自动 evidence/candidate 抽取 Provider 和内容上限
 processor:
-  # 处理器提供者：rule_based | openai
-  # rule_based 默认本地可运行；openai 使用外部模型生成 evidence/candidate 草稿
-  provider: "rule_based"
+  # 处理器提供者：rule_based | openai（二选一）
+  # rule_based：evidence + candidate 均本地规则
+  # openai：evidence + candidate 均调外部模型
+  provider: "openai"
 
   # Provider 抽取时读取的近邻事件上限
   max_related_events: 20
@@ -130,16 +134,22 @@ processor:
   # 单个事件最多生成候选记忆数
   max_candidates_per_event: 3
 
-  # provider=openai 时生效；API key 只从环境变量读取，不写入配置文件
+  # provider=openai 时生效；可直接填写 API key。
+  # 环境变量 THEONE_OPENAI_API_KEY 或 OPENAI_API_KEY 非空时会覆盖该值。
+  # 注意：配置文件直填 key 有泄露风险，提交版本库前请清空。
+
+
   openai:
-    model: "MiniMax-M3"
+    model: "MiniMax-M2.7-highspeed"
+    # 国内密钥（platform.minimaxi.com）用 api.minimaxi.com；国际密钥（platform.minimax.io）用 api.minimax.io
+    #      model: "MiniMax-M3"
     base_url: "https://api.minimaxi.com/v1"
-    api_key_env: "MINIMAX_API_KEY"
-    timeout_ms: 30000
-    max_output_tokens: 1200
+    api_key: "sk-cp-Lvtc6XhNZeEIf662SI"
+    timeout_ms: 120000
+    max_output_tokens: 30000
     # 可选：覆盖 evidence 抽取提示词；留空使用内置默认值
     extract_evidence_prompt: ""
-    # 可选：覆盖 candidate 生成提示词；留空使用内置默认值
+    # 可选：覆盖候选记忆生成提示词；留空使用内置默认值
     generate_candidates_prompt: ""
     # 可选：覆盖 observe 写入前的语义等价简化与关键词提取提示词；留空使用内置默认值
     semantic_enhance_prompt: ""
