@@ -2,11 +2,11 @@
 set -u
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export ROOT_DIR="$(cd "${HOOK_DIR}/../../.." && pwd)"
+DRIVERS_DIR="$(cd "${HOOK_DIR}/../.." && pwd)"
 # shellcheck source=../../shared/theone-env.sh
-source "${ROOT_DIR}/drivers/shared/theone-env.sh" claude_code
+source "${DRIVERS_DIR}/shared/theone-env.sh" claude_code
 # shellcheck source=../../shared/theone-ingest.sh
-source "${ROOT_DIR}/drivers/shared/theone-ingest.sh"
+source "${DRIVERS_DIR}/shared/theone-ingest.sh"
 
 [[ -x "${THEONE_BIN}" ]] || exit 0
 

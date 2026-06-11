@@ -9,8 +9,8 @@ if [[ -z "${HOOK_EVENT}" ]]; then
 fi
 shift || true
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-HOOKS_DIR="${ROOT_DIR}/drivers/cursor/hooks"
+ENTRY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOKS_DIR="${ENTRY_DIR}/hooks"
 
 case "${HOOK_EVENT}" in
   sessionStart) exec "${HOOKS_DIR}/theone-session-start.sh" "$@" ;;

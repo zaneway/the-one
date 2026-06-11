@@ -2,9 +2,9 @@
 set -u
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export ROOT_DIR="$(cd "${HOOK_DIR}/../../.." && pwd)"
+DRIVERS_DIR="$(cd "${HOOK_DIR}/../.." && pwd)"
 # shellcheck source=../../shared/theone-env.sh
-source "${ROOT_DIR}/drivers/shared/theone-env.sh" claude_code
+source "${DRIVERS_DIR}/shared/theone-env.sh" claude_code
 
 mkdir -p "${STATE_DIR}" "${ROOT_DIR}/.claude"
 
