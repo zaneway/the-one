@@ -12,7 +12,8 @@ HOOK_OUTPUT='{"continue":true,"hookSpecificOutput":{"hookEventName":"UserPromptS
 PREFETCH_REQ="$(printf '%s' "${HOOK_PAYLOAD}" | python3 "${SHARED_DIR}/theone-hook-prefetch.py" prepare \
   --agent codex \
   --prompt-cache "${PROMPT_CACHE_FILE}" \
-  --surface "${SURFACE_FILE}" 2>/dev/null || true)"
+  --surface "${SURFACE_FILE}" \
+  --config "${CONFIG_PATH}" 2>/dev/null || true)"
 
 if [[ -x "${THEONE_BIN}" && -n "${PREFETCH_REQ}" ]]; then
   PREFETCH_OUT="$(

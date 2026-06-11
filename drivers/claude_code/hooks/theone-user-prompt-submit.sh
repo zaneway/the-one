@@ -14,7 +14,8 @@ if [[ -x "${THEONE_BIN}" ]]; then
   PREFETCH_REQ="$(cat | python3 "${SHARED_DIR}/theone-hook-prefetch.py" prepare \
     --agent claude_code \
     --prompt-cache "${PROMPT_CACHE_FILE}" \
-    --surface "${SURFACE_FILE}" 2>/dev/null || true)"
+    --surface "${SURFACE_FILE}" \
+    --config "${CONFIG_PATH}" 2>/dev/null || true)"
   if [[ -n "${PREFETCH_REQ}" ]]; then
     PREFETCH_OUT="$(
       echo "${PREFETCH_REQ}" | "${THEONE_BIN}" prefetch-context \
