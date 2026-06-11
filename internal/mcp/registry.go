@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"time"
 )
 
@@ -91,8 +92,36 @@ func (r *Registry) Tools() []ToolSpec {
 // 处理流程：查找 handler -> 序列化 params -> 调用 handler -> 记录耗时日志。
 // 安全设计：日志只记录 tool 名称和耗时，不包含完整 params，避免泄露用户输入。
 // 错误处理：未知工具返回 VALIDATION_FAILED 错误码。
-func (r *Registry) Call(ctx context.Context, name string, params any) (any, *Error) {
+func (r *Registry) Call(ctx context.Context, name string, params any) (result any, toolErr *Error) {
 	startedAt := time.Now()
+	if r.logger != nil {
+		r.logger.Info("mcp tool call started", "tool", name)
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			toolErr = &Error{
+				ErrorCode:    "INTERNAL_ERROR",
+				Message:      fmt.Sprintf("tool panic: %v", recovered),
+				Retryable:    false,
+				FallbackHint: "check theone logs for panic stack",
+			}
+			result = nil
+			if r.logger != nil {
+				r.logger.Error("mcp tool panic",
+					"tool", name,
+					"panic", fmt.Sprintf("%v", recovered),
+					"stack", string(debug.Stack()),
+				)
+			}
+		}
+		if r.logger != nil {
+			r.logger.Info("mcp tool called",
+				"tool", name,
+				"duration_ms", time.Since(startedAt).Milliseconds(),
+				"ok", toolErr == nil,
+			)
+		}
+	}()
 	// 查找注册的 handler，未知工具返回 VALIDATION_FAILED
 	handler, ok := r.handlers[name]
 	if !ok {
@@ -112,12 +141,6 @@ func (r *Registry) Call(ctx context.Context, name string, params any) (any, *Err
 			Retryable: false,
 		}
 	}
-	result, toolErr := handler(ctx, raw)
-	// 日志只记录 tool 名称和耗时，不包含完整 params，避免泄露用户输入
-	r.logger.Info("mcp tool called",
-		"tool", name,
-		"duration_ms", time.Since(startedAt).Milliseconds(),
-		"ok", toolErr == nil,
-	)
+	result, toolErr = handler(ctx, raw)
 	return result, toolErr
 }

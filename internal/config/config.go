@@ -385,11 +385,12 @@ type OpenAIProcessorConfig struct {
 	// MaxOutputTokens 单次结构化输出上限
 	MaxOutputTokens int `yaml:"max_output_tokens" json:"max_output_tokens"`
 
-	// ExtractEvidencePrompt evidence 抽取提示词
-	// 为空时 OpenAI provider 使用内置默认提示词
+	// ExtractEvidencePrompt OpenAI raw_event 联合处理提示词。
+	// provider=openai 时自动链路用一次模型调用同时产出 evidence 与 memory candidate。
 	ExtractEvidencePrompt string `yaml:"extract_evidence_prompt" json:"extract_evidence_prompt"`
 
-	// GenerateCandidatesPrompt 候选记忆生成提示词；provider=openai 时生效，为空使用内置默认
+	// GenerateCandidatesPrompt 已废弃，仅保留兼容旧配置和直接调用 GenerateCandidates 的测试/工具。
+	// provider=openai 的自动 raw_event 链路不再读取该字段。
 	GenerateCandidatesPrompt string `yaml:"generate_candidates_prompt" json:"generate_candidates_prompt,omitempty"`
 
 	// SemanticEnhancePrompt 旧版 observe 语义等价简化提示词。
@@ -545,8 +546,8 @@ func Default() Config {
 				APIKey:                   "",
 				TimeoutMS:                30000,
 				MaxOutputTokens:          1200,
-				ExtractEvidencePrompt:    prompts.OpenAIExtractEvidencePrompt,
-				GenerateCandidatesPrompt: prompts.OpenAIGenerateCandidatesPrompt,
+				ExtractEvidencePrompt:    prompts.OpenAIProcessRawEventPrompt,
+				GenerateCandidatesPrompt: "",
 				SemanticEnhancePrompt:    prompts.OpenAISemanticEnhancePrompt,
 			},
 		},

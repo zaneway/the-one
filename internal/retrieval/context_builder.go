@@ -44,6 +44,22 @@ type contextBudgetReport struct {
 	UsedTokens      int
 	MemoryCount     int
 	Buckets         map[contextBucketName]contextBucketReportBucket
+	Diagnostics     contextPackDiagnostics
+}
+
+// contextPackDiagnostics 记录上下文构造阶段的注入/裁剪明细，供排查日志使用。
+type contextPackDiagnostics struct {
+	Injected []contextPackHit
+	Dropped  []contextPackHit
+}
+
+type contextPackHit struct {
+	MemoryID   string
+	MemoryType string
+	Scope      string
+	Score      float64
+	Bucket     string
+	Reason     string
 }
 
 type contextBucketReportBucket struct {
@@ -73,6 +89,16 @@ func buildContextPack(results []memory.SearchResult, opts contextBuilderOptions)
 	constraints := make([]string, 0)
 	codeRefs := make([]memory.CodeRef, 0)
 	seenMemoryIDs := map[string]bool{}
+	recordDrop := func(result memory.SearchResult, bucket contextBucketName, reason string) {
+		report.Diagnostics.Dropped = append(report.Diagnostics.Dropped, contextPackHit{
+			MemoryID:   result.MemoryID,
+			MemoryType: result.MemoryType,
+			Scope:      result.Scope,
+			Score:      contextResultScore(result),
+			Bucket:     string(bucket),
+			Reason:     reason,
+		})
+	}
 
 	for _, spec := range specs {
 		if spec.name == bucketCodeRefs || spec.name == bucketDocChanged {
@@ -84,19 +110,31 @@ func buildContextPack(results []memory.SearchResult, opts contextBuilderOptions)
 		bucketUsed := 0
 		bucketItems := 0
 		for _, result := range candidates {
-			if seenMemoryIDs[result.MemoryID] || bucketItems >= spec.maxItems || bucketUsed >= bucketBudget {
+			if seenMemoryIDs[result.MemoryID] {
+				recordDrop(result, spec.name, "duplicate_memory_id")
+				continue
+			}
+			if bucketItems >= spec.maxItems {
+				recordDrop(result, spec.name, "bucket_max_items")
+				continue
+			}
+			if bucketUsed >= bucketBudget {
+				recordDrop(result, spec.name, "bucket_budget_exhausted")
 				continue
 			}
 			if shouldDropContextCandidate(result, opts.Intent) {
+				recordDrop(result, spec.name, dropReasonForCandidate(result, opts.Intent))
 				continue
 			}
 			maxTokens := minInt(spec.maxTokensPerItem, bucketBudget-bucketUsed)
 			compressed := compressForTokenBudget(result.Content, maxTokens)
 			if compressed == "" {
+				recordDrop(result, spec.name, "compress_empty")
 				continue
 			}
 			usedTokens := estimateContextTokens(compressed)
 			if usedTokens <= 0 {
+				recordDrop(result, spec.name, "token_estimate_zero")
 				continue
 			}
 			why := append([]string(nil), result.WhyIncluded...)
@@ -115,6 +153,13 @@ func buildContextPack(results []memory.SearchResult, opts contextBuilderOptions)
 			})
 			usedIDs = append(usedIDs, result.MemoryID)
 			seenMemoryIDs[result.MemoryID] = true
+			report.Diagnostics.Injected = append(report.Diagnostics.Injected, contextPackHit{
+				MemoryID:   result.MemoryID,
+				MemoryType: result.MemoryType,
+				Scope:      result.Scope,
+				Score:      contextResultScore(result),
+				Bucket:     string(spec.name),
+			})
 			bucketUsed += usedTokens
 			bucketItems++
 			report.UsedTokens += usedTokens
@@ -315,6 +360,16 @@ func shouldDropContextCandidate(result memory.SearchResult, intent RetrievalInte
 		return true
 	}
 	return false
+}
+
+func dropReasonForCandidate(result memory.SearchResult, intent RetrievalIntent) string {
+	if result.MemoryType == memory.TypeTemporaryState && intent != IntentTaskContinuation {
+		return "temporary_state_not_continuation"
+	}
+	if result.State == memory.StateProvisional && contextResultScore(result) < 0.2 {
+		return "provisional_low_score"
+	}
+	return "drop_policy"
 }
 
 // compressForTokenBudget 按 token 预算压缩内容。

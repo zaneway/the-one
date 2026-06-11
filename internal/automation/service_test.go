@@ -116,6 +116,120 @@ func TestServiceRunsEvidenceCandidateAdmissionChain(t *testing.T) {
 	}
 }
 
+func TestServiceCombinedProviderWritesCandidatesDuringExtractJob(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
+	store, err := sqlite.Open(ctx, cfg.Storage, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC)
+	session := capture.AgentSession{
+		ID:          "sess_openai_combined",
+		AgentType:   "codex",
+		WorkspaceID: "ws",
+		ProjectID:   "project_a",
+		StartedAt:   now,
+		Status:      capture.StatusActive,
+	}
+	if _, err := store.UpsertSession(ctx, session); err != nil {
+		t.Fatalf("UpsertSession() error = %v", err)
+	}
+	task := capture.AgentTask{
+		ID:          "task_openai_combined",
+		SessionID:   session.ID,
+		WorkspaceID: session.WorkspaceID,
+		ProjectID:   session.ProjectID,
+		TaskSummary: "合并 OpenAI processor 输出",
+		Status:      capture.StatusActive,
+		StartedAt:   now,
+	}
+	if _, err := store.UpsertTask(ctx, task); err != nil {
+		t.Fatalf("UpsertTask() error = %v", err)
+	}
+	rawEvent := capture.RawEvent{
+		ID:             "evt_openai_combined",
+		SessionID:      session.ID,
+		TaskID:         task.ID,
+		WorkspaceID:    session.WorkspaceID,
+		ProjectID:      session.ProjectID,
+		AgentType:      session.AgentType,
+		EventType:      capture.EventUserDeclaration,
+		SourceChannel:  capture.SourceChannelAgentSession,
+		OccurredAt:     now,
+		Actor:          capture.ActorUser,
+		ContentSummary: "processor.provider=openai 时 raw_event 自动处理只能调用一次外部模型，同时产出 evidence 和 candidate。",
+		ContentHash:    "sha256:openai-combined",
+		CreatedAt:      now,
+	}
+	if err := store.InsertRawEvent(ctx, rawEvent); err != nil {
+		t.Fatalf("InsertRawEvent() error = %v", err)
+	}
+
+	provider := &combinedProviderStub{}
+	service := automation.NewService(cfg, store, provider)
+	if err := service.EnqueueRawEvent(ctx, rawEvent); err != nil {
+		t.Fatalf("EnqueueRawEvent() error = %v", err)
+	}
+	runNextJob(t, ctx, store, service, automation.JobTypeExtractEvidence, rawEvent.ID)
+
+	if provider.processCalls != 1 || provider.extractCalls != 0 || provider.generateCalls != 0 {
+		t.Fatalf("provider calls process=%d extract=%d generate=%d, want only one combined process call", provider.processCalls, provider.extractCalls, provider.generateCalls)
+	}
+	candidates, err := store.ListCandidates(ctx, automation.ListCandidatesRequest{RawEventID: rawEvent.ID})
+	if err != nil {
+		t.Fatalf("ListCandidates() error = %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].Provider != processor.OpenAIProviderName || candidates[0].EvidenceID == "" {
+		t.Fatalf("candidates = %+v, want one openai candidate linked to persisted evidence", candidates)
+	}
+	if !strings.Contains(candidates[0].SourceEvidenceIDsJSON, candidates[0].EvidenceID) {
+		t.Fatalf("source evidence ids = %s, want materialized evidence id %s", candidates[0].SourceEvidenceIDsJSON, candidates[0].EvidenceID)
+	}
+	generateJobs, err := store.ListJobs(ctx, automation.ListJobsRequest{JobType: automation.JobTypeGenerateMemoryCandidate})
+	if err != nil {
+		t.Fatalf("ListJobs(generate) error = %v", err)
+	}
+	if len(generateJobs) != 0 {
+		t.Fatalf("generate jobs = %+v, want none for combined provider", generateJobs)
+	}
+	pending, err := store.ListJobs(ctx, automation.ListJobsRequest{Status: automation.JobStatusPending})
+	if err != nil {
+		t.Fatalf("ListJobs(pending) error = %v", err)
+	}
+	if len(pending) != 1 || pending[0].JobType != automation.JobTypeComputeAdmission || pending[0].TargetID != candidates[0].ID {
+		t.Fatalf("pending jobs = %+v, want compute_admission for combined candidate", pending)
+	}
+	if _, _, err := store.EnqueueJob(ctx, automation.AsyncJob{
+		ID:         "job_stale_openai_generate",
+		JobType:    automation.JobTypeGenerateMemoryCandidate,
+		TargetType: automation.TargetTypeEvidence,
+		TargetID:   candidates[0].EvidenceID,
+		Priority:   1,
+		MaxRetries: 3,
+		DedupKey:   "stale_generate:" + candidates[0].EvidenceID,
+		NextRunAt:  time.Now().UTC().Add(-time.Second),
+	}); err != nil {
+		t.Fatalf("EnqueueJob(stale generate) error = %v", err)
+	}
+	staleJobs, err := store.ClaimJobs(ctx, time.Now().UTC().Add(time.Hour), 1)
+	if err != nil {
+		t.Fatalf("ClaimJobs(stale generate) error = %v", err)
+	}
+	if len(staleJobs) != 1 || staleJobs[0].JobType != automation.JobTypeGenerateMemoryCandidate {
+		t.Fatalf("stale jobs = %+v, want generate_memory_candidate", staleJobs)
+	}
+	if err := service.RunJob(ctx, staleJobs[0]); err != nil {
+		t.Fatalf("RunJob(stale generate) error = %v", err)
+	}
+	if provider.generateCalls != 0 {
+		t.Fatalf("generate calls = %d, want stale generate job skipped for combined provider", provider.generateCalls)
+	}
+}
+
 func TestServiceWritesReviewCheckpointFromCandidate(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Default()
@@ -654,4 +768,58 @@ func runNextJob(t *testing.T, ctx context.Context, store *sqlite.Store, service 
 	if updated.Status != automation.JobStatusSucceeded {
 		t.Fatalf("job after RunJob = %+v, want succeeded", updated)
 	}
+}
+
+type combinedProviderStub struct {
+	processCalls  int
+	extractCalls  int
+	generateCalls int
+}
+
+func (p *combinedProviderStub) Name() string {
+	return processor.OpenAIProviderName
+}
+
+func (p *combinedProviderStub) ProcessRawEvent(ctx context.Context, input processor.EvidenceInput) ([]processor.ProcessedEvidence, error) {
+	p.processCalls++
+	return []processor.ProcessedEvidence{
+		{
+			Evidence: processor.EvidenceDraft{
+				SourceType:           "user_declared",
+				InterpretedStatement: "processor.provider=openai 时 raw_event 自动处理只能调用一次外部模型，同时产出 evidence 和 candidate。",
+				Keywords:             []string{"processor.provider", "openai", "raw_event"},
+				SalientSpans:         []string{"只能调用一次外部模型"},
+				SourceRef:            map[string]any{"producer": "test"},
+				Confidence:           0.93,
+			},
+			Candidates: []processor.MemoryCandidate{
+				{
+					MemoryType:      memory.TypeConstraint,
+					Scope:           memory.ScopeProjectLocal,
+					WorkspaceID:     input.RawEvent.WorkspaceID,
+					ProjectID:       input.RawEvent.ProjectID,
+					SessionID:       input.RawEvent.SessionID,
+					TaskID:          input.RawEvent.TaskID,
+					Title:           "OpenAI processor 单次调用约束",
+					Content:         "processor.provider=openai 时每个 raw_event 自动处理只能调用一次外部模型，并同时产出 evidence 和 memory candidate。",
+					Keywords:        []string{"processor.provider", "openai", "单次调用"},
+					RetrievalCues:   []string{"OpenAI raw_event 自动处理"},
+					Confidence:      0.93,
+					Importance:      0.8,
+					EncodingDepth:   2,
+					CandidateReason: []string{"constraint_declared"},
+				},
+			},
+		},
+	}, nil
+}
+
+func (p *combinedProviderStub) ExtractEvidence(ctx context.Context, input processor.EvidenceInput) ([]processor.EvidenceDraft, error) {
+	p.extractCalls++
+	return nil, nil
+}
+
+func (p *combinedProviderStub) GenerateCandidates(ctx context.Context, input processor.CandidateInput) ([]processor.MemoryCandidate, error) {
+	p.generateCalls++
+	return nil, nil
 }

@@ -355,6 +355,89 @@ func TestOpenAIProviderExtractEvidenceSendsOnlyCurrentEventBody(t *testing.T) {
 	}
 }
 
+func TestOpenAIProviderProcessRawEventUsesSingleCallForEvidenceAndCandidates(t *testing.T) {
+	var requests []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		requests = append(requests, request)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(chatCompletionResponseJSON(`{
+			"evidence": [{
+				"source_type": "user_declared",
+				"interpreted_statement": "用户要求 OpenAI processor 每个 raw_event 只调用一次外部模型。",
+				"keywords": ["OpenAI processor", "raw_event", "单次调用"],
+				"salient_spans": ["只调用一次外部模型"],
+				"source_ref": {"producer": "test"},
+				"confidence": 0.92,
+				"candidates": [{
+					"memory_type": "constraint",
+					"scope": "project_local",
+					"content": "OpenAI processor 每个 raw_event 自动处理只调用一次外部模型，并同时产出 evidence 和 memory candidate。",
+					"title": "OpenAI processor 单次调用",
+					"keywords": ["OpenAI processor", "raw_event", "evidence", "memory candidate"],
+					"candidate_reason": ["user_declared"],
+					"confidence": 0.9,
+					"importance": 0.8
+				}]
+			}]
+		}`)))
+	}))
+	defer server.Close()
+
+	provider, err := NewOpenAIProvider(OpenAIProviderConfig{
+		APIKey:          "test-key",
+		BaseURL:         server.URL,
+		Model:           "gpt-5-mini",
+		Timeout:         time.Second,
+		MaxOutputTokens: 800,
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIProvider() error = %v", err)
+	}
+
+	out, err := provider.ProcessRawEvent(context.Background(), EvidenceInput{
+		RawEvent: capture.RawEvent{
+			ID:             "evt_combined",
+			EventType:      capture.EventUserDeclaration,
+			WorkspaceID:    "ws",
+			ProjectID:      "project_a",
+			SessionID:      "sess_1",
+			TaskID:         "task_1",
+			ContentSummary: "OpenAI processor 每个 raw_event 只调用一次外部模型，同时产出 evidence 和 candidate。",
+			SourceRefsJSON: `[{"producer":"test"}]`,
+		},
+		Now: time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("ProcessRawEvent() error = %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("external requests = %d, want exactly one", len(requests))
+	}
+	if len(out) != 1 || out[0].Evidence.InterpretedStatement == "" || len(out[0].Candidates) != 1 {
+		t.Fatalf("ProcessRawEvent() = %+v, want one evidence with one candidate", out)
+	}
+	candidate := out[0].Candidates[0]
+	if candidate.MemoryType != memory.TypeConstraint || candidate.Scope != memory.ScopeProjectLocal || candidate.ProjectID != "project_a" {
+		t.Fatalf("candidate = %+v, want project-local constraint candidate", candidate)
+	}
+	systemContent := requestSystemContent(requests[0])
+	for _, want := range []string{"同时产出 evidence", "memory candidate", "candidate_reason", "user_correction"} {
+		if !strings.Contains(systemContent, want) {
+			t.Fatalf("system content = %q, want to contain %q", systemContent, want)
+		}
+	}
+	userContent := requestUserContent(requests[0])
+	for _, want := range []string{"process_raw_event_memory", "OpenAI processor 每个 raw_event", "project_id", "project_a"} {
+		if !strings.Contains(userContent, want) {
+			t.Fatalf("user content = %s, want %q", userContent, want)
+		}
+	}
+}
+
 func TestOpenAIProviderGenerateCandidatesUsesExternalModel(t *testing.T) {
 	var requests []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

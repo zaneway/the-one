@@ -49,19 +49,17 @@ func TestIngestProcessorAtomicDedupV2(t *testing.T) {
 		Envelope: IngestEnvelope{
 			IngestID:        "ing_atomic_dedup",
 			ProtocolVersion: ProtocolV1,
-			Producer:        "cursor_hook:afterFileEdit",
+			Producer:        "cursor_hook:diagnostic",
 			AgentType:       "cursor",
 			SessionID:       "conv_atomic",
-			EventType:       "file.edit.summary",
+			EventType:       "diagnostic.atomic",
 			Kind:            KindCaptureAtomic,
 			Payload: map[string]any{
 				"agent_type":      "cursor",
 				"workspace_id":    "local_default_workspace",
 				"project_id":      "the-one",
 				"repo_id":         "the-one",
-				"file_path":       "internal/a.go",
-				"change_type":     "modify",
-				"content_summary": "edit a",
+				"content_summary": "diagnostic atomic event",
 			},
 		},
 	}

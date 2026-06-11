@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -58,11 +59,26 @@ func (s *SDKServer) addRegistryTool(registry *Registry, spec ToolSpec) {
 		tool.OutputSchema = spec.OutputSchema
 	}
 	s.server.AddTool(tool, func(ctx context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+		startedAt := time.Now()
+		if s.logger != nil {
+			s.logger.Info("mcp sdk tool call received",
+				"tool", spec.Name,
+				"mcp_name", exposedName,
+			)
+		}
 		args := req.Params.Arguments
 		if len(args) == 0 {
 			args = json.RawMessage(`{}`)
 		}
 		result, toolErr := registry.Call(ctx, spec.Name, args)
+		if s.logger != nil {
+			s.logger.Info("mcp sdk tool call completed",
+				"tool", spec.Name,
+				"mcp_name", exposedName,
+				"duration_ms", time.Since(startedAt).Milliseconds(),
+				"ok", toolErr == nil,
+			)
+		}
 		if toolErr != nil {
 			return toolErrorResult(toolErr), nil
 		}

@@ -7,6 +7,31 @@ import (
 	"github.com/zaneway/theone/internal/memory"
 )
 
+func TestBuildContextPackRecordsInjectedAndDroppedDiagnostics(t *testing.T) {
+	results := []memory.SearchResult{
+		contextTestResult("mem-injected", memory.TypePreference, memory.ScopeUserGlobal, "用户偏好。", 0.9),
+		contextTestResult("mem-dropped", memory.TypeTemporaryState, memory.ScopeSession, "临时状态。", 0.8),
+	}
+
+	_, usedIDs, report := buildContextPack(results, contextBuilderOptions{
+		Intent:      IntentGeneralSearch,
+		TokenBudget: 120,
+	})
+
+	if len(report.Diagnostics.Injected) != 1 || report.Diagnostics.Injected[0].MemoryID != "mem-injected" {
+		t.Fatalf("injected diagnostics = %+v, want mem-injected", report.Diagnostics.Injected)
+	}
+	if len(report.Diagnostics.Dropped) != 1 || report.Diagnostics.Dropped[0].MemoryID != "mem-dropped" {
+		t.Fatalf("dropped diagnostics = %+v, want mem-dropped", report.Diagnostics.Dropped)
+	}
+	if report.Diagnostics.Dropped[0].Reason != "temporary_state_not_continuation" {
+		t.Fatalf("drop reason = %q, want temporary_state_not_continuation", report.Diagnostics.Dropped[0].Reason)
+	}
+	if len(usedIDs) != 1 || usedIDs[0] != "mem-injected" {
+		t.Fatalf("used ids = %+v, want only mem-injected", usedIDs)
+	}
+}
+
 func TestBuildContextPackUsesBucketBudgetInsteadOfInputOrder(t *testing.T) {
 	results := []memory.SearchResult{
 		contextTestResult("mem-constraint-1", memory.TypeConstraint, memory.ScopeProjectLocal, strings.Repeat("约束", 180), 0.91),

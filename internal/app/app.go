@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -182,6 +183,79 @@ func (a *App) CallTool(ctx context.Context, name string, params any) (any, *mcp.
 	return a.registry.Call(ctx, name, params)
 }
 
+// EnsureCaptureSession 确保 Hook/ingest 控制面需要的 session/task 存在，不写 raw_event。
+func (a *App) EnsureCaptureSession(ctx context.Context, req capture.ObserveRequest) error {
+	if err := capture.NormalizeObserve(a.cfg.Capture, &req); err != nil {
+		return err
+	}
+	if req.SessionID == "" {
+		return fmt.Errorf("SESSION_REQUIRED: session_id is required")
+	}
+	sessionExists := false
+	if _, err := a.store.GetCaptureQuality(ctx, req.SessionID); err == nil {
+		sessionExists = true
+	} else if !strings.Contains(err.Error(), "SESSION_NOT_FOUND") {
+		return err
+	}
+	capabilitiesJSON, err := jsonText(req.CaptureCapabilities)
+	if err != nil {
+		return err
+	}
+	qualityJSON := ""
+	if !sessionExists {
+		initialQuality := capture.CaptureQuality{
+			HasSessionStart:     req.EventType == capture.EventSessionStart,
+			MissingCapabilities: capture.MissingCapabilities(req.CaptureCapabilities),
+		}
+		qualityJSON, err = jsonText(initialQuality)
+		if err != nil {
+			return err
+		}
+	}
+	session := capture.AgentSession{
+		ID:                      req.SessionID,
+		AgentType:               req.AgentType,
+		WorkspaceID:             req.WorkspaceID,
+		ProjectID:               req.ProjectID,
+		RepoID:                  req.RepoID,
+		CaptureLevel:            capture.CaptureLevel(req.CaptureCapabilities),
+		CaptureCapabilitiesJSON: capabilitiesJSON,
+		CaptureQualityJSON:      qualityJSON,
+		GoalSummary:             ensureSessionGoal(req),
+		Status:                  capture.StatusActive,
+	}
+	if req.Session != nil && req.Session.Status != "" {
+		session.Status = req.Session.Status
+	}
+	stored, err := a.store.UpsertSession(ctx, session)
+	if err != nil {
+		return err
+	}
+	if req.TaskID == "" {
+		return nil
+	}
+	task := capture.AgentTask{
+		ID:          req.TaskID,
+		SessionID:   stored.ID,
+		WorkspaceID: firstNonEmpty(req.WorkspaceID, stored.WorkspaceID),
+		ProjectID:   firstNonEmpty(req.ProjectID, stored.ProjectID),
+		RepoID:      firstNonEmpty(req.RepoID, stored.RepoID),
+		TaskSummary: req.TaskID,
+		Status:      capture.StatusActive,
+	}
+	if req.Task != nil {
+		if req.Task.TaskSummary != "" {
+			task.TaskSummary = req.Task.TaskSummary
+		}
+		if req.Task.Status != "" {
+			task.Status = req.Task.Status
+		}
+		task.OutcomeSummary = req.Task.OutcomeSummary
+	}
+	_, err = a.store.UpsertTask(ctx, task)
+	return err
+}
+
 // Close 释放运行时资源。
 func (a *App) Close() error {
 	var closeErr error
@@ -194,4 +268,28 @@ func (a *App) Close() error {
 		}
 	}
 	return closeErr
+}
+
+func ensureSessionGoal(req capture.ObserveRequest) string {
+	if req.Session != nil && strings.TrimSpace(req.Session.GoalSummary) != "" {
+		return strings.TrimSpace(req.Session.GoalSummary)
+	}
+	return strings.TrimSpace(req.ContentSummary)
+}
+
+func jsonText(value any) (string, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

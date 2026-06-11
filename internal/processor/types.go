@@ -21,6 +21,19 @@ type Provider interface {
 	GenerateCandidates(ctx context.Context, input CandidateInput) ([]MemoryCandidate, error)
 }
 
+// RawEventProcessor 表示 Provider 支持在一次处理内同时产出 evidence 与候选记忆。
+// openai 自动处理链路使用该能力，避免同一 raw_event 发生两次外部模型调用。
+type RawEventProcessor interface {
+	ProcessRawEvent(ctx context.Context, input EvidenceInput) ([]ProcessedEvidence, error)
+}
+
+// ProcessedEvidence 将 evidence 草稿与基于该 evidence 生成的候选记忆绑定。
+// 持久化时仍写入既有 evidence 与 memory_candidate 表，不引入新表或新状态。
+type ProcessedEvidence struct {
+	Evidence   EvidenceDraft
+	Candidates []MemoryCandidate
+}
+
 // HealthChecker 表示 Provider 支持轻量可用性探测。
 // 该接口只验证外部依赖是否可调用，不产生 evidence/candidate，也不写入存储。
 type HealthChecker interface {

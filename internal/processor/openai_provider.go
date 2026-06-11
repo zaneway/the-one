@@ -50,6 +50,7 @@ type OpenAIProvider struct {
 	model                    string
 	timeout                  time.Duration
 	maxOutputTokens          int64
+	processRawEventPrompt    string
 	extractEvidencePrompt    string
 	generateCandidatesPrompt string
 	semanticEnhancePrompt    string
@@ -94,6 +95,7 @@ func NewOpenAIProvider(cfg OpenAIProviderConfig) (OpenAIProvider, error) {
 		model:                    model,
 		timeout:                  cfg.Timeout,
 		maxOutputTokens:          cfg.MaxOutputTokens,
+		processRawEventPrompt:    firstNonEmpty(cfg.ExtractEvidencePrompt, prompts.OpenAIProcessRawEventPrompt),
 		extractEvidencePrompt:    firstNonEmpty(cfg.ExtractEvidencePrompt, prompts.OpenAIExtractEvidencePrompt),
 		generateCandidatesPrompt: firstNonEmpty(cfg.GenerateCandidatesPrompt, prompts.OpenAIGenerateCandidatesPrompt),
 		semanticEnhancePrompt:    firstNonEmpty(cfg.SemanticEnhancePrompt, prompts.OpenAISemanticEnhancePrompt),
@@ -187,6 +189,69 @@ func (p OpenAIProvider) ExtractEvidence(ctx context.Context, input EvidenceInput
 			SourceRef:            evidence.SourceRef,
 			Confidence:           clamp01(evidence.Confidence),
 		})
+	}
+	return out, nil
+}
+
+func (p OpenAIProvider) ProcessRawEvent(ctx context.Context, input EvidenceInput) ([]ProcessedEvidence, error) {
+	payload := map[string]any{
+		"task":      "process_raw_event_memory",
+		"raw_event": openAIRawEventCandidateView(input.RawEvent),
+	}
+	raw, err := p.callStructured(ctx, p.processRawEventPrompt, payload, "theone_event_memory", eventMemorySchema(), callLogMeta{
+		TaskName:   "process_raw_event_memory",
+		RawEventID: input.RawEvent.ID,
+		EventType:  string(input.RawEvent.EventType),
+		SessionID:  input.RawEvent.SessionID,
+		TaskID:     input.RawEvent.TaskID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var decoded struct {
+		Evidence []openAIProcessedEvidenceDraft `json:"evidence"`
+	}
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return nil, fmt.Errorf("PROVIDER_INVALID_OUTPUT: decode openai event memory response: %w", err)
+	}
+	out := make([]ProcessedEvidence, 0, len(decoded.Evidence))
+	for _, item := range decoded.Evidence {
+		evidence, ok := materializeOpenAIEvidenceDraft(item.openAIEvidenceDraft)
+		if !ok {
+			continue
+		}
+		eventScore := scoring.ScoreRawEvent(scoring.RawEventInput{
+			EventType:      input.RawEvent.EventType,
+			OccurredAt:     input.RawEvent.OccurredAt,
+			ContentSummary: input.RawEvent.ContentSummary,
+			InputSummary:   input.RawEvent.InputSummary,
+			OutputSummary:  input.RawEvent.OutputSummary,
+			KeywordsJSON:   input.RawEvent.KeywordsJSON,
+			SourceRefsJSON: input.RawEvent.SourceRefsJSON,
+			Query:          evidence.InterpretedStatement,
+			Now:            input.Now,
+		})
+		candidateInput := CandidateInput{
+			Evidence: memory.Evidence{
+				SourceType:           evidence.SourceType,
+				InterpretedStatement: evidence.InterpretedStatement,
+				KeywordsJSON:         mustJSONText(evidence.Keywords),
+				Confidence:           evidence.Confidence,
+			},
+			RawEvent: input.RawEvent,
+			Session:  input.Session,
+			Task:     input.Task,
+			Now:      input.Now,
+		}
+		candidates := make([]MemoryCandidate, 0, len(item.Candidates))
+		for _, draft := range item.Candidates {
+			candidate, ok := materializeOpenAICandidate(candidateInput, draft, eventScore, nil)
+			if !ok {
+				continue
+			}
+			candidates = append(candidates, candidate)
+		}
+		out = append(out, ProcessedEvidence{Evidence: evidence, Candidates: candidates})
 	}
 	return out, nil
 }
@@ -389,6 +454,34 @@ type openAIEvidenceDraft struct {
 	SalientSpans         []string       `json:"salient_spans"`
 	SourceRef            map[string]any `json:"source_ref"`
 	Confidence           float64        `json:"confidence"`
+}
+
+type openAIProcessedEvidenceDraft struct {
+	openAIEvidenceDraft
+	Candidates []openAIMemoryCandidateDraft `json:"candidates"`
+}
+
+func materializeOpenAIEvidenceDraft(evidence openAIEvidenceDraft) (EvidenceDraft, bool) {
+	statement := strings.TrimSpace(evidence.InterpretedStatement)
+	if statement == "" {
+		return EvidenceDraft{}, false
+	}
+	return EvidenceDraft{
+		SourceType:           strings.TrimSpace(evidence.SourceType),
+		InterpretedStatement: statement,
+		Keywords:             evidence.Keywords,
+		SalientSpans:         evidence.SalientSpans,
+		SourceRef:            evidence.SourceRef,
+		Confidence:           clamp01(evidence.Confidence),
+	}, true
+}
+
+func mustJSONText(value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
 }
 
 func (p OpenAIProvider) callStructured(ctx context.Context, instructions string, payload any, schemaName string, schema map[string]any, meta callLogMeta) (string, error) {
@@ -752,6 +845,41 @@ func semanticEnhanceSchema() map[string]any {
 }
 
 func candidatesSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"candidates"},
+		"properties": map[string]any{
+			"candidates": map[string]any{
+				"type":  "array",
+				"items": candidateSchema(),
+			},
+		},
+	}
+}
+
+func eventMemorySchema() map[string]any {
+	evidenceItem := evidenceItemSchema()
+	properties := evidenceItem["properties"].(map[string]any)
+	properties["candidates"] = map[string]any{
+		"type":  "array",
+		"items": candidateSchema(),
+	}
+	evidenceItem["required"] = []string{"source_type", "interpreted_statement", "keywords", "salient_spans", "source_ref", "confidence", "candidates"}
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"evidence"},
+		"properties": map[string]any{
+			"evidence": map[string]any{
+				"type":  "array",
+				"items": evidenceItem,
+			},
+		},
+	}
+}
+
+func candidateSchema() map[string]any {
 	checkpointProps := map[string]any{
 		"checkpoint_type":    stringSchema(),
 		"review_intent":      stringArraySchema(),
@@ -766,32 +894,22 @@ func candidatesSchema() map[string]any {
 		"next_review_policy": map[string]any{"type": "object"},
 	}
 	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required":             []string{"candidates"},
+		"type": "object",
+		"required": []string{
+			"memory_type", "scope", "content", "keywords", "candidate_reason", "confidence", "importance",
+		},
 		"properties": map[string]any{
-			"candidates": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type": "object",
-					"required": []string{
-						"memory_type", "scope", "content", "keywords", "candidate_reason", "confidence", "importance",
-					},
-					"properties": map[string]any{
-						"memory_type":      stringSchema(),
-						"scope":            stringSchema(),
-						"content":          stringSchema(),
-						"title":            stringSchema(),
-						"keywords":         stringArraySchema(),
-						"candidate_reason": stringArraySchema(),
-						"confidence":       numberSchema(),
-						"importance":       numberSchema(),
-						"review_checkpoint": map[string]any{
-							"type":       "object",
-							"properties": checkpointProps,
-						},
-					},
-				},
+			"memory_type":      stringSchema(),
+			"scope":            stringSchema(),
+			"content":          stringSchema(),
+			"title":            stringSchema(),
+			"keywords":         stringArraySchema(),
+			"candidate_reason": stringArraySchema(),
+			"confidence":       numberSchema(),
+			"importance":       numberSchema(),
+			"review_checkpoint": map[string]any{
+				"type":       "object",
+				"properties": checkpointProps,
 			},
 		},
 	}
@@ -804,20 +922,24 @@ func evidenceSchema() map[string]any {
 		"required":             []string{"evidence"},
 		"properties": map[string]any{
 			"evidence": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type":     "object",
-					"required": []string{"source_type", "interpreted_statement", "keywords", "salient_spans", "source_ref", "confidence"},
-					"properties": map[string]any{
-						"source_type":           stringSchema(),
-						"interpreted_statement": stringSchema(),
-						"keywords":              stringArraySchema(),
-						"salient_spans":         stringArraySchema(),
-						"source_ref":            map[string]any{"type": "object"},
-						"confidence":            numberSchema(),
-					},
-				},
+				"type":  "array",
+				"items": evidenceItemSchema(),
 			},
+		},
+	}
+}
+
+func evidenceItemSchema() map[string]any {
+	return map[string]any{
+		"type":     "object",
+		"required": []string{"source_type", "interpreted_statement", "keywords", "salient_spans", "source_ref", "confidence"},
+		"properties": map[string]any{
+			"source_type":           stringSchema(),
+			"interpreted_statement": stringSchema(),
+			"keywords":              stringArraySchema(),
+			"salient_spans":         stringArraySchema(),
+			"source_ref":            map[string]any{"type": "object"},
+			"confidence":            numberSchema(),
 		},
 	}
 }

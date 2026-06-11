@@ -233,7 +233,10 @@ func (o *MemoryOrchestrator) Search(ctx context.Context, req memory.SearchReques
 		Mode:        o.defaultMode(),
 	})
 
-	retrieved, err := o.retrieve(ctx, req, intent, 0)
+	retrieved, err := o.retrieve(ctx, req, intent, 0, retrieveLogOpts{
+		TraceID: trace.ID,
+		Phase:   "search",
+	})
 	latencyMS := time.Since(startedAt).Milliseconds()
 	if err != nil {
 		o.finishTrace(ctx, trace, tracePersisted, TraceFailed, 0, 0, latencyMS, fallbackReasons)
@@ -262,6 +265,7 @@ func (o *MemoryOrchestrator) Search(ctx context.Context, req memory.SearchReques
 		"retrieval_mode", string(retrieved.Mode),
 		"candidate_count", len(retrieved.Results),
 		"injected_count", 0,
+		"candidate_hits", summarizeSearchResults(retrieved.Results),
 		"fallback_reasons", fallbackReasons,
 		"latency_ms", latencyMS,
 	)
@@ -308,7 +312,7 @@ func (o *MemoryOrchestrator) Context(ctx context.Context, req memory.ContextRequ
 		Mode:        o.defaultMode(),
 	})
 
-	retrieved, err := o.contextSearch(ctx, req, intent)
+	retrieved, err := o.contextSearch(ctx, req, intent, trace.ID)
 	latencyMS := time.Since(startedAt).Milliseconds()
 	if err != nil {
 		o.finishTrace(ctx, trace, tracePersisted, TraceFailed, 0, 0, latencyMS, fallbackReasons)
@@ -334,6 +338,7 @@ func (o *MemoryOrchestrator) Context(ctx context.Context, req memory.ContextRequ
 		Intent:      intent,
 		TokenBudget: req.TokenBudget,
 	})
+	o.logContextPackDiagnostics(trace.ID, shortHashForLog(req.Task), intent, retrieved.Results, budgetReport)
 	usedDocIndex, docFallbackReasons := o.attachReviewStrategy(ctx, req, &contextPack)
 	addDocChangedSectionBudget(&budgetReport, contextPack.ReviewStrategy)
 	if usedDocIndex {
@@ -360,7 +365,11 @@ func (o *MemoryOrchestrator) Context(ctx context.Context, req memory.ContextRequ
 		"retrieval_mode", string(retrieved.Mode),
 		"candidate_count", len(retrieved.Results),
 		"injected_count", len(usedIDs),
+		"dropped_count", len(budgetReport.Diagnostics.Dropped),
 		"conversion_rate", safeRatio(len(usedIDs), len(retrieved.Results)),
+		"candidate_hits", summarizeSearchResults(retrieved.Results),
+		"injected_hits", summarizeContextPackHits(budgetReport.Diagnostics.Injected),
+		"dropped_hits", summarizeContextPackHits(budgetReport.Diagnostics.Dropped),
 		"fallback_reasons", fallbackReasons,
 		"latency_ms", latencyMS,
 	)
@@ -418,23 +427,35 @@ type retrieveOutput struct {
 	FallbackReasons []string
 }
 
+type retrieveLogOpts struct {
+	TraceID string
+	Phase   string
+}
+
 // retrieve 执行核心检索流程：FTS 召回 -> relation expansion -> code ref attach -> rerank -> filter -> limit。
 // 该方法被 Search 和 Context 共用，tokenBudget 仅在 Context 路径下非零。
-func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequest, intent RetrievalIntent, tokenBudget int) (retrieveOutput, error) {
+func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequest, intent RetrievalIntent, tokenBudget int, logOpts retrieveLogOpts) (retrieveOutput, error) {
 	if o.memoryRepo == nil {
 		return retrieveOutput{}, fmt.Errorf("RETRIEVAL_UNAVAILABLE: memory search repository is required")
+	}
+	phase := strings.TrimSpace(logOpts.Phase)
+	if phase == "" {
+		phase = "retrieve"
 	}
 	results, diag, err := o.memoryRepo.Search(ctx, req)
 	if err != nil {
 		return retrieveOutput{Diagnostics: diag, Mode: o.defaultMode()}, err
 	}
+	o.logRetrievalStage("fts_seed", phase, logOpts.TraceID, req, results)
 	now := time.Now()
 	candidates := make(map[string]Candidate, len(results))
 	byID := make(map[string]memory.SearchResult, len(results))
 	seedIDs := make([]string, 0, len(results))
+	seedIDSet := make(map[string]bool, len(results))
 	for _, result := range results {
 		byID[result.MemoryID] = result
 		seedIDs = append(seedIDs, result.MemoryID)
+		seedIDSet[result.MemoryID] = true
 		candidates[result.MemoryID] = Candidate{
 			Memory: memory.MemoryItem{
 				ID:            result.MemoryID,
@@ -455,6 +476,17 @@ func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequ
 		}
 	}
 	usedRelation, relationFallback := o.expandRelations(ctx, req, candidates, byID, seedIDs)
+	if usedRelation {
+		relationAdded := make([]memory.SearchResult, 0)
+		for id, result := range byID {
+			if !seedIDSet[id] {
+				relationAdded = append(relationAdded, result)
+			}
+		}
+		if len(relationAdded) > 0 {
+			o.logRetrievalStage("relation_expanded", phase, logOpts.TraceID, req, relationAdded)
+		}
+	}
 	usedCodeIndex, codeFallback := o.attachCodeRefs(ctx, req, intent, candidates, byID)
 	candidateList := make([]Candidate, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -468,7 +500,21 @@ func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequ
 		TokenBudget:   tokenBudget,
 		Now:           now,
 	})
+	beforeSuperseded := append([]Candidate(nil), reranked...)
 	reranked = filterSupersededCandidates(reranked)
+	if len(beforeSuperseded) > len(reranked) {
+		supersededIDs := make(map[string]bool)
+		afterIDs := make(map[string]bool, len(reranked))
+		for _, candidate := range reranked {
+			afterIDs[candidate.Memory.ID] = true
+		}
+		for _, candidate := range beforeSuperseded {
+			if !afterIDs[candidate.Memory.ID] {
+				supersededIDs[candidate.Memory.ID] = true
+			}
+		}
+		o.logRetrievalStage("superseded_dropped", phase, logOpts.TraceID, req, filterResultsByIDs(searchResultsFromCandidates(beforeSuperseded), supersededIDs, true))
+	}
 	if req.Limit > 0 && len(reranked) > req.Limit {
 		reranked = reranked[:req.Limit]
 	}
@@ -490,11 +536,13 @@ func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequ
 		rawEventResults, fallbackReason := o.retrieveFromRawEvents(ctx, req, req.Limit-len(out))
 		if len(rawEventResults) > 0 {
 			out = appendMissingResults(out, rawEventResults)
+			o.logRetrievalStage("raw_event_fallback", phase, logOpts.TraceID, req, rawEventResults, "fallback_reason", fallbackReason)
 		}
 		if fallbackReason != "" {
 			rawEventFallbackReasons = append(rawEventFallbackReasons, fallbackReason)
 		}
 	}
+	o.logRetrievalStage("final_candidates", phase, logOpts.TraceID, req, out)
 	mode := ModeFTSMetadata
 	if usedRelation {
 		mode = ModeFTSRelation
@@ -607,7 +655,7 @@ func scopedRawEvent(event capture.RawEvent) string {
 //  3. Checkpoint 补充：如果是架构复查任务且不含 TypeReviewCheckpoint，额外检索 checkpoint（最多 3 条）
 //
 // 设计意图：Context 场景需要更完整的记忆覆盖，偏好和 checkpoint 是高频遗漏项。
-func (o *MemoryOrchestrator) contextSearch(ctx context.Context, req memory.ContextRequest, intent RetrievalIntent) (retrieveOutput, error) {
+func (o *MemoryOrchestrator) contextSearch(ctx context.Context, req memory.ContextRequest, intent RetrievalIntent, traceID string) (retrieveOutput, error) {
 	searchTypes := []string{
 		memory.TypeRequirement,
 		memory.TypeConstraint,
@@ -635,7 +683,7 @@ func (o *MemoryOrchestrator) contextSearch(ctx context.Context, req memory.Conte
 		IncludeArchived: false,
 		IncludeEvidence: req.IncludeEvidenceSummary,
 		IncludeCodeRefs: req.IncludeCodeRefs,
-	}, intent, req.TokenBudget)
+	}, intent, req.TokenBudget, retrieveLogOpts{TraceID: traceID, Phase: "context_main"})
 	if err != nil {
 		return main, err
 	}
@@ -653,7 +701,7 @@ func (o *MemoryOrchestrator) contextSearch(ctx context.Context, req memory.Conte
 			IncludeArchived: false,
 			IncludeEvidence: req.IncludeEvidenceSummary,
 			IncludeCodeRefs: req.IncludeCodeRefs,
-		}, IntentUserPreference, req.TokenBudget)
+		}, IntentUserPreference, req.TokenBudget, retrieveLogOpts{TraceID: traceID, Phase: "context_preference"})
 		if prefErr == nil {
 			out.Results = appendMissingResults(out.Results, preferences.Results)
 			out.Diagnostics.FTSHits += preferences.Diagnostics.FTSHits
@@ -685,7 +733,7 @@ func (o *MemoryOrchestrator) contextSearch(ctx context.Context, req memory.Conte
 				IncludeArchived: false,
 				IncludeEvidence: req.IncludeEvidenceSummary,
 				IncludeCodeRefs: req.IncludeCodeRefs,
-			}, IntentArchitectureReview, req.TokenBudget)
+			}, IntentArchitectureReview, req.TokenBudget, retrieveLogOpts{TraceID: traceID, Phase: "context_checkpoint"})
 			if checkpointErr == nil {
 				out.Results = appendMissingResults(checkpoints.Results, out.Results)
 				out.Diagnostics.FTSHits += checkpoints.Diagnostics.FTSHits

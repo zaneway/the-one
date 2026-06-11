@@ -70,6 +70,177 @@ func TestIngestProcessorRejectsMCPProducer(t *testing.T) {
 	}
 }
 
+func TestIngestProcessorSuppressesSessionStartRawEventButBindsSession(t *testing.T) {
+	dir := t.TempDir()
+	var observeCalls int
+	var ensureCalls int
+	p := &IngestProcessor{
+		Binder:     NewSessionBinder(dir),
+		Ledger:     NewIngestLedger(dir),
+		Failures:   NewFailureQueue(dir),
+		StateStore: NewFileStateStore(dir),
+		Observe: func(ctx context.Context, req capture.ObserveRequest) (capture.ObserveResponse, error) {
+			observeCalls++
+			return capture.ObserveResponse{Accepted: true}, nil
+		},
+		EnsureSession: func(ctx context.Context, req capture.ObserveRequest) error {
+			ensureCalls++
+			if req.EventType != capture.EventSessionStart || req.SessionID != "conv-001" || req.TaskID != "task_cursor_auto" {
+				t.Fatalf("ensure req = %+v", req)
+			}
+			return nil
+		},
+	}
+	out := p.Process(context.Background(), "ing_session_start", []IngestWorkItem{{
+		EventIndex: 0,
+		Envelope: IngestEnvelope{
+			ProtocolVersion: ProtocolV1,
+			Producer:        "cursor_hook:sessionStart",
+			AgentType:       "cursor",
+			SessionID:       "conv-001",
+			EventType:       capture.EventSessionStart,
+			Payload:         map[string]any{"agent_type": "cursor", "conversation_id": "conv-001"},
+		},
+	}})
+	if !out.OK || out.Suppressed != 1 || out.Accepted != 0 || out.Failed != 0 {
+		t.Fatalf("result = %+v", out)
+	}
+	if observeCalls != 0 || ensureCalls != 1 {
+		t.Fatalf("observeCalls=%d ensureCalls=%d, want 0/1", observeCalls, ensureCalls)
+	}
+	state, ok, err := p.Binder.Load("cursor")
+	if err != nil || !ok {
+		t.Fatalf("binding missing err=%v ok=%v", err, ok)
+	}
+	if state.SessionID != "conv-001" || state.ExternalSessionKey != "conv-001" {
+		t.Fatalf("binding = %+v", state)
+	}
+	if hit, err := p.Ledger.Contains("ing_session_start", 0); err != nil || !hit {
+		t.Fatalf("ledger hit=%v err=%v, want true", hit, err)
+	}
+}
+
+func TestIngestProcessorSuppressesToolResultWithoutBootstrapRawEvent(t *testing.T) {
+	dir := t.TempDir()
+	var observeCalls int
+	var ensureCalls int
+	p := &IngestProcessor{
+		Binder:      NewSessionBinder(dir),
+		Ledger:      NewIngestLedger(dir),
+		Failures:    NewFailureQueue(dir),
+		StateStore:  NewFileStateStore(dir),
+		ExpandMode:  ExpandModeV2,
+		AtomicDedup: NewAtomicDedupStore(dir),
+		Observe: func(ctx context.Context, req capture.ObserveRequest) (capture.ObserveResponse, error) {
+			observeCalls++
+			return capture.ObserveResponse{Accepted: true}, nil
+		},
+		EnsureSession: func(ctx context.Context, req capture.ObserveRequest) error {
+			ensureCalls++
+			return nil
+		},
+	}
+	out := p.Process(context.Background(), "ing_tool_result", []IngestWorkItem{{
+		EventIndex: 0,
+		Envelope: IngestEnvelope{
+			ProtocolVersion: ProtocolV1,
+			Producer:        "cursor_hook:afterMCPExecution",
+			AgentType:       "cursor",
+			SessionID:       "conv-tool",
+			EventType:       capture.EventToolResultSummary,
+			Payload: map[string]any{
+				"agent_type":      "cursor",
+				"conversation_id": "conv-tool",
+				"tool_name":       "Shell",
+				"output_summary":  "go test ./... ok",
+			},
+		},
+	}})
+	if !out.OK || out.Suppressed != 1 || out.Accepted != 0 || out.Failed != 0 {
+		t.Fatalf("result = %+v", out)
+	}
+	if observeCalls != 0 || ensureCalls != 0 {
+		t.Fatalf("observeCalls=%d ensureCalls=%d, want 0/0", observeCalls, ensureCalls)
+	}
+	if hit, err := p.Ledger.Contains("ing_tool_result", 0); err != nil || !hit {
+		t.Fatalf("ledger hit=%v err=%v, want true", hit, err)
+	}
+}
+
+func TestIngestProcessorStoresFileEditRawEventAndKeepsSessionTrace(t *testing.T) {
+	dir := t.TempDir()
+	var observeCalls int
+	var ensureCalls int
+	var observed capture.ObserveRequest
+	p := &IngestProcessor{
+		Binder:      NewSessionBinder(dir),
+		Ledger:      NewIngestLedger(dir),
+		Failures:    NewFailureQueue(dir),
+		StateStore:  NewFileStateStore(dir),
+		ExpandMode:  ExpandModeV2,
+		AtomicDedup: NewAtomicDedupStore(dir),
+		Observe: func(ctx context.Context, req capture.ObserveRequest) (capture.ObserveResponse, error) {
+			observeCalls++
+			observed = req
+			return capture.ObserveResponse{Accepted: true}, nil
+		},
+		EnsureSession: func(ctx context.Context, req capture.ObserveRequest) error {
+			ensureCalls++
+			if req.EventType != capture.EventSessionStart || req.SessionID != "conv-file" || req.TaskID != "task_cursor_auto" {
+				t.Fatalf("ensure req = %+v", req)
+			}
+			for _, ref := range req.SourceRefs {
+				if ref["file_path"] != nil || ref["change_type"] != nil || ref["before_hash"] != nil || ref["after_hash"] != nil {
+					t.Fatalf("file edit details leaked into bootstrap source refs: %+v", req.SourceRefs)
+				}
+			}
+			return nil
+		},
+	}
+	out := p.Process(context.Background(), "ing_file_edit", []IngestWorkItem{{
+		EventIndex: 0,
+		Envelope: IngestEnvelope{
+			ProtocolVersion: ProtocolV1,
+			Producer:        "cursor_hook:afterFileEdit",
+			AgentType:       "cursor",
+			SessionID:       "conv-file",
+			EventType:       capture.EventFileEditSummary,
+			Kind:            KindCaptureAtomic,
+			Payload: map[string]any{
+				"agent_type":      "cursor",
+				"conversation_id": "conv-file",
+				"file_path":       "internal/auth/middleware.go",
+				"change_type":     "modify",
+				"before_hash":     "sha256:before",
+				"after_hash":      "sha256:after",
+				"content_summary": "【事实】调整 token 过期判断边界",
+			},
+		},
+	}})
+	if !out.OK || out.Suppressed != 0 || out.Accepted != 1 || out.Failed != 0 {
+		t.Fatalf("result = %+v", out)
+	}
+	if observeCalls != 1 || ensureCalls != 1 {
+		t.Fatalf("observeCalls=%d ensureCalls=%d, want 1/1", observeCalls, ensureCalls)
+	}
+	if observed.EventType != capture.EventFileEditSummary {
+		t.Fatalf("observed event_type = %s, want file.edit.summary", observed.EventType)
+	}
+	if observed.ContentSummary != "【事实】调整 token 过期判断边界" {
+		t.Fatalf("content summary = %q", observed.ContentSummary)
+	}
+	if hit, err := p.Ledger.Contains("ing_file_edit", 0); err != nil || !hit {
+		t.Fatalf("ledger hit=%v err=%v, want true", hit, err)
+	}
+	state, ok, err := p.Binder.Load("cursor")
+	if err != nil || !ok {
+		t.Fatalf("binding missing err=%v ok=%v", err, ok)
+	}
+	if state.SessionID != "conv-file" || state.TaskID != "task_cursor_auto" {
+		t.Fatalf("binding = %+v", state)
+	}
+}
+
 func TestObserveFromAtomicFileEditCarriesChangeMetadata(t *testing.T) {
 	req, err := observeFromAtomic(IngestEnvelope{
 		Producer:  "cursor_hook:afterFileEdit",

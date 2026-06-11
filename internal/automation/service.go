@@ -166,7 +166,7 @@ func (s *Service) RunJob(ctx context.Context, job AsyncJob) error {
 // runExtractEvidence 执行管道第一步：从 raw_event 抽取 evidence。
 // 处理流程：
 //  1. 加载原始事件及其关联的 session 和 task
-//  2. 调用 Provider 抽取 evidence drafts（openai 仅本步调外部模型）
+//  2. 调用 Provider 抽取 evidence drafts
 //  4. 将 drafts 物化为 evidence 记录（去重检测 + 序列化 + 写入）
 //  5. 为每条 evidence 入队下一步 job（generate_memory_candidate）
 func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[string]any, error) {
@@ -187,6 +187,9 @@ func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[str
 	task, err := s.loadTask(ctx, rawEvent.TaskID)
 	if err != nil {
 		return nil, err
+	}
+	if provider, ok := s.provider.(processor.RawEventProcessor); ok {
+		return s.runProcessRawEvent(ctx, job, provider, rawEvent, session, task)
 	}
 	drafts, err := s.provider.ExtractEvidence(processor.WithLogContext(ctx, processor.LogContext{JobID: job.ID}), processor.EvidenceInput{
 		RawEvent: rawEvent,
@@ -231,6 +234,63 @@ func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[str
 	return map[string]any{"evidence_count": written}, nil
 }
 
+// runProcessRawEvent 执行联合处理路径：一次 Provider 调用同时得到 evidence 与 candidate。
+// 该路径用于 openai provider；持久化仍然写既有 evidence / memory_candidate 表，
+// 后续准入仍通过 compute_admission job 完成。
+func (s *Service) runProcessRawEvent(ctx context.Context, job AsyncJob, provider processor.RawEventProcessor, rawEvent capture.RawEvent, session capture.AgentSession, task capture.AgentTask) (map[string]any, error) {
+	processed, err := provider.ProcessRawEvent(processor.WithLogContext(ctx, processor.LogContext{JobID: job.ID}), processor.EvidenceInput{
+		RawEvent: rawEvent,
+		Session:  session,
+		Task:     task,
+		Now:      time.Now(),
+	})
+	if err != nil {
+		s.logger.Error("process raw event provider failed",
+			"job_id", job.ID,
+			"raw_event_id", rawEvent.ID,
+			"event_type", rawEvent.EventType,
+			"session_id", rawEvent.SessionID,
+			"task_id", rawEvent.TaskID,
+			"error", err,
+		)
+		return nil, err
+	}
+	evidenceWritten := 0
+	candidatesWritten := 0
+	for _, item := range processed {
+		evidence, err := s.materializeEvidence(ctx, rawEvent.ID, item.Evidence)
+		if err != nil {
+			s.logger.Error("process raw event evidence materialize failed", "job_id", job.ID, "error", err)
+			return nil, err
+		}
+		evidenceWritten++
+		for _, candidate := range item.Candidates {
+			candidate.SourceEvidenceIDs = []string{evidence.ID}
+			record, err := s.materializeCandidate(candidate, evidence, rawEvent)
+			if err != nil {
+				s.logger.Error("process raw event candidate materialize failed", "job_id", job.ID, "error", err)
+				return nil, err
+			}
+			if err := s.repo.WriteCandidate(ctx, record); err != nil {
+				s.logger.Error("process raw event candidate write failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
+				return nil, err
+			}
+			candidatesWritten++
+			if err := s.enqueueNext(ctx, JobTypeComputeAdmission, TargetTypeMemoryCandidate, record.ID, 5); err != nil {
+				s.logger.Error("process raw event enqueue admission failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
+				return nil, err
+			}
+		}
+	}
+	s.logger.Info("process raw event completed",
+		"job_id", job.ID,
+		"event_type", rawEvent.EventType,
+		"evidence_count", evidenceWritten,
+		"candidate_count", candidatesWritten,
+	)
+	return map[string]any{"evidence_count": evidenceWritten, "candidate_count": candidatesWritten}, nil
+}
+
 // runGenerateMemoryCandidate 执行管道第二步：从 evidence 生成候选记忆。
 // 处理流程：
 //  1. 加载 evidence 及其关联的 raw_event
@@ -240,6 +300,14 @@ func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[str
 //  5. 将 candidates 物化为 MemoryCandidateRecord（序列化所有 JSON 字段）
 //  6. 为每个 candidate 入队下一步 job（compute_admission）
 func (s *Service) runGenerateMemoryCandidate(ctx context.Context, job AsyncJob) (map[string]any, error) {
+	if _, ok := s.provider.(processor.RawEventProcessor); ok {
+		s.logger.Info("generate candidate skipped for combined provider",
+			"job_id", job.ID,
+			"target_id", job.TargetID,
+			"provider", s.provider.Name(),
+		)
+		return map[string]any{"candidate_count": 0, "skipped": "combined_provider"}, nil
+	}
 	evidence, err := s.repo.GetEvidence(ctx, job.TargetID)
 	if err != nil {
 		s.logger.Error("generate candidate get evidence failed", "job_id", job.ID, "target_id", job.TargetID, "error", err)

@@ -57,14 +57,18 @@ func TestLoadDefaults(t *testing.T) {
 		!strings.Contains(cfg.Processor.OpenAI.SemanticEnhancePrompt, "示例：") {
 		t.Fatalf("semantic enhance prompt = %q, want project-specific safety instructions", cfg.Processor.OpenAI.SemanticEnhancePrompt)
 	}
-	if !strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, "可长期检索复用的证据数组") ||
+	if !strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, "同时产出 evidence") ||
 		!strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, `{"evidence":[]}`) ||
-		!strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, "供后续候选记忆分类使用") {
-		t.Fatalf("extract evidence prompt = %q, want project-specific evidence instructions", cfg.Processor.OpenAI.ExtractEvidencePrompt)
+		!strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, "candidate_reason") ||
+		!strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, "user_correction") ||
+		!strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, "示例：") {
+		t.Fatalf("extract evidence prompt = %q, want combined evidence/candidate instructions", cfg.Processor.OpenAI.ExtractEvidencePrompt)
 	}
-	if !strings.Contains(cfg.Processor.OpenAI.GenerateCandidatesPrompt, "theone_candidates") ||
-		!strings.Contains(cfg.Processor.OpenAI.GenerateCandidatesPrompt, "review_checkpoint") {
-		t.Fatalf("generate candidates prompt = %q, want project-specific candidate instructions", cfg.Processor.OpenAI.GenerateCandidatesPrompt)
+	if strings.Contains(cfg.Processor.OpenAI.ExtractEvidencePrompt, "字段：") || len([]rune(cfg.Processor.OpenAI.ExtractEvidencePrompt)) > 4500 {
+		t.Fatalf("extract evidence prompt = %q, want compact example-driven instructions", cfg.Processor.OpenAI.ExtractEvidencePrompt)
+	}
+	if cfg.Processor.OpenAI.GenerateCandidatesPrompt != "" {
+		t.Fatalf("generate candidates prompt = %q, want empty deprecated default", cfg.Processor.OpenAI.GenerateCandidatesPrompt)
 	}
 	if cfg.CodeIndex.Provider != "local_basic" || cfg.CodeIndex.MaxFileSizeKB != 512 || cfg.CodeIndex.MaxResolveRefs != 30 {
 		t.Fatalf("codeindex defaults = %+v, want local_basic with bounded local resolver", cfg.CodeIndex)

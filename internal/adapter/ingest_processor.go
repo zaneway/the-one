@@ -11,6 +11,9 @@ import (
 // ObserveFunc 调用 capture 写入单条事件。
 type ObserveFunc func(ctx context.Context, req capture.ObserveRequest) (capture.ObserveResponse, error)
 
+// EnsureSessionFunc 只确保 agent_session / agent_task 存在，不写 raw_event。
+type EnsureSessionFunc func(ctx context.Context, req capture.ObserveRequest) error
+
 // IngestProcessor P0 ingest 平面。
 type IngestProcessor struct {
 	Binder          *SessionBinder
@@ -21,17 +24,19 @@ type IngestProcessor struct {
 	ExpandMode      string
 	AtomicStripTurn bool
 	Observe         ObserveFunc
+	EnsureSession   EnsureSessionFunc
 }
 
 // IngestResult ingest 命令 stdout 结构。
 type IngestResult struct {
-	OK       bool            `json:"ok"`
-	IngestID string          `json:"ingest_id"`
-	Accepted int             `json:"accepted"`
-	Deduped  int             `json:"deduped"`
-	Failed   int             `json:"failed"`
-	Failures []FailureRecord `json:"failures"`
-	Error    string          `json:"error,omitempty"`
+	OK         bool            `json:"ok"`
+	IngestID   string          `json:"ingest_id"`
+	Accepted   int             `json:"accepted"`
+	Deduped    int             `json:"deduped"`
+	Suppressed int             `json:"suppressed"`
+	Failed     int             `json:"failed"`
+	Failures   []FailureRecord `json:"failures"`
+	Error      string          `json:"error,omitempty"`
 }
 
 // Process 处理一批 IngestWorkItem。
@@ -59,7 +64,7 @@ func (p *IngestProcessor) Process(ctx context.Context, ingestID string, items []
 	for _, item := range items {
 		p.processOne(ctx, ingestID, item, &result)
 	}
-	if result.Failed > 0 && result.Accepted == 0 && result.Deduped == 0 {
+	if result.Failed > 0 && result.Accepted == 0 && result.Deduped == 0 && result.Suppressed == 0 {
 		result.OK = false
 	}
 	return result
@@ -118,6 +123,17 @@ func (p *IngestProcessor) processOne(ctx context.Context, ingestID string, item 
 				return
 			}
 		}
+	}
+
+	if shouldSuppressRawEvent(env.EventType) {
+		if err := p.ensureSuppressedEventReady(ctx, env, sessionID, taskID); err != nil {
+			code, summary := toObserveError(err)
+			p.failItem(ingestID, item, sessionID, taskID, code, summary, result)
+			return
+		}
+		_ = p.Ledger.Mark(ingestID, item.EventIndex)
+		result.Suppressed++
+		return
 	}
 
 	if env.EventType != capture.EventSessionStart {
@@ -179,11 +195,44 @@ func (p *IngestProcessor) ensureSessionReady(ctx context.Context, env IngestEnve
 	if err := ensureObserveHash(&bootstrap); err != nil {
 		return err
 	}
-	if _, err := p.Observe(ctx, bootstrap); err != nil {
+	if p.EnsureSession == nil {
+		return nil
+	}
+	if err := p.EnsureSession(ctx, bootstrap); err != nil {
 		return fmt.Errorf("%w: %v", errSessionNotReady, err)
 	}
 	_ = p.Binder.MarkBootstrapTask(agentTypeFromEnvelope(env))
 	return nil
+}
+
+func (p *IngestProcessor) ensureSuppressedEventReady(ctx context.Context, env IngestEnvelope, sessionID, taskID string) error {
+	if p.EnsureSession == nil {
+		return nil
+	}
+	var req capture.ObserveRequest
+	var err error
+	switch env.EventType {
+	case capture.EventSessionStart:
+		req, err = observeFromLifecycle(env, sessionID, taskID)
+	default:
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := ensureObserveHash(&req); err != nil {
+		return err
+	}
+	return p.EnsureSession(ctx, req)
+}
+
+func shouldSuppressRawEvent(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case capture.EventSessionStart, capture.EventToolResultSummary:
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *IngestProcessor) buildRequests(env IngestEnvelope, kind, sessionID, taskID string) ([]capture.ObserveRequest, error) {
