@@ -22,8 +22,8 @@ hooks:
         # v2：不含 tool_results / file_edits
   afterFileEdit:
     producer: cursor_hook:afterFileEdit
-    raw_event: stored
-    note: file edit summary enters raw_event; keep path/change_type/hash/summary only, never full diff
+    raw_event: suppressed
+    note: file edit hook kept for diagnostics; high-value edits should flow into turn.completed or memory_remember
     emit:
       - kind: capture.atomic
         event_type: file.edit.summary
