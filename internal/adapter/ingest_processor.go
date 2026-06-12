@@ -26,15 +26,16 @@ type EnsureSessionFunc func(ctx context.Context, req capture.ObserveRequest) err
 //
 // 设计约束：所有去重/状态查询与写入分离，避免长事务持锁。
 type IngestProcessor struct {
-	Binder          *SessionBinder
-	Ledger          *IngestLedger
-	Failures        *FailureQueue
-	StateStore      StateStore
-	AtomicDedup     *AtomicDedupStore
-	ExpandMode      string
-	AtomicStripTurn bool
-	Observe         ObserveFunc
-	EnsureSession   EnsureSessionFunc
+	Binder                *SessionBinder
+	Ledger                *IngestLedger
+	Failures              *FailureQueue
+	StateStore            StateStore
+	AtomicDedup           *AtomicDedupStore
+	ExpandMode            string
+	AtomicStripTurn       bool
+	SuppressRawEventTypes []string
+	Observe               ObserveFunc
+	EnsureSession         EnsureSessionFunc
 }
 
 // IngestResult ingest 命令 stdout 结构。
@@ -167,7 +168,7 @@ func (p *IngestProcessor) processOne(ctx context.Context, ingestID string, item 
 	}
 
 	// 被抑制的 raw_event 仍然要保证 session/task 就绪，但不再产生 raw_event
-	if shouldSuppressRawEvent(env.EventType) {
+	if p.shouldSuppressRawEvent(env.EventType) {
 		if err := p.ensureSuppressedEventReady(ctx, env, sessionID, taskID); err != nil {
 			code, summary := toObserveError(err)
 			p.failItem(ingestID, item, sessionID, taskID, code, summary, result)
@@ -276,18 +277,6 @@ func (p *IngestProcessor) ensureSuppressedEventReady(ctx context.Context, env In
 		return err
 	}
 	return p.EnsureSession(ctx, req)
-}
-
-// shouldSuppressRawEvent 决定某种 EventType 是否要写 raw_event。
-// 当前白名单：session.start 与 tool.result.summary。这两类事件或属于元数据，
-// 或由 Observe 在 tool_call 上下文已聚合，落库会造成冗余与重复计数。
-func shouldSuppressRawEvent(eventType string) bool {
-	switch strings.TrimSpace(eventType) {
-	case capture.EventSessionStart, capture.EventToolResultSummary:
-		return true
-	default:
-		return false
-	}
 }
 
 // buildRequests 根据 kind 把 IngestEnvelope 转换为一组 capture.ObserveRequest。

@@ -445,15 +445,30 @@ type Overrides struct {
 	LogLevel string
 }
 
-// Default 返回可直接启动的默认配置
-// 默认数据库路径位于 $HOME/.theone/memory.db
-// 设计原则：默认配置能直接启动，避免用户先理解完整系统才能使用
-func Default() Config {
+// defaultDataDir 返回内置默认数据根目录：$HOME/.theone。
+func defaultDataDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		home = "."
 	}
-	dataDir := filepath.Join(home, ".theone")
+	return filepath.Join(home, ".theone")
+}
+
+// DataDirFromStoragePath 从 SQLite 库文件路径推导数据根目录（与 memory.db 同级）。
+func DataDirFromStoragePath(dbPath string) string {
+	return filepath.Dir(expandHome(dbPath))
+}
+
+// LogFilePath 返回数据目录下的默认日志文件路径。
+func LogFilePath(dataDir string) string {
+	return filepath.Join(dataDir, "logs", "theone.log")
+}
+
+// Default 返回可直接启动的默认配置
+// 默认数据库路径位于 $HOME/.theone/memory.db
+// 设计原则：默认配置能直接启动，避免用户先理解完整系统才能使用
+func Default() Config {
+	dataDir := defaultDataDir()
 	return Config{
 		Storage: StorageConfig{
 			Backend:          "sqlite",
@@ -467,7 +482,7 @@ func Default() Config {
 		Logging: LoggingConfig{
 			Level:  "info",
 			Format: "text",
-			Path:   filepath.Join(dataDir, "logs", "theone.log"),
+			Path:   LogFilePath(dataDir),
 		},
 		Memory: MemoryConfig{
 			DefaultUserID:       "local_default_user",
@@ -570,12 +585,14 @@ func Default() Config {
 // 优先级：命令行 > 环境变量 > 配置文件 > 默认值
 func Load(overrides Overrides) (Config, error) {
 	cfg := Default()
+	defaultLogPath := cfg.Logging.Path
 	configPath := firstNonEmpty(overrides.ConfigPath, os.Getenv("THEONE_CONFIG"))
 	if configPath != "" {
 		if err := loadYAML(configPath, &cfg); err != nil {
 			return Config{}, err
 		}
 	}
+	yamlExplicitLog := cfg.Logging.Path != defaultLogPath
 
 	dataDir := os.Getenv("THEONE_DATA_DIR")
 	dbPath := os.Getenv("THEONE_DB_PATH")
@@ -598,14 +615,17 @@ func Load(overrides Overrides) (Config, error) {
 	if addr := firstNonEmpty(overrides.MCPAddr, os.Getenv("THEONE_MCP_ADDR")); addr != "" {
 		cfg.Server.MCPAddr = addr
 	}
-	if logPath := os.Getenv("THEONE_LOG_PATH"); logPath != "" {
-		cfg.Logging.Path = logPath
-	}
 	if apiKey := firstNonEmpty(os.Getenv("THEONE_OPENAI_API_KEY"), os.Getenv("OPENAI_API_KEY")); apiKey != "" {
 		cfg.Processor.OpenAI.APIKey = apiKey
 	}
 	cfg.Storage.Path = expandHome(cfg.Storage.Path)
-	cfg.Logging.Path = expandHome(cfg.Logging.Path)
+	if logPath := os.Getenv("THEONE_LOG_PATH"); logPath != "" {
+		cfg.Logging.Path = expandHome(logPath)
+	} else if !yamlExplicitLog {
+		cfg.Logging.Path = LogFilePath(DataDirFromStoragePath(cfg.Storage.Path))
+	} else {
+		cfg.Logging.Path = expandHome(cfg.Logging.Path)
+	}
 	return cfg, validate(cfg)
 }
 

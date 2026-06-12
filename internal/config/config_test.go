@@ -92,6 +92,57 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadDataDirSyncsLogPath(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "project", ".theone-data")
+	cfg, err := Load(Overrides{DataDir: dataDir})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	wantDB := filepath.Join(dataDir, "memory.db")
+	if cfg.Storage.Path != wantDB {
+		t.Fatalf("db path = %q, want %q", cfg.Storage.Path, wantDB)
+	}
+	wantLog := filepath.Join(dataDir, "logs", "theone.log")
+	if cfg.Logging.Path != wantLog {
+		t.Fatalf("log path = %q, want %q", cfg.Logging.Path, wantLog)
+	}
+}
+
+func TestLoadYAMLStoragePathSyncsLogPath(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "yaml-data")
+	path := filepath.Join(t.TempDir(), "theone.yaml")
+	data := []byte("storage:\n  path: \"" + filepath.Join(dataDir, "memory.db") + "\"\n")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(Overrides{ConfigPath: path})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	wantLog := filepath.Join(dataDir, "logs", "theone.log")
+	if cfg.Logging.Path != wantLog {
+		t.Fatalf("log path = %q, want %q", cfg.Logging.Path, wantLog)
+	}
+}
+
+func TestLoadKeepsExplicitYAMLLogPath(t *testing.T) {
+	customLog := filepath.Join(t.TempDir(), "custom.log")
+	path := filepath.Join(t.TempDir(), "theone.yaml")
+	data := []byte("logging:\n  path: \"" + customLog + "\"\n")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(Overrides{ConfigPath: path, DataDir: filepath.Join(t.TempDir(), "other-data")})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Logging.Path != customLog {
+		t.Fatalf("log path = %q, want explicit yaml path %q", cfg.Logging.Path, customLog)
+	}
+}
+
 func TestLoadEnvAndOverrides(t *testing.T) {
 	t.Setenv("THEONE_DATA_DIR", filepath.Join(t.TempDir(), "from-env"))
 	t.Setenv("THEONE_LOG_LEVEL", "debug")
