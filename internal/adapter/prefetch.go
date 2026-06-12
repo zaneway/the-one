@@ -16,6 +16,7 @@ type PrefetchRequest struct {
 	WorkspaceID            string `json:"workspace_id"`
 	ProjectID              string `json:"project_id"`
 	RepoID                 string `json:"repo_id"`
+	WorkingDirectory       string `json:"cwd"`
 	SessionID              string `json:"session_id"`
 	ConversationID         string `json:"conversation_id"`
 	GenerationID           string `json:"generation_id"`
@@ -78,6 +79,12 @@ func (p *PrefetchProcessor) Run(ctx context.Context, req PrefetchRequest) Prefet
 		result.TurnID = "turn_" + gen
 	}
 
+	scopePayload := map[string]any{
+		"workspace_id": scopeOrDefault(req.WorkspaceID, "local_default_workspace"),
+		"project_id":   strings.TrimSpace(req.ProjectID),
+		"repo_id":      strings.TrimSpace(req.RepoID),
+		"cwd":          strings.TrimSpace(req.WorkingDirectory),
+	}
 	resolved, err := p.Binder.Resolve(ResolveInput{
 		AgentType: agentType,
 		Producer:  HookProducer(agentType, "beforeSubmitPrompt"),
@@ -88,8 +95,9 @@ func (p *PrefetchProcessor) Run(ctx context.Context, req PrefetchRequest) Prefet
 				"agent_type":      agentType,
 				"conversation_id": conversationID,
 				"workspace_id":    scopeOrDefault(req.WorkspaceID, "local_default_workspace"),
-				"project_id":      scopeOrDefault(req.ProjectID, "the-one"),
-				"repo_id":         scopeOrDefault(req.RepoID, "the-one"),
+				"project_id":      projectIDFromPayload(scopePayload),
+				"repo_id":         repoIDFromPayload(scopePayload),
+				"cwd":             strings.TrimSpace(req.WorkingDirectory),
 			},
 		},
 	})
@@ -131,8 +139,8 @@ func (p *PrefetchProcessor) Run(ctx context.Context, req PrefetchRequest) Prefet
 	ctxReq := memory.ContextRequest{
 		Task:                   truncate(normalizedTask, 1000),
 		WorkspaceID:            scopeOrDefault(req.WorkspaceID, "local_default_workspace"),
-		ProjectID:              scopeOrDefault(req.ProjectID, "the-one"),
-		RepoID:                 scopeOrDefault(req.RepoID, "the-one"),
+		ProjectID:              projectIDFromPayload(scopePayload),
+		RepoID:                 repoIDFromPayload(scopePayload),
 		SessionID:              sessionID,
 		AgentType:              agentType,
 		TokenBudget:            req.TokenBudget,

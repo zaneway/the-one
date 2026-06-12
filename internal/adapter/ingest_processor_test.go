@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -343,6 +344,36 @@ func TestObserveFromAtomicCarriesRawPayloadMetadata(t *testing.T) {
 	}
 	if req.TruncationPolicy.Truncated || req.TruncationPolicy.OriginalSizeBytes != 43 || req.TruncationPolicy.StoredSizeBytes != 43 || req.TruncationPolicy.MaxSizeBytes != 1048576 {
 		t.Fatalf("truncation = %+v, want propagated", req.TruncationPolicy)
+	}
+}
+
+func TestObserveFromAtomicDefaultsScopeFromHookWorkingDirectory(t *testing.T) {
+	rootDir := filepath.Join(t.TempDir(), "workspace-root")
+	conversationDir := filepath.Join(rootDir, "services", "inventory-service")
+	t.Setenv("THEONE_PROJECT_DIR", rootDir)
+	t.Setenv("THEONE_PROJECT_ID", "")
+	t.Setenv("THEONE_REPO_ID", "")
+
+	req, err := observeFromAtomic(IngestEnvelope{
+		Producer:  "claude_code_hook:PostToolUse",
+		AgentType: "claude_code",
+		EventType: capture.EventToolResultSummary,
+		Payload: map[string]any{
+			"workspace_id":     "ws",
+			"cwd":              conversationDir,
+			"tool_name":        "Bash",
+			"content_summary":  "【事实】go test ./... 输出 ok",
+			"raw_payload_json": `{"stdout":"ok"}`,
+			"payload_schema":   "tool_result.v1",
+			"raw_payload_hash": "sha256:tool-raw",
+			"redaction_state":  capture.RedactionStateRaw,
+		},
+	}, "sess_test", "task_test")
+	if err != nil {
+		t.Fatalf("observeFromAtomic() error = %v", err)
+	}
+	if req.ProjectID != "inventory-service" || req.RepoID != "inventory-service" {
+		t.Fatalf("scope = project_id:%q repo_id:%q, want inventory-service/inventory-service", req.ProjectID, req.RepoID)
 	}
 }
 

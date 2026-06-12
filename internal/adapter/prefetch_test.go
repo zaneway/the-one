@@ -62,6 +62,7 @@ func TestBindTaskFromPrompt(t *testing.T) {
 
 func TestPrefetchProcessorBindAndContext(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "runtime-state")
+	conversationDir := filepath.Join(t.TempDir(), "workspace-root", "services", "risk-engine")
 	b := NewSessionBinder(dir)
 	conv := "conv_prefetch_p3"
 	_, _ = b.Resolve(ResolveInput{
@@ -84,6 +85,9 @@ func TestPrefetchProcessorBindAndContext(t *testing.T) {
 			if req.SessionID != conv {
 				t.Fatalf("session_id = %q", req.SessionID)
 			}
+			if req.ProjectID != "risk-engine" || req.RepoID != "risk-engine" {
+				t.Fatalf("context scope = %q/%q, want risk-engine/risk-engine", req.ProjectID, req.RepoID)
+			}
 			return memory.ContextResponse{
 				ContextPack:      memory.ContextPack{Summary: "命中记忆"},
 				UsedMemoryIDs:    []string{"mem_x"},
@@ -95,11 +99,12 @@ func TestPrefetchProcessorBindAndContext(t *testing.T) {
 		},
 	}
 	out := p.Run(context.Background(), PrefetchRequest{
-		Task:           "实现 P3 prefetch-context",
-		ConversationID: conv,
-		AgentType:      "cursor",
-		GenerationID:   "gen_p3_001",
-		TokenBudget:    800,
+		Task:             "实现 P3 prefetch-context",
+		ConversationID:   conv,
+		AgentType:        "cursor",
+		GenerationID:     "gen_p3_001",
+		WorkingDirectory: conversationDir,
+		TokenBudget:      800,
 	})
 	if !out.OK || !out.TaskBound || contextCalls != 1 {
 		t.Fatalf("out=%+v contextCalls=%d", out, contextCalls)

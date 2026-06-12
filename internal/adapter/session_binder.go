@@ -58,6 +58,9 @@ func (b *SessionBinder) Load(agentType string) (BindingState, bool, error) {
 		}
 		return BindingState{}, false, fmt.Errorf("load binding: %w", err)
 	}
+	if len(data) == 0 {
+		return BindingState{}, false, fmt.Errorf("decode binding: empty binding file")
+	}
 	var state BindingState
 	if err := json.Unmarshal(data, &state); err != nil {
 		return BindingState{}, false, fmt.Errorf("decode binding: %w", err)
@@ -76,9 +79,43 @@ func (b *SessionBinder) Save(state BindingState) error {
 	if err != nil {
 		return fmt.Errorf("encode binding: %w", err)
 	}
-	if err := os.WriteFile(b.bindingPath(state.AgentType), data, 0o644); err != nil {
+	if err := writeFileAtomic(b.bindingPath(state.AgentType), data, 0o644); err != nil {
 		return fmt.Errorf("write binding: %w", err)
 	}
+	return nil
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	cleanup = false
 	return nil
 }
 
@@ -206,8 +243,8 @@ func (b *SessionBinder) newBindingState(agentType, externalKey, explicitTask str
 		TaskID:                defaultTaskID(agentType, explicitTask),
 		TaskFromPromptPending: explicitTask == "",
 		WorkspaceID:           stringFromPayload(env.Payload, "workspace_id"),
-		ProjectID:             stringFromPayload(env.Payload, "project_id"),
-		RepoID:                stringFromPayload(env.Payload, "repo_id"),
+		ProjectID:             projectIDFromPayload(env.Payload),
+		RepoID:                repoIDFromPayload(env.Payload),
 	}
 }
 
@@ -253,8 +290,8 @@ func (b *SessionBinder) BindTaskFromPrompt(in BindTaskFromPromptInput) (bound bo
 			TaskID:         newTaskID,
 			AgentType:      agentType,
 			WorkspaceID:    firstNonEmpty(state.WorkspaceID, "local_default_workspace"),
-			ProjectID:      firstNonEmpty(state.ProjectID, "the-one"),
-			RepoID:         firstNonEmpty(state.RepoID, "the-one"),
+			ProjectID:      firstNonEmpty(state.ProjectID, defaultProjectID()),
+			RepoID:         firstNonEmpty(state.RepoID, defaultRepoID()),
 			EventType:      capture.EventTaskStart,
 			SourceChannel:  capture.SourceChannelAgentSession,
 			Actor:          capture.ActorAdapter,
