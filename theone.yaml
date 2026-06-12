@@ -9,7 +9,7 @@ storage:
 
   # SQLite 数据库文件路径，支持 ~ 展开
   # 环境变量: THEONE_DB_PATH (优先级高于 data-dir)
-  path: "~/.theone/memory.db"
+  #   path: "~/.theone/memory.db"
 
   # sqlite-vec 向量索引能力探测
   # auto: 自动检测 | true: 强制启用 | false: 强制禁用
@@ -36,7 +36,7 @@ logging:
 
   # 日志文件路径，支持 ~ 展开
   # 环境变量: THEONE_LOG_PATH
-  path: "~/.theone/logs/theone.log"
+  #   path: "~/.theone/logs/theone.log"
 
 # ── 记忆配置 ──────────────────────────────────────────────
 #  默认身份和工作区，内容边界限制
@@ -68,6 +68,11 @@ adapter:
   max_inject_chars: 4000
   # beforeSubmitPrompt 写入 prompt-cache 的用户摘要最大字符数
   prompt_cache_user_summary_max_chars: 3000
+  # ingest 平面不写 raw_event 的事件类型；省略时使用内置默认
+  suppress_raw_event_types:
+    - session.start
+    - tool.result.summary
+    - file.edit.summary
 
 # ── 捕获配置 ──────────────────────────────────────────────
 capture:
@@ -144,7 +149,7 @@ processor:
     # 国内密钥（platform.minimaxi.com）用 api.minimaxi.com；国际密钥（platform.minimax.io）用 api.minimax.io
     #      model: "MiniMax-M3"
     base_url: "https://api.minimaxi.com/v1"
-    api_key: "sk-cp-Lvtc6XhNZeEIf662SI"
+    api_key: "sk-cp-62SI"
     timeout_ms: 120000
     max_output_tokens: 30000
     # 可选：覆盖 evidence 抽取提示词；留空使用内置默认值
