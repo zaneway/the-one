@@ -92,7 +92,6 @@ Hook 运行时通过此文件定位 `bin/theone` 与 `theone.yaml`。**发布包
         "PROJECT_DIR/.theone-data"
       ],
       "env": {
-        "THEONE_DISABLE_PID": "1",
         "THEONE_LOG_PATH": "PROJECT_DIR/.theone-data/logs/theone.log"
       }
     }
@@ -107,7 +106,7 @@ Hook 运行时通过此文件定位 `bin/theone` 与 `theone.yaml`。**发布包
 | Name | `theone` |
 | Command | `PACKAGE_DIR/bin/theone` |
 | Args | `serve`、`-config`、`PACKAGE_DIR/theone.yaml`、`-data-dir`、`PROJECT_DIR/.theone-data` |
-| Env | `THEONE_DISABLE_PID=1`，`THEONE_LOG_PATH=PROJECT_DIR/.theone-data/logs/theone.log` |
+| Env | `THEONE_LOG_PATH=PROJECT_DIR/.theone-data/logs/theone.log`（可选；省略时日志默认写入数据目录） |
 
 ### 2.2 启用 MCP
 

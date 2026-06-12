@@ -124,7 +124,7 @@ required = false
         "hooks": [
           {
             "type": "command",
-            "command": ".theone-data/drivers/codex/hooks/theone-session-start.sh",
+            "command": "~/.theone-data/drivers/codex/hooks/theone-session-start.sh",
             "timeout": 30
           }
         ]
@@ -135,7 +135,7 @@ required = false
         "hooks": [
           {
             "type": "command",
-            "command": ".theone-data/drivers/codex/hooks/theone-user-prompt-submit.sh",
+            "command": "~/.theone-data/drivers/codex/hooks/theone-user-prompt-submit.sh",
             "timeout": 45
           }
         ]
@@ -147,7 +147,7 @@ required = false
         "hooks": [
           {
             "type": "command",
-            "command": ".theone-data/drivers/codex/hooks/theone-post-tool-use.sh",
+            "command": "~/.theone-data/drivers/codex/hooks/theone-post-tool-use.sh",
             "timeout": 30
           }
         ]
@@ -158,7 +158,7 @@ required = false
         "hooks": [
           {
             "type": "command",
-            "command": ".theone-data/drivers/codex/hooks/theone-stop.sh",
+            "command": "~/.theone-data/drivers/codex/hooks/theone-stop.sh",
             "timeout": 60
           }
         ]

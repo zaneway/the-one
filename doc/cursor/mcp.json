@@ -10,7 +10,6 @@
         "__THEONE_PROJECT__/.theone-data"
       ],
       "env": {
-        "THEONE_DISABLE_PID": "1",
         "THEONE_LOG_PATH": "__THEONE_PROJECT__/.theone-data/logs/theone.log"
       }
     }

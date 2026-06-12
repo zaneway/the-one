@@ -88,7 +88,6 @@ Claude Code 使用项目根 **`PROJECT_DIR/.mcp.json`** 注册 MCP server。
         "PROJECT_DIR/.theone-data"
       ],
       "env": {
-        "THEONE_DISABLE_PID": "1",
         "THEONE_LOG_PATH": "PROJECT_DIR/.theone-data/logs/theone.log"
       }
     }
@@ -134,7 +133,7 @@ Claude Code 的 Hook 配置写在 **`PROJECT_DIR/.claude/settings.json`** 的 `h
         "hooks": [
           {
             "type": "command",
-            "command": "PROJECT_DIR/.theone-data/drivers/claude_code/hooks/theone-session-start.sh",
+            "command": "/Users/zaneway/.theone-data/drivers/claude_code/hooks/theone-session-start.sh",
             "timeout": 30
           }
         ]
@@ -145,7 +144,7 @@ Claude Code 的 Hook 配置写在 **`PROJECT_DIR/.claude/settings.json`** 的 `h
         "hooks": [
           {
             "type": "command",
-            "command": "PROJECT_DIR/.theone-data/drivers/claude_code/hooks/theone-user-prompt-submit.sh",
+            "command": "/Users/zaneway/.theone-data/drivers/claude_code/hooks/theone-user-prompt-submit.sh",
             "timeout": 45
           }
         ]
@@ -157,7 +156,7 @@ Claude Code 的 Hook 配置写在 **`PROJECT_DIR/.claude/settings.json`** 的 `h
         "hooks": [
           {
             "type": "command",
-            "command": "PROJECT_DIR/.theone-data/drivers/claude_code/hooks/theone-post-tool-use.sh",
+            "command": "/Users/zaneway/.theone-data/drivers/claude_code/hooks/theone-post-tool-use.sh",
             "timeout": 30
           }
         ]
@@ -168,7 +167,7 @@ Claude Code 的 Hook 配置写在 **`PROJECT_DIR/.claude/settings.json`** 的 `h
         "hooks": [
           {
             "type": "command",
-            "command": "PROJECT_DIR/.theone-data/drivers/claude_code/hooks/theone-post-tool-use-failure.sh",
+            "command": "/Users/zaneway/.theone-data/drivers/claude_code/hooks/theone-post-tool-use-failure.sh",
             "timeout": 30
           }
         ]
@@ -179,7 +178,7 @@ Claude Code 的 Hook 配置写在 **`PROJECT_DIR/.claude/settings.json`** 的 `h
         "hooks": [
           {
             "type": "command",
-            "command": "PROJECT_DIR/.theone-data/drivers/claude_code/hooks/theone-stop.sh",
+            "command": "/Users/zaneway/.theone-data/drivers/claude_code/hooks/theone-stop.sh",
             "timeout": 60
           }
         ]
@@ -190,7 +189,7 @@ Claude Code 的 Hook 配置写在 **`PROJECT_DIR/.claude/settings.json`** 的 `h
         "hooks": [
           {
             "type": "command",
-            "command": "PROJECT_DIR/.theone-data/drivers/claude_code/hooks/theone-session-end.sh",
+            "command": "/Users/zaneway/.theone-data/drivers/claude_code/hooks/theone-session-end.sh",
             "timeout": 10
           }
         ]

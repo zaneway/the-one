@@ -346,7 +346,7 @@ type IngestEventItem struct {
 | kind | 含义 | 展开为 `ObserveRequest` |
 |------|------|-------------------------|
 | `session.lifecycle` | `session.start` / `session.end` | 各 1 条，不经 `TurnRuntime` 回合逻辑 |
-| `turn.completed` | 一轮对话结束 | `conversation.message` + `agent.response.summary`（+ 可选 task/decision/task.result） |
+| `turn.completed` | 一轮对话结束 | 单条 `turn.completed` raw_event（+ 可选 task/decision/task.result），不要拆成 `conversation.message` + `agent.response.summary` |
 | `capture.atomic` | 增量事实 | **仅**对应 `event_type`（如 `tool.result.summary`、`file.edit.summary`），**禁止**附带占位 user 消息 |
 
 **载荷形状约束**：
