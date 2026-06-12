@@ -187,7 +187,7 @@ make build
 bin/theone serve --data-dir /tmp/theone
 ```
 
-默认日志会同时输出到终端 stderr 和 `~/.theone/logs/theone.log`。如需自定义路径，可在 `theone.yaml` 中设置 `logging.path`，或通过环境变量 `THEONE_LOG_PATH` 覆盖。服务启动时还会把当前进程号写入 `~/.theone/theone.pid`，重启后会自动覆盖为新的 PID。
+默认日志会同时输出到终端 stderr 和数据目录下的 `logs/theone.log`。如需自定义路径，可在 `theone.yaml` 中设置 `logging.path`，或通过环境变量 `THEONE_LOG_PATH` 覆盖。
 
 健康检查：
 
@@ -303,8 +303,7 @@ claude mcp add --transport stdio theone -- \
 
 - 能看到 `theone` 暴露的 MCP tools。
 - 能成功调用 `memory.health` 或 `memory.status`。
-- 本地生成或更新 `~/.theone/theone.pid`。
-- 日志文件 `~/.theone/logs/theone.log` 中出现启动记录。
+- 数据目录下的 `logs/theone.log` 中出现启动记录。
 
 ### 验收
 
