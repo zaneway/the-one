@@ -61,6 +61,9 @@ PROJECT_DIR/
 ```bash
 THEONE_PACKAGE_DIR="/绝对路径/到/PACKAGE_DIR"
 THEONE_PROJECT_DIR="/绝对路径/到/PROJECT_DIR"
+# 可选：默认从 Hook payload 中的当前工作目录名推导；THEONE_PROJECT_DIR 仅作兜底
+# THEONE_PROJECT_ID="my-project"
+# THEONE_REPO_ID="my-project"
 ```
 
 发布包路径变更后须同步更新此文件与 MCP 配置。
@@ -222,7 +225,7 @@ Claude Code 的 Hook 配置写在 **`PROJECT_DIR/.claude/settings.json`** 的 `h
 
 1. 打开发布包内 `doc/claude/CLAUDE.md`。
 2. 将 **「The One 记忆」整节** 复制到项目根 `CLAUDE.md`（不存在则新建）。
-3. 修改 `project_id` / `repo_id` 为实际项目名。
+3. `project_id` / `repo_id` 默认从 Hook payload 中的当前对话工作目录名推导；如需覆盖，可在 `.theone-data/theone-install.env` 或 Hook 环境中设置 `THEONE_PROJECT_ID` / `THEONE_REPO_ID`。
 4. 与已有 `CLAUDE.md` 内容并存时，追加在文末即可。
 
 ### 4.2 记忆注入面（初始占位）

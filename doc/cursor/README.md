@@ -65,6 +65,9 @@ PROJECT_DIR/
 ```bash
 THEONE_PACKAGE_DIR="/绝对路径/到/PACKAGE_DIR"
 THEONE_PROJECT_DIR="/绝对路径/到/PROJECT_DIR"
+# 可选：默认从 Hook payload 中的当前工作目录名推导；THEONE_PROJECT_DIR 仅作兜底
+# THEONE_PROJECT_ID="my-project"
+# THEONE_REPO_ID="my-project"
 ```
 
 Hook 运行时通过此文件定位 `bin/theone` 与 `theone.yaml`。**发布包移动位置后须更新此文件**，并同步更新下文 MCP 配置中的路径。
@@ -200,7 +203,7 @@ Cursor 通过 **项目 Rules** 引导 Agent 在高价值场景主动调用 `memo
    ```text
    PROJECT_DIR/.cursor/rules/theone-memory-observe.mdc
    ```
-3. 按你的项目修改 Rule 中的 `project_id`、`repo_id`（默认示例为 `the-one`）。
+3. `project_id` / `repo_id` 默认从 Hook payload 中的当前对话工作目录名推导；如需覆盖，可在 `.theone-data/theone-install.env` 或 Hook 环境中设置 `THEONE_PROJECT_ID` / `THEONE_REPO_ID`。
 
 在 **Cursor Settings → Rules** 中应能看到该 Rule，且为 **Always Apply**。
 

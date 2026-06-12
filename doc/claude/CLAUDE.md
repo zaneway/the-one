@@ -9,7 +9,7 @@
 |------|-----|
 | `agent_type` | `claude_code` |
 | `workspace_id` | `local_default_workspace` |
-| `project_id` / `repo_id` | `the-one`（按实际项目修改） |
+| `project_id` / `repo_id` | 默认取 Hook payload 中当前对话工作目录名；可用 `THEONE_PROJECT_ID` / `THEONE_REPO_ID` 覆盖 |
 | `source_channel` | `agent_session` |
 | `session_id` | Hook `SessionStart` 后 binding 中的 `session_id`（与 Claude `session_id` 同值） |
 | `task_id` | prefetch 后 binding 中的 `task_id` |

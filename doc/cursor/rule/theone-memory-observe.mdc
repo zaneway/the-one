@@ -21,8 +21,8 @@ alwaysApply: true
 |------|-----|
 | `agent_type` | `cursor` |
 | `workspace_id` | `local_default_workspace` |
-| `project_id` | `the-one` |
-| `repo_id` | `the-one` |
+| `project_id` | 默认取 Hook payload 中当前对话工作目录名；可用 `THEONE_PROJECT_ID` 覆盖 |
+| `repo_id` | 默认同 `project_id`；可用 `THEONE_REPO_ID` 覆盖 |
 | `source_channel` | `agent_session` |
 | `session_id` | Hook 建立的 binding 中的值；手动调用时可自命名 `sess_cursor_<YYYYMMDD>_<topic>` |
 | `task_id` | Hook 建立的 task 值；手动调用时可用 `task_<topic>`，全线程不变 |
@@ -39,7 +39,7 @@ alwaysApply: true
 | `actor` | `user` / `agent` / `tool` / `adapter` |
 | `agent_type` | `cursor` |
 | `workspace_id` | `local_default_workspace` |
-| `project_id` / `repo_id` | `the-one` |
+| `project_id` / `repo_id` | 默认取 Hook payload 中当前对话工作目录名；必要时用 `THEONE_PROJECT_ID` / `THEONE_REPO_ID` 覆盖 |
 | `source_channel` | `agent_session` |
 | `content_summary` | 非空结构化索引卡，建议 200-800 字，硬上限 6000 |
 
