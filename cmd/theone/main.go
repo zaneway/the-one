@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -66,7 +65,6 @@ func run(args []string) error {
 			return err
 		}
 		defer runtime.Close()
-		tryWritePIDFile(os.Getpid())
 		//启动 MCP：当前只支持 stdio 传输，通过 stdin/stdout 与 Agent 通信
 		return runtime.Serve(ctx)
 	case "health":
@@ -190,45 +188,6 @@ func statusIncludeConfig(args []string) bool {
 		return false
 	}
 	return *includeConfig
-}
-
-func tryWritePIDFile(pid int) {
-	// Cursor MCP 进程经常运行在受限环境（例如禁止写 $HOME），此时 PID 文件并非必需。
-	// 通过环境变量允许显式关闭 PID 写入，避免启动直接失败或产生噪声告警。
-	if os.Getenv("THEONE_DISABLE_PID") == "1" {
-		return
-	}
-	if err := writePIDFile(pid); err != nil {
-		slog.Warn("write pid file failed", "error", err)
-	}
-}
-
-// writePIDFile 把 theone 进程 PID 写入 ~/.theone/theone.pid。
-// 入参：pid（当前进程 PID）。
-// 返回：写入过程中任意步骤的错误，由 tryWritePIDFile 转为 warn 日志。
-// 设计约束：父目录自动创建，文件权限 0o644。
-func writePIDFile(pid int) error {
-	path, err := pidFilePath()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("write pid file: create dir: %w", err)
-	}
-	if err := os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
-		return fmt.Errorf("write pid file: %w", err)
-	}
-	return nil
-}
-
-// pidFilePath 拼出 PID 文件的绝对路径：$HOME/.theone/theone.pid。
-// 解析 home 失败时把错误向上抛，由调用方决定是否降级为 warn。
-func pidFilePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve pid file home dir: %w", err)
-	}
-	return filepath.Join(home, ".theone", "theone.pid"), nil
 }
 
 // callLocalTool 为 health/status 子命令提供本地工具调用能力。
