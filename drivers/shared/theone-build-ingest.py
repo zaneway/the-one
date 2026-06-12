@@ -38,6 +38,7 @@ load_inject_cache = _runtime.load_inject_cache
 format_structured_content_summary = _runtime.format_structured_content_summary
 facts_from_text = _runtime.facts_from_text
 keywords_from_text = _runtime.keywords_from_text
+project_scope_ids = _runtime.project_scope_ids
 
 SEMANTIC_SUMMARY_VERSION = "semantic_digest_v1"
 RAW_PAYLOAD_MAX_CHARS = int(os.environ.get("THEONE_RAW_PAYLOAD_MAX_CHARS") or "1048576")
@@ -66,12 +67,13 @@ def _envelope_base(session_id: str, producer: str) -> dict:
     }
 
 
-def _scope_payload(session_id: str, task_id: str, turn_id: str = "") -> dict:
+def _scope_payload(session_id: str, task_id: str, turn_id: str = "", source: dict | None = None) -> dict:
+    project_id, repo_id = project_scope_ids(source)
     payload = {
         "agent_type": AGENT_TYPE,
         "workspace_id": "local_default_workspace",
-        "project_id": "the-one",
-        "repo_id": "the-one",
+        "project_id": project_id,
+        "repo_id": repo_id,
         "conversation_id": session_id,
         "task_id": task_id,
     }
@@ -154,6 +156,8 @@ def normalize_claude_post_tool(data: dict) -> dict:
     event = pick(data, ["hook_event_name", "hookEventName"], "")
     is_failure = event == "PostToolUseFailure"
     out: dict = {"session_id": session_id}
+    if cwd := pick(data, list(_runtime.CURRENT_DIRECTORY_KEYS), ""):
+        out["cwd"] = cwd
     if tool in CLAUDE_FILE_TOOLS:
         fp = pick(ti, ["file_path", "filePath"], pick(tr, ["filePath", "file_path"], "unknown_file"))
         out.update(
@@ -198,14 +202,65 @@ def normalize_claude_post_tool(data: dict) -> dict:
 
 
 def normalize_claude_stop(data: dict) -> dict:
-    return {
+    response = pick(data, ["last_assistant_message", "lastAssistantMessage"], "")
+    if not response:
+        response = _last_assistant_message_from_transcript(
+            pick(data, ["transcript_path", "transcriptPath"], "")
+        )
+    out = {
         "session_id": pick(data, ["session_id", "sessionId"]),
-        "response": pick(
-            data,
-            ["last_assistant_message", "lastAssistantMessage"],
-            "Claude 已完成本轮响应",
-        ),
+        "response": response or "Claude 已完成本轮响应",
     }
+    if cwd := pick(data, list(_runtime.CURRENT_DIRECTORY_KEYS), ""):
+        out["cwd"] = cwd
+    return out
+
+
+def _message_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = pick(item, ["text", "content"], "")
+                if text:
+                    parts.append(text)
+        return "\n".join(parts)
+    if isinstance(value, dict):
+        return _message_text(value.get("content", ""))
+    return ""
+
+
+def _last_assistant_message_from_transcript(path: str) -> str:
+    if not path or not os.path.isfile(path):
+        return ""
+    last = ""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                message = item.get("message") if isinstance(item.get("message"), dict) else {}
+                role = pick(item, ["role"], pick(message, ["role"], ""))
+                event_type = pick(item, ["type"], "")
+                if role != "assistant" and event_type != "assistant":
+                    continue
+                text = _message_text(message.get("content", item.get("content", ""))).strip()
+                if text:
+                    last = text
+    except Exception:
+        return ""
+    return last
 
 
 def _json_brief(value: object, max_chars: int = 200) -> str:
@@ -259,6 +314,8 @@ def normalize_codex_post_tool(data: dict) -> dict:
         "raw_tool_input": ti_dict if ti_dict else ti,
         "raw_tool_response": tr_dict if tr_dict else tr,
     }
+    if cwd := pick(data, list(_runtime.CURRENT_DIRECTORY_KEYS), ""):
+        out["cwd"] = cwd
     if tool in CODEX_FILE_TOOLS:
         files = _extract_apply_patch_files(command)
         out.update(
@@ -272,7 +329,7 @@ def normalize_codex_post_tool(data: dict) -> dict:
 
 
 def normalize_codex_stop(data: dict) -> dict:
-    return {
+    out = {
         "session_id": pick(data, ["session_id", "sessionId", "conversation_id", "conversationId"]),
         "turn_id": pick(data, ["turn_id", "turnId"]),
         "response": pick(
@@ -281,6 +338,9 @@ def normalize_codex_stop(data: dict) -> dict:
             "Codex 已完成本轮响应",
         ),
     }
+    if cwd := pick(data, list(_runtime.CURRENT_DIRECTORY_KEYS), ""):
+        out["cwd"] = cwd
+    return out
 
 
 def build_atomic_file(
@@ -314,7 +374,7 @@ def build_atomic_file(
     )
     turn_id = build_turn_id(session_id, file_path, datetime.now().strftime("%Y%m%d%H%M%S"))
     env = _envelope_base(session_id, _producer(producer_suffix))
-    payload = _scope_payload(session_id, task_id, turn_id)
+    payload = _scope_payload(session_id, task_id, turn_id, hook_data)
     payload.update(
         {
             "content_summary": content_summary,
@@ -380,7 +440,7 @@ def build_atomic_tool(
     )
     turn_id = build_turn_id(session_id, tool_name, input_summary, output_summary, datetime.now().strftime("%Y%m%d%H%M%S"))
     env = _envelope_base(session_id, _producer(producer_suffix))
-    payload = _scope_payload(session_id, task_id, turn_id)
+    payload = _scope_payload(session_id, task_id, turn_id, hook_data)
     payload.update(
         {
             "tool_name": tool_name,
@@ -476,7 +536,7 @@ def build_turn_agent(
     stamp = datetime.now().strftime("%Y%m%d%H%M%S")
     turn_id = build_turn_id(session_id, user_summary, response, stamp)
     env = _envelope_base(session_id, _producer(producer_suffix))
-    payload = _scope_payload(session_id, task_id, turn_id)
+    payload = _scope_payload(session_id, task_id, turn_id, hook_data)
     payload.update(
         {
             "user_summary": structured_user_summary,

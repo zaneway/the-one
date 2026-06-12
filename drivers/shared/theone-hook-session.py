@@ -28,6 +28,7 @@ _rt = _load_runtime()
 pick = _rt.pick
 runtime_cache_name = _rt.runtime_cache_name
 format_structured_content_summary = _rt.format_structured_content_summary
+project_scope_ids = _rt.project_scope_ids
 
 
 def _read_stdin_json() -> dict:
@@ -82,6 +83,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         producer = "cursor_hook:sessionStart"
 
     task_id = pick(data, ["task_id", "taskId"], default_task)
+    project_id, repo_id = project_scope_ids(data)
     content_summary, _ = format_structured_content_summary(
         "session.start",
         f"会话生命周期：{content}",
@@ -100,8 +102,8 @@ def cmd_start(args: argparse.Namespace) -> int:
                 "payload": {
                     "agent_type": agent,
                     "workspace_id": "local_default_workspace",
-                    "project_id": "the-one",
-                    "repo_id": "the-one",
+                    "project_id": project_id,
+                    "repo_id": repo_id,
                     "conversation_id": session_id,
                     "content_summary": content_summary,
                     "capture_capabilities": {

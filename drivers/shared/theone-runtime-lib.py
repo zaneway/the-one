@@ -181,6 +181,50 @@ def keywords_from_text(text: str, max_items: int = 6) -> list[str]:
     return out
 
 
+CURRENT_DIRECTORY_KEYS = (
+    "cwd",
+    "current_working_directory",
+    "currentWorkingDirectory",
+    "working_directory",
+    "workingDirectory",
+    "workspace_dir",
+    "workspaceDir",
+)
+
+
+def _dir_basename(value: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    name = os.path.basename(os.path.abspath(value))
+    if name and name not in {".", os.sep}:
+        return name
+    return ""
+
+
+def _project_dir_name(source: dict[str, Any] | None = None) -> str:
+    source = source if isinstance(source, dict) else {}
+    for key in CURRENT_DIRECTORY_KEYS:
+        if name := _dir_basename(source.get(key, "")):
+            return name
+    name = os.path.basename(os.getcwd())
+    if name:
+        return name
+    for key in ("THEONE_PROJECT_DIR", "ROOT_DIR"):
+        if name := _dir_basename(os.environ.get(key, "")):
+            return name
+    value = os.environ.get("PWD", "").strip()
+    if name := _dir_basename(value):
+        return name
+    return "default_project"
+
+
+def project_scope_ids(source: dict[str, Any] | None = None) -> tuple[str, str]:
+    project_id = os.environ.get("THEONE_PROJECT_ID", "").strip() or _project_dir_name(source)
+    repo_id = os.environ.get("THEONE_REPO_ID", "").strip() or project_id
+    return project_id, repo_id
+
+
 def format_structured_content_summary(
     event_type: str,
     primary: str,

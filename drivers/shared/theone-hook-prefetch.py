@@ -26,6 +26,7 @@ def _load_runtime():
 
 _rt = _load_runtime()
 pick = _rt.pick
+project_scope_ids = _rt.project_scope_ids
 
 DEFAULT_PROMPT_CACHE_USER_SUMMARY_MAX_CHARS = 3000
 
@@ -95,6 +96,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     turn_id = ""
     if generation_id:
         turn_id = "turn_" + generation_id
+    project_id, repo_id = project_scope_ids(data)
 
     cache_payload = {
         "user_summary": user_summary,
@@ -112,8 +114,8 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     prefetch = {
         "task": user_summary,
         "workspace_id": "local_default_workspace",
-        "project_id": "the-one",
-        "repo_id": "the-one",
+        "project_id": project_id,
+        "repo_id": repo_id,
         "session_id": conversation_id,
         "conversation_id": conversation_id,
         "generation_id": generation_id,

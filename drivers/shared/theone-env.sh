@@ -41,6 +41,8 @@ if [[ -n "${THEONE_DATA_DIR:-}" ]]; then
 fi
 
 export ROOT_DIR DATA_DIR
+THEONE_PROJECT_DIR="${THEONE_PROJECT_DIR:-${ROOT_DIR}}"
+export THEONE_PROJECT_DIR
 STATE_DIR="${DATA_DIR}/runtime-state"
 BUILD_INGEST_SCRIPT="${SHARED_DIR}/theone-build-ingest.py"
 

@@ -83,8 +83,8 @@ second = json.loads(sys.argv[2])
 ledger_path = pathlib.Path(sys.argv[3])
 binding_path = pathlib.Path(sys.argv[4])
 
-if first.get("accepted", 0) < 1:
-    raise SystemExit(f"[p0-ingest] first accepted={first.get('accepted')}, want >=1")
+if first.get("suppressed", 0) < 1:
+    raise SystemExit(f"[p0-ingest] first suppressed={first.get('suppressed')}, want >=1 (file.edit.summary default suppressed)")
 if second.get("deduped", 0) < 1:
     raise SystemExit(f"[p0-ingest] second deduped={second.get('deduped')}, want >=1")
 if not ledger_path.is_file():

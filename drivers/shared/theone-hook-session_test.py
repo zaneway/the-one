@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,39 @@ class HookSessionTest(unittest.TestCase):
             )
 
             self.assertEqual(proc.stdout, "")
+
+    def test_start_derives_project_and_repo_from_hook_cwd(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            project_root = tmp_path / "workspace-root"
+            conversation_dir = project_root / "services" / "order-service"
+            conversation_dir.mkdir(parents=True)
+            env = dict(os.environ)
+            env.pop("THEONE_PROJECT_ID", None)
+            env.pop("THEONE_REPO_ID", None)
+            env["THEONE_PROJECT_DIR"] = str(project_root)
+            env.pop("ROOT_DIR", None)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "start",
+                    "--agent",
+                    "claude_code",
+                ],
+                input=json.dumps({"session_id": "sess_order", "cwd": str(conversation_dir)}),
+                text=True,
+                capture_output=True,
+                check=True,
+                cwd=project_root,
+                env=env,
+            )
+
+            envelope = json.loads(proc.stdout)
+            payload = envelope["events"][0]["payload"]
+            self.assertEqual(payload["project_id"], "order-service")
+            self.assertEqual(payload["repo_id"], "order-service")
 
 
 if __name__ == "__main__":

@@ -46,25 +46,23 @@ ingest <<'JSON' >/dev/null
 }
 JSON
 
-echo "[p2-v2] atomic file edit"
+echo "[p2-v2] atomic agent.decision"
 OUT_FILE="$(ingest <<'JSON'
 {
   "ingest_id": "ing_p2_file_1",
   "protocol_version": "v1",
-  "producer": "cursor_hook:afterFileEdit",
+  "producer": "cursor_hook:afterAgentResponse",
   "agent_type": "cursor",
   "session_id": "conv_p2_v2",
   "events": [{
     "kind": "capture.atomic",
-    "event_type": "file.edit.summary",
+    "event_type": "agent.decision",
     "payload": {
       "agent_type": "cursor",
       "workspace_id": "local_default_workspace",
       "project_id": "the-one",
       "repo_id": "the-one",
-      "file_path": "internal/adapter/kind.go",
-      "change_type": "modify",
-      "content_summary": "p2 atomic file once"
+      "content_summary": "【结论/决策】p2 atomic decision once"
     }
   }]
 }
@@ -72,25 +70,23 @@ JSON
 )"
 echo "${OUT_FILE}"
 
-echo "[p2-v2] atomic file retry (atomic-dedup)"
+echo "[p2-v2] atomic agent.decision retry (atomic-dedup)"
 OUT_FILE2="$(ingest <<'JSON'
 {
   "ingest_id": "ing_p2_file_2",
   "protocol_version": "v1",
-  "producer": "cursor_hook:afterFileEdit",
+  "producer": "cursor_hook:afterAgentResponse",
   "agent_type": "cursor",
   "session_id": "conv_p2_v2",
   "events": [{
     "kind": "capture.atomic",
-    "event_type": "file.edit.summary",
+    "event_type": "agent.decision",
     "payload": {
       "agent_type": "cursor",
       "workspace_id": "local_default_workspace",
       "project_id": "the-one",
       "repo_id": "the-one",
-      "file_path": "internal/adapter/kind.go",
-      "change_type": "modify",
-      "content_summary": "p2 atomic file once"
+      "content_summary": "【结论/决策】p2 atomic decision once"
     }
   }]
 }
@@ -135,9 +131,9 @@ turn = json.loads(sys.argv[3])
 dedup_path = pathlib.Path(sys.argv[4])
 
 if first.get("accepted", 0) < 1:
-    raise SystemExit(f"[p2-v2] first file accepted={first.get('accepted')}")
+    raise SystemExit(f"[p2-v2] first atomic accepted={first.get('accepted')}")
 if second.get("deduped", 0) < 1:
-    raise SystemExit(f"[p2-v2] second file deduped={second.get('deduped')}, want atomic-dedup")
+    raise SystemExit(f"[p2-v2] second atomic deduped={second.get('deduped')}, want atomic-dedup")
 if turn.get("accepted", 0) < 2:
     raise SystemExit(f"[p2-v2] turn accepted={turn.get('accepted')}, want user+agent")
 if not dedup_path.is_file():

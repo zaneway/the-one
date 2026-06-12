@@ -13,7 +13,15 @@ SCRIPT = Path(__file__).with_name("theone-build-ingest.py")
 
 
 class BuildIngestProducerTest(unittest.TestCase):
-    def run_builder_stdout(self, mode: str, payload: dict, agent_type: str, prompt_cache_data: Optional[dict] = None) -> str:
+    def run_builder_stdout(
+        self,
+        mode: str,
+        payload: dict,
+        agent_type: str,
+        prompt_cache_data: Optional[dict] = None,
+        cwd: Optional[Path] = None,
+        env_overrides: Optional[dict] = None,
+    ) -> str:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             prompt_cache = tmp_path / "prompt-cache.json"
@@ -28,6 +36,12 @@ class BuildIngestProducerTest(unittest.TestCase):
             )
             env = dict(os.environ)
             env["THEONE_AGENT_TYPE"] = agent_type
+            if env_overrides:
+                for key, value in env_overrides.items():
+                    if value is None:
+                        env.pop(key, None)
+                    else:
+                        env[key] = str(value)
             proc = subprocess.run(
                 [
                     sys.executable,
@@ -43,12 +57,21 @@ class BuildIngestProducerTest(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 env=env,
+                cwd=str(cwd) if cwd else None,
                 check=True,
             )
             return proc.stdout
 
-    def run_builder(self, mode: str, payload: dict, agent_type: str, prompt_cache_data: Optional[dict] = None) -> dict:
-        return json.loads(self.run_builder_stdout(mode, payload, agent_type, prompt_cache_data))
+    def run_builder(
+        self,
+        mode: str,
+        payload: dict,
+        agent_type: str,
+        prompt_cache_data: Optional[dict] = None,
+        cwd: Optional[Path] = None,
+        env_overrides: Optional[dict] = None,
+    ) -> dict:
+        return json.loads(self.run_builder_stdout(mode, payload, agent_type, prompt_cache_data, cwd, env_overrides))
 
     def test_claude_non_file_post_tool_records_raw_payload(self):
         envelope = self.run_builder(
@@ -169,6 +192,71 @@ class BuildIngestProducerTest(unittest.TestCase):
         payload = envelope["events"][0]["payload"]
         self.assertEqual(payload["user_prompt_chars"], 4096)
         self.assertNotIn("user_prompt_hash", payload)
+
+    def test_turn_agent_derives_project_and_repo_from_hook_cwd(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "workspace-root"
+            conversation_dir = project_root / "services" / "billing-api"
+            conversation_dir.mkdir(parents=True)
+            envelope = self.run_builder(
+                "turn-agent",
+                {
+                    "conversation_id": "sess_test",
+                    "cwd": str(conversation_dir),
+                    "prompt": "学习当前项目",
+                    "response": "结论：项目名应来自当前工作目录。",
+                },
+                "claude_code",
+                cwd=project_root,
+                env_overrides={
+                    "THEONE_PROJECT_DIR": str(project_root),
+                    "THEONE_PROJECT_ID": None,
+                    "THEONE_REPO_ID": None,
+                    "ROOT_DIR": None,
+                },
+            )
+
+        payload = envelope["events"][0]["payload"]
+        self.assertEqual(payload["project_id"], "billing-api")
+        self.assertEqual(payload["repo_id"], "billing-api")
+
+    def test_claude_stop_falls_back_to_transcript_last_assistant_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "transcript.jsonl"
+            transcript.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"type": "user", "message": {"content": "学习当前项目"}}, ensure_ascii=False),
+                        json.dumps(
+                            {
+                                "type": "assistant",
+                                "message": {
+                                    "content": [
+                                        {"type": "text", "text": "第一段结论。"},
+                                        {"type": "text", "text": "第二段细节。"},
+                                    ]
+                                },
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            envelope = self.run_builder(
+                "turn-agent",
+                {
+                    "session_id": "sess_test",
+                    "hook_event_name": "Stop",
+                    "transcript_path": str(transcript),
+                },
+                "claude_code",
+                {"session_id": "sess_test", "task_id": "task_test", "user_summary": "学习当前项目"},
+            )
+
+        payload = envelope["events"][0]["payload"]
+        self.assertEqual(json.loads(payload["agent_raw_payload"])["response"], "第一段结论。\n第二段细节。")
+        self.assertEqual(payload["agent_response_chars"], len("第一段结论。\n第二段细节。"))
 
 
 if __name__ == "__main__":
