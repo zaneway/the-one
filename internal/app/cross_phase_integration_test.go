@@ -30,7 +30,7 @@ func TestAppCrossPhaseObserveToSearchAndContext(t *testing.T) {
 		ProjectID:      "project_chain",
 		AgentType:      "codex",
 		Actor:          capture.ActorUser,
-		ContentSummary: "项目要求 retrieval 联动验收必须覆盖 memory.observe、automation worker、admission、memory.search 和 memory.context 的端到端链路。",
+		ContentSummary: "【结论/决策】项目要求 retrieval 联动验收必须覆盖 memory.observe、automation worker、admission、memory.search 和 memory.context 的端到端链路。",
 		Keywords:       []string{"retrieval", "联动", "memory.observe", "worker", "admission", "memory.search", "memory.context"},
 		ContentHash:    "sha256:cross-phase-observe-search-context",
 	})
@@ -145,7 +145,7 @@ func TestAppCrossPhaseUserCorrectionOverwritesAndSearches(t *testing.T) {
 		ProjectID:      "project_chain",
 		AgentType:      "codex",
 		Actor:          capture.ActorUser,
-		ContentSummary: "纠正：当前链路数据库使用 PostgreSQL。",
+		ContentSummary: "【事实】纠正：当前链路数据库使用 PostgreSQL。",
 		Keywords:       []string{"数据库", "PostgreSQL", "纠正"},
 		SourceRefs: []capture.SourceRef{{
 			"target_memory_id":    oldID,
@@ -227,7 +227,7 @@ func TestAppCrossPhaseReviewCheckpointObservedAndRetrievable(t *testing.T) {
 		ProjectID:      "project_chain",
 		AgentType:      "codex",
 		Actor:          capture.ActorAgent,
-		ContentSummary: "retrieval 详细设计复查完成，已确认 memory、capture、automation、retrieval 联动验收需要保留 checkpoint。",
+		ContentSummary: "【结论/决策】retrieval 详细设计复查完成，已确认 memory、capture、automation、retrieval 联动验收需要保留 checkpoint。",
 		Keywords:       []string{"retrieval", "详细设计", "复查", "checkpoint", "联动验收"},
 		SourceRefs: []capture.SourceRef{{
 			"checkpoint_type": "implementation_design_review",

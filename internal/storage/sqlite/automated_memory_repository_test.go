@@ -486,6 +486,9 @@ func TestAutomatedArchivePathsDeleteMemoryKeyProjection(t *testing.T) {
 	if keyCount == 0 {
 		t.Fatal("memory_key count before archive = 0, want key projection to clean")
 	}
+	if err := store.UpsertMemoryEmbedding(ctx, item.ID, "embedding-test", []float32{1, 0}); err != nil {
+		t.Fatalf("UpsertMemoryEmbedding() error = %v", err)
+	}
 	if err := store.ArchiveMemoryForSupersedes(ctx, item.ID, time.Now().UTC()); err != nil {
 		t.Fatalf("ArchiveMemoryForSupersedes() error = %v", err)
 	}
@@ -494,6 +497,13 @@ func TestAutomatedArchivePathsDeleteMemoryKeyProjection(t *testing.T) {
 	}
 	if keyCount != 0 {
 		t.Fatalf("memory_key count = %d, want 0 after supersedes archive", keyCount)
+	}
+	var embeddingCount int
+	if err := store.db.QueryRowContext(ctx, "select count(*) from memory_embedding where memory_id = ?", item.ID).Scan(&embeddingCount); err != nil {
+		t.Fatalf("query memory_embedding count error = %v", err)
+	}
+	if embeddingCount != 0 {
+		t.Fatalf("memory_embedding count = %d, want 0 after supersedes archive", embeddingCount)
 	}
 }
 

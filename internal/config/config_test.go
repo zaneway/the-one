@@ -81,7 +81,7 @@ func TestLoadDefaults(t *testing.T) {
 		cfg.Retrieval.MaxRelationExpansion != 20 || cfg.Retrieval.MaxCandidatesBeforeRerank != 80 {
 		t.Fatalf("retrieval retrieval defaults = %+v, want enabled bounded retrieval", cfg.Retrieval)
 	}
-	if cfg.Embedding.QueryCacheSize != 256 || cfg.Embedding.OnlineQueryEmbeddingEnabled {
+	if cfg.Embedding.QueryCacheSize != 256 || cfg.Embedding.OnlineQueryEmbeddingEnabled || cfg.Embedding.MemoryEmbeddingEnabled {
 		t.Fatalf("embedding retrieval defaults = %+v, want cache=256 and online disabled", cfg.Embedding)
 	}
 	if cfg.VectorIndex.Backend != "none" || cfg.VectorIndex.SQLiteVecEnabled != "auto" {

@@ -242,6 +242,15 @@ func newP4IntegrationApp(t *testing.T, ctx context.Context) *App {
 
 func rememberP4IntegrationMemory(t *testing.T, ctx context.Context, app *App, req memory.RememberRequest) string {
 	t.Helper()
+	if req.SourceType == "" || req.SourceType == "manual_review" {
+		req.SourceType = "user_confirmed"
+	}
+	if req.Confidence == 0 {
+		req.Confidence = 0.9
+	}
+	if req.Importance == 0 {
+		req.Importance = 0.8
+	}
 	raw, toolErr := app.CallTool(ctx, "memory.remember", req)
 	if toolErr != nil {
 		t.Fatalf("memory.remember(%s) error = %v", req.Title, toolErr)

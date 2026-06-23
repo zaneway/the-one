@@ -509,6 +509,10 @@ func (s *Store) transition(ctx context.Context, memoryID, action, newState, revi
 			_ = tx.Rollback()
 			return memory.MemoryItem{}, err
 		}
+		if err := deleteMemoryEmbeddings(ctx, tx, memoryID); err != nil {
+			_ = tx.Rollback()
+			return memory.MemoryItem{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return memory.MemoryItem{}, storageErr(err)
@@ -950,6 +954,11 @@ func deleteFTS(ctx context.Context, tx *sql.Tx, memoryID string) error {
 	if err != nil && (strings.Contains(err.Error(), "no such table: memory_item_fts") || strings.Contains(err.Error(), "no such module: fts5")) {
 		return nil
 	}
+	return storageErr(err)
+}
+
+func deleteMemoryEmbeddings(ctx context.Context, tx *sql.Tx, memoryID string) error {
+	_, err := tx.ExecContext(ctx, "delete from memory_embedding where memory_id = ?", memoryID)
 	return storageErr(err)
 }
 

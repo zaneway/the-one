@@ -116,6 +116,173 @@ func TestServiceRunsEvidenceCandidateAdmissionChain(t *testing.T) {
 	}
 }
 
+func TestServiceEnqueuesAndComputesMemoryEmbeddingAfterAdmission(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
+	cfg.Embedding.Provider = "external"
+	cfg.Embedding.Model = "embedding-test"
+	cfg.Embedding.MemoryEmbeddingEnabled = true
+	store, err := sqlite.Open(ctx, cfg.Storage, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+	if !store.Status().Capabilities.FTS5 {
+		t.Skip("sqlite FTS5 unavailable; automation chain needs searchable automated memory")
+	}
+
+	now := time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC)
+	session := capture.AgentSession{
+		ID:           "sess_embedding",
+		AgentType:    "codex",
+		WorkspaceID:  "ws_embed",
+		ProjectID:    "project_embed",
+		CaptureLevel: 3,
+		StartedAt:    now,
+		Status:       capture.StatusActive,
+	}
+	if _, err := store.UpsertSession(ctx, session); err != nil {
+		t.Fatalf("UpsertSession() error = %v", err)
+	}
+	task := capture.AgentTask{
+		ID:          "task_embedding",
+		SessionID:   session.ID,
+		WorkspaceID: session.WorkspaceID,
+		ProjectID:   session.ProjectID,
+		TaskSummary: "生成 memory embedding K",
+		Status:      capture.StatusActive,
+		StartedAt:   now,
+	}
+	if _, err := store.UpsertTask(ctx, task); err != nil {
+		t.Fatalf("UpsertTask() error = %v", err)
+	}
+	rawEvent := capture.RawEvent{
+		ID:             "evt_embedding",
+		SessionID:      session.ID,
+		TaskID:         task.ID,
+		WorkspaceID:    session.WorkspaceID,
+		ProjectID:      session.ProjectID,
+		AgentType:      session.AgentType,
+		EventType:      capture.EventUserDeclaration,
+		SourceChannel:  capture.SourceChannelAgentSession,
+		OccurredAt:     now,
+		Actor:          capture.ActorUser,
+		ContentSummary: "项目记忆向量 K 必须在 memory_item 写入后异步生成。",
+		ContentHash:    "sha256:embedding-event",
+		CreatedAt:      now,
+	}
+	if err := store.InsertRawEvent(ctx, rawEvent); err != nil {
+		t.Fatalf("InsertRawEvent() error = %v", err)
+	}
+
+	embeddingProvider := &fakeTextEmbeddingProvider{vector: []float32{1, 0, 0}}
+	service := automation.NewService(cfg, store, processor.NewRuleBasedProvider(), automation.WithEmbeddingProvider(embeddingProvider))
+	if err := service.EnqueueRawEvent(ctx, rawEvent); err != nil {
+		t.Fatalf("EnqueueRawEvent() error = %v", err)
+	}
+	runNextJob(t, ctx, store, service, automation.JobTypeExtractEvidence, rawEvent.ID)
+	runNextJob(t, ctx, store, service, automation.JobTypeGenerateMemoryCandidate, "")
+	runNextJob(t, ctx, store, service, automation.JobTypeComputeAdmission, "")
+
+	candidates, err := store.ListCandidates(ctx, automation.ListCandidatesRequest{Status: automation.CandidateStatusAdmitted, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListCandidates() error = %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].ResultingMemoryID == "" {
+		t.Fatalf("admitted candidates = %+v, want one resulting memory", candidates)
+	}
+	embeddingJobs, err := store.ListJobs(ctx, automation.ListJobsRequest{
+		Status:   automation.JobStatusPending,
+		JobType:  automation.JobTypeComputeEmbedding,
+		TargetID: candidates[0].ResultingMemoryID,
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatalf("ListJobs(compute_embedding) error = %v", err)
+	}
+	if len(embeddingJobs) != 1 {
+		t.Fatalf("embedding jobs = %+v, want one pending compute_embedding job", embeddingJobs)
+	}
+
+	runNextJob(t, ctx, store, service, automation.JobTypeComputeEmbedding, candidates[0].ResultingMemoryID)
+	if len(embeddingProvider.inputs) != 1 || !strings.Contains(embeddingProvider.inputs[0], "memory_type") || !strings.Contains(embeddingProvider.inputs[0], "异步生成") {
+		t.Fatalf("embedding inputs = %+v, want structured memory text", embeddingProvider.inputs)
+	}
+	results, err := store.SearchVector(ctx, memory.SearchRequest{
+		Query:       "memory embedding",
+		WorkspaceID: session.WorkspaceID,
+		ProjectID:   session.ProjectID,
+		Scope:       []string{memory.ScopeProjectLocal},
+		Limit:       10,
+	}, cfg.Embedding.Model, []float32{1, 0, 0}, 10)
+	if err != nil {
+		t.Fatalf("SearchVector() error = %v", err)
+	}
+	if len(results) != 1 || results[0].MemoryID != candidates[0].ResultingMemoryID {
+		t.Fatalf("vector results = %+v, want generated memory embedding", results)
+	}
+}
+
+func TestMemoryEmbeddingRecomputesAfterRememberEdit(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
+	cfg.Embedding.Provider = "external"
+	cfg.Embedding.Model = "embedding-test"
+	cfg.Embedding.MemoryEmbeddingEnabled = true
+	store, err := sqlite.Open(ctx, cfg.Storage, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+	if !store.Status().Capabilities.FTS5 {
+		t.Skip("sqlite FTS5 unavailable; automation chain needs searchable automated memory")
+	}
+
+	embeddingProvider := &fakeTextEmbeddingProvider{vector: []float32{1, 0, 0}}
+	automationService := automation.NewService(cfg, store, processor.NewRuleBasedProvider(), automation.WithEmbeddingProvider(embeddingProvider))
+	memoryService := memory.NewService(cfg, store,
+		memory.WithRememberAdmissionDecider(automationService),
+		memory.WithEmbeddingJobEnqueuer(automationService),
+	)
+	rememberResp, err := memoryService.Remember(ctx, memory.RememberRequest{
+		Scope:       memory.ScopeProjectLocal,
+		WorkspaceID: "ws_embed_edit",
+		ProjectID:   "project_embed_edit",
+		MemoryType:  memory.TypeDecision,
+		SourceType:  "user_declared",
+		Title:       "embedding edit lifecycle",
+		Content:     "初始内容用于生成第一版 memory embedding。",
+		Confidence:  0.9,
+		Importance:  0.8,
+		Evidence: memory.EvidenceInput{
+			InterpretedStatement: "用户声明需要生成第一版 K。",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Remember() error = %v", err)
+	}
+	runNextJob(t, ctx, store, automationService, automation.JobTypeComputeEmbedding, rememberResp.MemoryID)
+
+	if _, err := memoryService.Review(ctx, memory.ReviewRequest{
+		Action:      "edit",
+		MemoryID:    rememberResp.MemoryID,
+		Reviewer:    "test",
+		Feedback:    "refresh embedding",
+		EditContent: "编辑后的内容必须重新生成第二版 memory embedding。",
+	}); err != nil {
+		t.Fatalf("Review(edit) error = %v", err)
+	}
+	runNextJob(t, ctx, store, automationService, automation.JobTypeComputeEmbedding, rememberResp.MemoryID)
+	if len(embeddingProvider.inputs) != 2 {
+		t.Fatalf("embedding provider calls = %d, want 2 after remember and edit; inputs=%+v", len(embeddingProvider.inputs), embeddingProvider.inputs)
+	}
+	if !strings.Contains(embeddingProvider.inputs[1], "第二版 memory embedding") {
+		t.Fatalf("second embedding input = %q, want edited content", embeddingProvider.inputs[1])
+	}
+}
+
 func TestServiceCombinedProviderWritesCandidatesDuringExtractJob(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Default()
@@ -774,6 +941,16 @@ type combinedProviderStub struct {
 	processCalls  int
 	extractCalls  int
 	generateCalls int
+}
+
+type fakeTextEmbeddingProvider struct {
+	vector []float32
+	inputs []string
+}
+
+func (p *fakeTextEmbeddingProvider) EmbedText(ctx context.Context, text string) ([]float32, error) {
+	p.inputs = append(p.inputs, text)
+	return append([]float32(nil), p.vector...), nil
 }
 
 func (p *combinedProviderStub) Name() string {

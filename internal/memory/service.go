@@ -66,6 +66,7 @@ type Service struct {
 	orchestrator      RetrievalOrchestrator    // 检索编排器；为空时保持 FTS 路径
 	accessFeedback    AccessFeedbackWriter     // 质量闭环：review 等写入 access log
 	rememberAdmission RememberAdmissionDecider // 显式 remember 准入；运行时必须注入
+	embeddingJobs     EmbeddingJobEnqueuer     // memory_embedding(K) 异步生成入口
 	logger            *slog.Logger             // 结构化日志
 }
 
@@ -78,6 +79,12 @@ type RetrievalOrchestrator interface {
 
 	// Context 执行上下文构造，返回向后兼容的 memory.context 响应。
 	Context(ctx context.Context, req ContextRequest) (ContextResponse, error)
+}
+
+// EmbeddingJobEnqueuer 定义 memory_item 写入/变更后触发 K 派生索引生成的能力。
+// memory.Service 只负责通知，不直接调用外部 embedding 模型。
+type EmbeddingJobEnqueuer interface {
+	EnqueueMemoryEmbedding(ctx context.Context, memoryID string) error
 }
 
 // ServiceOption 配置 Memory Service 的可选能力。
@@ -102,6 +109,14 @@ func WithAccessFeedbackWriter(writer AccessFeedbackWriter) ServiceOption {
 func WithRememberAdmissionDecider(decider RememberAdmissionDecider) ServiceOption {
 	return func(s *Service) {
 		s.rememberAdmission = decider
+	}
+}
+
+// WithEmbeddingJobEnqueuer 注入 memory_embedding(K) 异步生成入口。
+// 为空时 Remember/Review 保持原行为；非空时写入或编辑成功后 best-effort 入队。
+func WithEmbeddingJobEnqueuer(enqueuer EmbeddingJobEnqueuer) ServiceOption {
+	return func(s *Service) {
+		s.embeddingJobs = enqueuer
 	}
 }
 
@@ -325,7 +340,17 @@ func (s *Service) Remember(ctx context.Context, req RememberRequest) (RememberRe
 		"tier", tier,
 		"source_type", req.SourceType,
 	)
+	s.enqueueEmbeddingBestEffort(ctx, memoryID, "remember")
 	return RememberResponse{MemoryID: memoryID, State: state, Tier: tier, Deduped: false}, nil
+}
+
+func (s *Service) enqueueEmbeddingBestEffort(ctx context.Context, memoryID, reason string) {
+	if s.embeddingJobs == nil || memoryID == "" {
+		return
+	}
+	if err := s.embeddingJobs.EnqueueMemoryEmbedding(ctx, memoryID); err != nil {
+		s.logger.Warn("enqueue memory embedding failed", "memory_id", memoryID, "reason", reason, "error", err)
+	}
 }
 
 // Search 执行 FTS + metadata 检索
@@ -676,6 +701,7 @@ func (s *Service) Review(ctx context.Context, req ReviewRequest) (ReviewResponse
 		} else {
 			s.logger.Info("review approved", "memory_id", item.ID, "new_state", item.State)
 			s.recordAccessFeedback(ctx, item.ID, "user_confirmed", item.SourceQuality)
+			s.enqueueEmbeddingBestEffort(ctx, item.ID, "review_approve")
 		}
 		return ReviewResponse{MemoryID: item.ID, State: item.State, UserConfirmed: item.UserConfirmed}, err
 	// reject/archive: -> archived，记录审核意见
@@ -718,6 +744,7 @@ func (s *Service) Review(ctx context.Context, req ReviewRequest) (ReviewResponse
 			s.logger.Error("review edit failed", "memory_id", req.MemoryID, "error", err)
 		} else {
 			s.logger.Info("review edited", "memory_id", updated.ID, "new_version", updated.Version)
+			s.enqueueEmbeddingBestEffort(ctx, updated.ID, "review_edit")
 		}
 		return ReviewResponse{MemoryID: updated.ID, State: updated.State, UserConfirmed: updated.UserConfirmed}, err
 	// delete: -> deleted，写入 tombstone，删除 FTS 条目，记录审核历史

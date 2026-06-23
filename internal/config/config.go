@@ -271,6 +271,9 @@ type EmbeddingConfig struct {
 
 	// OnlineQueryEmbeddingEnabled 是否允许在线生成 query embedding，默认 false。
 	OnlineQueryEmbeddingEnabled bool `yaml:"online_query_embedding_enabled" json:"online_query_embedding_enabled"`
+
+	// MemoryEmbeddingEnabled 是否允许异步生成 memory embedding(K)，默认 false。
+	MemoryEmbeddingEnabled bool `yaml:"memory_embedding_enabled" json:"memory_embedding_enabled"`
 }
 
 // CodeIndexConfig 代码索引配置结构体。
@@ -527,6 +530,7 @@ func Default() Config {
 			Model:                       "",
 			QueryCacheSize:              256,
 			OnlineQueryEmbeddingEnabled: false,
+			MemoryEmbeddingEnabled:      false,
 		},
 		CodeIndex: CodeIndexConfig{
 			Provider:       "local_basic",

@@ -68,16 +68,38 @@ type Repository interface {
 // Service 编排自动记忆 job 链路。
 // Provider 只负责生成 draft/candidate，最终写入和 Admission 均在该服务中统一执行。
 type Service struct {
-	cfg        config.Config
-	repo       Repository
-	provider   processor.Provider
-	admission  AdmissionController
-	dispatcher JobDispatcher
-	logger     *slog.Logger
+	cfg               config.Config
+	repo              Repository
+	provider          processor.Provider
+	embeddingProvider TextEmbeddingProvider
+	admission         AdmissionController
+	dispatcher        JobDispatcher
+	logger            *slog.Logger
+}
+
+// TextEmbeddingProvider 定义文本 embedding 生成能力。
+// Service 只依赖文本转向量接口，不直接耦合外部模型 SDK。
+type TextEmbeddingProvider interface {
+	EmbedText(ctx context.Context, text string) ([]float32, error)
+}
+
+type memoryEmbeddingJobMemoryGetter interface {
+	Get(ctx context.Context, memoryID string) (memory.MemoryItem, error)
+}
+
+// ServiceOption 配置自动化服务的可选能力。
+type ServiceOption func(*Service)
+
+// WithEmbeddingProvider 注入 memory_embedding(K) 生成 provider。
+// 为空时 compute_embedding 仍兼容预计算 embedding payload，但不会在线调用外部模型。
+func WithEmbeddingProvider(provider TextEmbeddingProvider) ServiceOption {
+	return func(s *Service) {
+		s.embeddingProvider = provider
+	}
 }
 
 // NewService 创建自动记忆服务。provider 为空时使用 rule_based，保证默认本地可运行。
-func NewService(cfg config.Config, repo Repository, provider processor.Provider) *Service {
+func NewService(cfg config.Config, repo Repository, provider processor.Provider, opts ...ServiceOption) *Service {
 	if provider == nil {
 		defaultProvider := processor.NewRuleBasedProvider()
 		provider = defaultProvider
@@ -89,9 +111,14 @@ func NewService(cfg config.Config, repo Repository, provider processor.Provider)
 		admission: NewAdmissionController(),
 		logger:    slog.Default(),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(service)
+		}
+	}
 	service.dispatcher = NewJobDispatcher(
 		p3JobHandler{service: service},
-		newExtendedJobHandler(cfg, repo),
+		newExtendedJobHandler(cfg, repo, service.embeddingProvider),
 	)
 	return service
 }
@@ -436,6 +463,20 @@ func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[st
 		s.logger.Error("compute admission find related memory failed", "job_id", job.ID, "error", err)
 		return nil, err
 	}
+	if isUserCorrection(candidate, evidence) && len(related) == 0 {
+		related, err = s.repo.FindRelatedMemory(ctx, RelatedMemoryRequest{
+			WorkspaceID: candidate.WorkspaceID,
+			ProjectID:   candidate.ProjectID,
+			RepoID:      candidate.RepoID,
+			Scope:       candidate.Scope,
+			MemoryType:  candidate.MemoryType,
+			Limit:       20,
+		})
+		if err != nil {
+			s.logger.Error("compute admission find correction fallback memory failed", "job_id", job.ID, "error", err)
+			return nil, err
+		}
+	}
 	admission := s.admission.Decide(AdmissionInput{Candidate: candidate, RelatedMemory: related})
 	s.logger.Info("compute admission decided",
 		"job_id", job.ID,
@@ -471,6 +512,9 @@ func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[st
 			s.logger.Error("compute admission update admitted failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
 			return nil, err
 		}
+		if err := s.enqueueMemoryEmbedding(ctx, written.ID); err != nil {
+			s.logger.Warn("enqueue memory embedding failed", "job_id", job.ID, "memory_id", written.ID, "error", err)
+		}
 		return map[string]any{"admission_decision": admission.Decision, "memory_id": written.ID}, nil
 	default:
 		if err := s.repo.UpdateCandidateAdmission(ctx, record.ID, admission, CandidateStatusDropped, ""); err != nil {
@@ -478,6 +522,65 @@ func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[st
 		}
 		return map[string]any{"admission_decision": admission.Decision}, nil
 	}
+}
+
+func (s *Service) enqueueMemoryEmbedding(ctx context.Context, memoryID string) error {
+	if memoryID == "" || !s.memoryEmbeddingEnabled() {
+		return nil
+	}
+	getter, ok := s.repo.(memoryEmbeddingJobMemoryGetter)
+	if !ok {
+		return fmt.Errorf("PROVIDER_NOT_FOUND: memory repository does not support memory lookup")
+	}
+	item, err := getter.Get(ctx, memoryID)
+	if err != nil {
+		return err
+	}
+	jobID, err := idgen.New("job")
+	if err != nil {
+		return err
+	}
+	version := item.Version
+	if version <= 0 {
+		version = 1
+	}
+	state := strings.TrimSpace(item.State)
+	if state == "" {
+		state = memory.StatePendingReview
+	}
+	model := strings.TrimSpace(s.cfg.Embedding.Model)
+	payload, err := jsonText(computeEmbeddingPayload{
+		MemoryID: memoryID,
+		Model:    model,
+	})
+	if err != nil {
+		return err
+	}
+	_, _, err = s.repo.EnqueueJob(ctx, AsyncJob{
+		ID:          jobID,
+		JobType:     JobTypeComputeEmbedding,
+		TargetType:  TargetTypeMemoryItem,
+		TargetID:    memoryID,
+		Priority:    6,
+		MaxRetries:  defaultMaxRetries,
+		DedupKey:    fmt.Sprintf("%s:%s:%s:v%d:%s", JobTypeComputeEmbedding, model, memoryID, version, state),
+		PayloadJSON: payload,
+	})
+	return err
+}
+
+// EnqueueMemoryEmbedding 为指定 memory_item 创建 memory_embedding(K) 异步生成任务。
+// 调用方通常是 memory.Service 的显式 remember/review 路径；自动 admission 路径内部也复用同一逻辑。
+func (s *Service) EnqueueMemoryEmbedding(ctx context.Context, memoryID string) error {
+	return s.enqueueMemoryEmbedding(ctx, memoryID)
+}
+
+func (s *Service) memoryEmbeddingEnabled() bool {
+	return s.embeddingProvider != nil &&
+		s.cfg.Embedding.MemoryEmbeddingEnabled &&
+		strings.TrimSpace(s.cfg.Embedding.Provider) != "" &&
+		strings.TrimSpace(s.cfg.Embedding.Provider) != "none" &&
+		strings.TrimSpace(s.cfg.Embedding.Model) != ""
 }
 
 // writeAdmittedMemory 写入通过准入控制的记忆。

@@ -57,6 +57,113 @@ func initialTestMemoryTier(pinned bool) string {
 	return memory.TierLongTerm
 }
 
+func TestRememberAndEditEnqueueMemoryEmbedding(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
+	store, err := Open(ctx, cfg.Storage, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+	enqueuer := &fakeEmbeddingJobEnqueuer{}
+	svc := memory.NewService(cfg, store,
+		memory.WithRememberAdmissionDecider(allowRememberAdmission{}),
+		memory.WithEmbeddingJobEnqueuer(enqueuer),
+	)
+
+	rememberResp, err := svc.Remember(ctx, memory.RememberRequest{
+		Scope:       memory.ScopeProjectLocal,
+		WorkspaceID: "ws",
+		ProjectID:   "project_embedding",
+		MemoryType:  memory.TypeDecision,
+		SourceType:  "user_declared",
+		Title:       "embedding lifecycle",
+		Content:     "memory embedding K 应在 memory_item 写入后异步生成。",
+		Confidence:  0.9,
+		Importance:  0.8,
+		Evidence: memory.EvidenceInput{
+			InterpretedStatement: "用户要求补齐 memory_embedding(K) 生成逻辑。",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Remember() error = %v", err)
+	}
+	if len(enqueuer.memoryIDs) != 1 || enqueuer.memoryIDs[0] != rememberResp.MemoryID {
+		t.Fatalf("embedding enqueue after remember = %+v, want %s", enqueuer.memoryIDs, rememberResp.MemoryID)
+	}
+
+	if _, err := svc.Review(ctx, memory.ReviewRequest{
+		Action:      "edit",
+		MemoryID:    rememberResp.MemoryID,
+		Reviewer:    "test",
+		Feedback:    "update K",
+		EditContent: "memory embedding K 应在 memory_item 编辑后重新异步生成。",
+	}); err != nil {
+		t.Fatalf("Review(edit) error = %v", err)
+	}
+	if len(enqueuer.memoryIDs) != 2 || enqueuer.memoryIDs[1] != rememberResp.MemoryID {
+		t.Fatalf("embedding enqueue after edit = %+v, want second %s", enqueuer.memoryIDs, rememberResp.MemoryID)
+	}
+}
+
+func TestApproveEnqueuesMemoryEmbedding(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
+	store, err := Open(ctx, cfg.Storage, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+	enqueuer := &fakeEmbeddingJobEnqueuer{}
+	svc := memory.NewService(cfg, store,
+		memory.WithRememberAdmissionDecider(allowRememberAdmission{}),
+		memory.WithEmbeddingJobEnqueuer(enqueuer),
+	)
+
+	rememberResp, err := svc.Remember(ctx, memory.RememberRequest{
+		Scope:       memory.ScopeProjectLocal,
+		WorkspaceID: "ws",
+		ProjectID:   "project_embedding_approve",
+		MemoryType:  memory.TypeProjectFact,
+		SourceType:  "agent_summary",
+		Title:       "embedding approve lifecycle",
+		Content:     "pending_review memory 在审批为 stable 后需要重新排队生成 K。",
+		Confidence:  0.8,
+		Importance:  0.7,
+		Evidence: memory.EvidenceInput{
+			InterpretedStatement: "自动候选进入 pending_review。",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Remember() error = %v", err)
+	}
+	if len(enqueuer.memoryIDs) != 1 || enqueuer.memoryIDs[0] != rememberResp.MemoryID {
+		t.Fatalf("embedding enqueue after pending remember = %+v, want %s", enqueuer.memoryIDs, rememberResp.MemoryID)
+	}
+	if _, err := svc.Review(ctx, memory.ReviewRequest{
+		Action:   "approve",
+		MemoryID: rememberResp.MemoryID,
+		Reviewer: "test",
+		Feedback: "confirm",
+	}); err != nil {
+		t.Fatalf("Review(approve) error = %v", err)
+	}
+	if len(enqueuer.memoryIDs) != 2 || enqueuer.memoryIDs[1] != rememberResp.MemoryID {
+		t.Fatalf("embedding enqueue after approve = %+v, want second %s", enqueuer.memoryIDs, rememberResp.MemoryID)
+	}
+}
+
+type fakeEmbeddingJobEnqueuer struct {
+	memoryIDs []string
+}
+
+func (f *fakeEmbeddingJobEnqueuer) EnqueueMemoryEmbedding(ctx context.Context, memoryID string) error {
+	f.memoryIDs = append(f.memoryIDs, memoryID)
+	return nil
+}
+
 func TestP1RememberSearchArchiveDelete(t *testing.T) {
 	ctx := context.Background()
 	store, svc := newP1TestService(t)
@@ -625,5 +732,43 @@ func TestMemoryKeyProjectionFollowsEditArchiveAndDeleteLifecycle(t *testing.T) {
 	}
 	if keyCount != 0 {
 		t.Fatalf("memory_key count after delete = %d, want 0", keyCount)
+	}
+}
+
+func TestArchiveDeletesMemoryEmbedding(t *testing.T) {
+	ctx := context.Background()
+	store, svc := newP1TestService(t)
+	defer store.Close()
+
+	rememberResp, err := svc.Remember(ctx, memory.RememberRequest{
+		Content:     "归档时 memory_embedding 派生索引必须同步清理。",
+		Title:       "embedding archive lifecycle",
+		MemoryType:  memory.TypeDecision,
+		Scope:       memory.ScopeProjectLocal,
+		WorkspaceID: "ws",
+		ProjectID:   "project_embedding_archive",
+		SourceType:  "user_declared",
+		Evidence: memory.EvidenceInput{
+			InterpretedStatement: "测试归档清理 embedding。",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Remember() error = %v", err)
+	}
+	if err := store.UpsertMemoryEmbedding(ctx, rememberResp.MemoryID, "embedding-test", []float32{1, 0}); err != nil {
+		t.Fatalf("UpsertMemoryEmbedding() error = %v", err)
+	}
+	if _, err := svc.Review(ctx, memory.ReviewRequest{
+		Action:   "archive",
+		MemoryID: rememberResp.MemoryID,
+	}); err != nil {
+		t.Fatalf("Review(archive) error = %v", err)
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, "select count(*) from memory_embedding where memory_id = ?", rememberResp.MemoryID).Scan(&count); err != nil {
+		t.Fatalf("query memory_embedding count error = %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("memory_embedding count = %d, want 0 after archive", count)
 	}
 }

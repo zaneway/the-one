@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/zaneway/theone/internal/codeindex"
@@ -26,17 +27,23 @@ type embeddingRepository interface {
 	UpsertMemoryEmbedding(ctx context.Context, memoryID, model string, vector []float32) error
 }
 
+type memoryEmbeddingRepository interface {
+	embeddingRepository
+	Get(ctx context.Context, memoryID string) (memory.MemoryItem, error)
+}
+
 type accessLogCleanupRepository interface {
 	CleanupMemoryAccessLogs(ctx context.Context, eventType string, before time.Time) (int, error)
 }
 
 type extendedJobHandler struct {
-	cfg  config.Config
-	repo any
+	cfg               config.Config
+	repo              any
+	embeddingProvider TextEmbeddingProvider
 }
 
-func newExtendedJobHandler(cfg config.Config, repo any) JobHandler {
-	return extendedJobHandler{cfg: cfg, repo: repo}
+func newExtendedJobHandler(cfg config.Config, repo any, embeddingProvider TextEmbeddingProvider) JobHandler {
+	return extendedJobHandler{cfg: cfg, repo: repo, embeddingProvider: embeddingProvider}
 }
 
 // CanHandle 判断是否为相关 job 类型。
@@ -232,16 +239,14 @@ func (h extendedJobHandler) runBuildDocSnapshot(ctx context.Context, job AsyncJo
 	}, nil
 }
 
-// runComputeEmbedding 写入预计算的 memory embedding 向量。
-// 设计意图：embedding 由外部 provider 生成（如 OpenAI），本 handler 只负责持久化。
-// provider=none 或 payload 为空时安全跳过。
+// runComputeEmbedding 写入 memory embedding 向量。
+// 兼容两种模式：
+//  1. payload 已带 embedding：直接持久化，兼容外部预计算任务。
+//  2. payload 未带 embedding：读取 memory_item，构造稳定文本并通过 TextEmbeddingProvider 生成向量。
 func (h extendedJobHandler) runComputeEmbedding(ctx context.Context, job AsyncJob) (map[string]any, error) {
 	var payload computeEmbeddingPayload
 	if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
 		return nil, err
-	}
-	if len(payload.Embedding) == 0 {
-		return map[string]any{"status": "skipped", "reason": "embedding_payload_missing"}, nil
 	}
 	repo, ok := any(h.repo).(embeddingRepository)
 	if !ok {
@@ -252,14 +257,58 @@ func (h extendedJobHandler) runComputeEmbedding(ctx context.Context, job AsyncJo
 	if memoryID == "" || model == "" {
 		return nil, fmt.Errorf("VALIDATION_FAILED: memory_id and embedding model are required")
 	}
-	vector := make([]float32, len(payload.Embedding))
-	for i, value := range payload.Embedding {
-		vector[i] = float32(value)
+	vector := make([]float32, 0, len(payload.Embedding))
+	if len(payload.Embedding) > 0 {
+		for _, value := range payload.Embedding {
+			vector = append(vector, float32(value))
+		}
+	} else {
+		if h.embeddingProvider == nil || strings.TrimSpace(h.cfg.Embedding.Provider) == "" || strings.TrimSpace(h.cfg.Embedding.Provider) == "none" {
+			return map[string]any{"status": "skipped", "reason": "embedding_provider_unavailable", "memory_id": memoryID}, nil
+		}
+		memoryRepo, ok := any(h.repo).(memoryEmbeddingRepository)
+		if !ok {
+			return nil, fmt.Errorf("PROVIDER_NOT_FOUND: memory repository unavailable")
+		}
+		item, err := memoryRepo.Get(ctx, memoryID)
+		if err != nil {
+			return nil, err
+		}
+		text := memoryEmbeddingText(item)
+		if strings.TrimSpace(text) == "" {
+			return map[string]any{"status": "skipped", "reason": "embedding_text_empty", "memory_id": memoryID}, nil
+		}
+		vector, err = h.embeddingProvider.EmbedText(ctx, text)
+		if err != nil {
+			return nil, err
+		}
+		if len(vector) == 0 {
+			return nil, fmt.Errorf("PROVIDER_INVALID_OUTPUT: empty memory embedding")
+		}
 	}
 	if err := repo.UpsertMemoryEmbedding(ctx, memoryID, model, vector); err != nil {
 		return nil, err
 	}
 	return map[string]any{"status": "completed", "memory_id": memoryID, "embedding_model": model, "embedding_dim": len(vector)}, nil
+}
+
+func memoryEmbeddingText(item memory.MemoryItem) string {
+	out := make([]string, 0, 7)
+	add := func(label, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		out = append(out, label+": "+value)
+	}
+	add("memory_type", item.MemoryType)
+	add("scope", item.Scope)
+	add("title", item.Title)
+	add("content", item.Content)
+	add("keywords", item.KeywordsJSON)
+	add("retrieval_cues", item.RetrievalCuesJSON)
+	add("tags", item.TagsJSON)
+	return strings.Join(out, "\n")
 }
 
 // runCleanupAccessLog 清理低价值的 memory_access_log 明细。

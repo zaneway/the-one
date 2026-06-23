@@ -96,7 +96,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		retrieval.WithRawEventRepository(store),
 		retrieval.WithLogger(logger),
 	}
-	if queryEmbeddingProvider != nil {
+	if queryEmbeddingProvider != nil && cfg.Embedding.OnlineQueryEmbeddingEnabled {
 		retrievalOptions = append(retrievalOptions,
 			retrieval.WithVectorRepository(store),
 			retrieval.WithQueryEmbeddingProvider(queryEmbeddingProvider),
@@ -104,11 +104,16 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 	retrievalOrchestrator := retrieval.NewMemoryOrchestrator(cfg, store, retrievalOptions...)
 	// Step 7: 注册 自动化服务（observe 入队、准入管道、remember 准入）
-	automationService := automation.NewService(cfg, store, provider)
+	automationOptions := []automation.ServiceOption{}
+	if queryEmbeddingProvider != nil && cfg.Embedding.MemoryEmbeddingEnabled {
+		automationOptions = append(automationOptions, automation.WithEmbeddingProvider(queryEmbeddingTextAdapter{provider: queryEmbeddingProvider}))
+	}
+	automationService := automation.NewService(cfg, store, provider, automationOptions...)
 	memoryService := memory.NewService(cfg, store,
 		memory.WithRetrievalOrchestrator(retrievalOrchestrator),
 		memory.WithAccessFeedbackWriter(store),
 		memory.WithRememberAdmissionDecider(automationService),
+		memory.WithEmbeddingJobEnqueuer(automationService),
 	)
 	tools.RegisterMemoryTools(registry, memoryService, logger)
 	tools.RegisterAutomationTools(registry, automationService, logger)
@@ -144,13 +149,21 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}, nil
 }
 
+type queryEmbeddingTextAdapter struct {
+	provider retrieval.QueryEmbeddingProvider
+}
+
+func (a queryEmbeddingTextAdapter) EmbedText(ctx context.Context, text string) ([]float32, error) {
+	return a.provider.EmbedQuery(ctx, text)
+}
+
 func newQueryEmbeddingProvider(cfg config.Config) (retrieval.QueryEmbeddingProvider, error) {
-	if !cfg.Embedding.OnlineQueryEmbeddingEnabled {
+	if !cfg.Embedding.OnlineQueryEmbeddingEnabled && !cfg.Embedding.MemoryEmbeddingEnabled {
 		return nil, nil
 	}
 	providerName := strings.TrimSpace(cfg.Embedding.Provider)
 	if providerName == "" || providerName == "none" {
-		return nil, fmt.Errorf("CONFIG_INVALID: embedding.provider is required when online_query_embedding_enabled=true")
+		return nil, fmt.Errorf("CONFIG_INVALID: embedding.provider is required when online query or memory embedding is enabled")
 	}
 	var provider retrieval.QueryEmbeddingProvider
 	switch providerName {

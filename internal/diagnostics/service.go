@@ -202,6 +202,7 @@ type StatusEmbedding struct {
 	Model                       string `json:"model,omitempty"`
 	QueryCacheSize              int    `json:"query_cache_size"`
 	OnlineQueryEmbeddingEnabled bool   `json:"online_query_embedding_enabled"`
+	MemoryEmbeddingEnabled      bool   `json:"memory_embedding_enabled"`
 }
 
 // StatusVectorIndex 描述 vector index 后端和 SQLite 能力。
@@ -244,6 +245,7 @@ func (s *Service) StatusTool(_ context.Context, raw json.RawMessage) (any, *mcp.
 			Model:                       s.cfg.Embedding.Model,
 			QueryCacheSize:              s.cfg.Embedding.QueryCacheSize,
 			OnlineQueryEmbeddingEnabled: s.cfg.Embedding.OnlineQueryEmbeddingEnabled,
+			MemoryEmbeddingEnabled:      s.cfg.Embedding.MemoryEmbeddingEnabled,
 		},
 		Vector: StatusVectorIndex{
 			Backend:          s.cfg.VectorIndex.Backend,
@@ -267,6 +269,7 @@ func (s *Service) StatusTool(_ context.Context, raw json.RawMessage) (any, *mcp.
 			"embedding_provider":                 s.cfg.Embedding.Provider,
 			"embedding_query_cache_size":         s.cfg.Embedding.QueryCacheSize,
 			"embedding_online_query_enabled":     s.cfg.Embedding.OnlineQueryEmbeddingEnabled,
+			"embedding_memory_embedding_enabled": s.cfg.Embedding.MemoryEmbeddingEnabled,
 			"vector_index_backend":               s.cfg.VectorIndex.Backend,
 			"codeindex_provider":                 s.cfg.CodeIndex.Provider,
 			"codeindex_max_resolve_refs":         s.cfg.CodeIndex.MaxResolveRefs,

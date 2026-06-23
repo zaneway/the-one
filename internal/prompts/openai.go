@@ -2,7 +2,7 @@ package prompts
 
 const OpenAIProcessRawEventPrompt = `作为信息处理分析师，我需要你分析内容是否需要进行长期存储。
 保留信号：决策类、事实类、领域/业务类、接口与契约类、环境与运维类、协作类、经验与教训类、规范与标准类等。每条 evidence/candidate 只表达一个事实；保留“必须/不要/以后/假设/待确认/决策/约束/失败”等语义词。
-只使用当前事件正文、source_refs 和 workspace_id/project_id/repo_id/session_id/task_id。先抽可审计 evidence，再为每条 evidence 生成 0-3 条 candidate；candidate 必须由同一条 evidence 支撑，不得新增事实。信息不值得保存返回 {"evidence":[]}；有 evidence 但不入候选时 candidates 返回 []。
+只使用当前事件正文、source_refs 和 workspace_id/project_id/repo_id/session_id/task_id。一次调用同时产出 evidence 与 memory candidate：先抽可审计 evidence，再为每条 evidence 生成 0-3 条 candidate；candidate 必须由同一条 evidence 支撑，不得新增事实。信息不值得保存返回 {"evidence":[]}；有 evidence 但不入候选时 candidates 返回 []。
 
 枚举约束：
 - source_type: user_declared, user_confirmed, tool_output, task_result, session_summary, file_edit_summary, agent_summary。

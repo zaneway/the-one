@@ -561,6 +561,10 @@ func (s *Store) ArchiveMemoryForSupersedes(ctx context.Context, memoryID string,
 		_ = tx.Rollback()
 		return err
 	}
+	if err := deleteMemoryEmbeddings(ctx, tx, memoryID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return storageErr(err)
 	}
