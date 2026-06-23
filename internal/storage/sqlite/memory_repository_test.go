@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zaneway/theone/internal/config"
 	"github.com/zaneway/theone/internal/memory"
@@ -24,7 +25,36 @@ func newP1TestService(t *testing.T) (*Store, *memory.Service) {
 	if !store.Status().Capabilities.FTS5 {
 		t.Fatal("FTS5 capability false, sqlite_fts5 test requires true")
 	}
-	return store, memory.NewService(cfg, store)
+	return store, memory.NewService(cfg, store, memory.WithRememberAdmissionDecider(allowRememberAdmission{}))
+}
+
+type allowRememberAdmission struct{}
+
+func (allowRememberAdmission) DecideRemember(_ context.Context, req memory.RememberRequest) (memory.RememberAdmissionDecision, error) {
+	return memory.RememberAdmissionDecision{
+		Allowed:        true,
+		Decision:       "test_allow",
+		InitialState:   initialTestMemoryState(req.SourceType),
+		InitialTier:    initialTestMemoryTier(req.Pinned),
+		UserConfirmed:  req.SourceType == "user_declared" || req.Pinned,
+		RetentionScore: 0.7,
+		DecayRate:      0.8,
+		ReasonCodes:    []string{"test_allow"},
+	}, nil
+}
+
+func initialTestMemoryState(sourceType string) string {
+	if sourceType == "user_declared" || sourceType == "user_confirmed" {
+		return memory.StateStable
+	}
+	return memory.StatePendingReview
+}
+
+func initialTestMemoryTier(pinned bool) string {
+	if pinned {
+		return memory.TierDurable
+	}
+	return memory.TierLongTerm
 }
 
 func TestP1RememberSearchArchiveDelete(t *testing.T) {
@@ -384,5 +414,216 @@ func TestP1ContextIncludesUserPreferenceAndCheckpoint(t *testing.T) {
 		if !strings.Contains(checkpointText, want) {
 			t.Fatalf("checkpoint context = %q, want to contain %q", checkpointText, want)
 		}
+	}
+}
+
+func TestMemoryKeyProjectionSearchesCompactRetrievalCueWhenFTSMisses(t *testing.T) {
+	ctx := context.Background()
+	store, svc := newP1TestService(t)
+	defer store.Close()
+
+	rememberResp, err := svc.Remember(ctx, memory.RememberRequest{
+		Content:       "检索层采用多路投影，主记忆内容不直接拆分。",
+		Title:         "QKV 投影层",
+		MemoryType:    memory.TypeDecision,
+		Scope:         memory.ScopeProjectLocal,
+		WorkspaceID:   "ws",
+		ProjectID:     "project_qkv",
+		SourceType:    "manual_review",
+		RetrievalCues: []string{"QKV Retrieval Projection"},
+		Keywords:      []string{"QKV", "检索投影"},
+		Evidence: memory.EvidenceInput{
+			InterpretedStatement: "方案 B 决定用 QKV Retrieval Projection 作为检索投影层。",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Remember() error = %v", err)
+	}
+
+	var keyCount int
+	if err := store.db.QueryRowContext(ctx,
+		"select count(*) from memory_key where memory_id = ?",
+		rememberResp.MemoryID,
+	).Scan(&keyCount); err != nil {
+		t.Fatalf("query memory_key count error = %v", err)
+	}
+	if keyCount == 0 {
+		t.Fatal("memory_key count = 0, want key projection rows")
+	}
+
+	resp, err := svc.Search(ctx, memory.SearchRequest{
+		Query:       "qkvretrievalprojection",
+		WorkspaceID: "ws",
+		ProjectID:   "project_qkv",
+		Scope:       []string{memory.ScopeProjectLocal},
+		MemoryTypes: []string{memory.TypeDecision},
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("results = %d, want compact key fallback hit", len(resp.Results))
+	}
+	if resp.Results[0].MemoryID != rememberResp.MemoryID {
+		t.Fatalf("memory_id = %q, want %q", resp.Results[0].MemoryID, rememberResp.MemoryID)
+	}
+	if !containsString(resp.Results[0].WhyIncluded, "memory_key_fallback") {
+		t.Fatalf("why_included = %#v, want memory_key_fallback", resp.Results[0].WhyIncluded)
+	}
+	if resp.Diagnostics.Fallback != "memory_key" {
+		t.Fatalf("fallback = %q, want memory_key", resp.Diagnostics.Fallback)
+	}
+}
+
+func TestMemoryKeyFallbackRanksHigherWeightFirst(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newP1TestService(t)
+	defer store.Close()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, item := range []struct {
+		id     string
+		weight float64
+	}{
+		{id: "mem_key_low", weight: 0.2},
+		{id: "mem_key_high", weight: 1.0},
+	} {
+		if _, err := store.db.ExecContext(ctx, `insert into memory_item(
+			id, scope, workspace_id, project_id, memory_type, content, search_text,
+			state, confidence, importance, decay_rate, tier, created_at, updated_at
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			item.id, memory.ScopeProjectLocal, "ws", "project_rank", memory.TypeDecision,
+			"排序测试内容。", "unrelated text",
+			memory.StateStable, 0.7, 0.5, 0.8, memory.TierLongTerm, now, now,
+		); err != nil {
+			t.Fatalf("insert memory_item(%s) error = %v", item.id, err)
+		}
+		if _, err := store.db.ExecContext(ctx, `insert into memory_key(
+			key_id, memory_id, key_type, key_text, key_hash, weight,
+			scope, memory_type, state, tier, created_at, updated_at
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			item.id+":key", item.id, "test", "sharedcompactkey", item.id+":hash", item.weight,
+			memory.ScopeProjectLocal, memory.TypeDecision, memory.StateStable, memory.TierLongTerm, now, now,
+		); err != nil {
+			t.Fatalf("insert memory_key(%s) error = %v", item.id, err)
+		}
+	}
+
+	results, _, err := store.searchByMemoryKey(ctx, memory.SearchRequest{
+		Query:       "sharedcompactkey",
+		WorkspaceID: "ws",
+		ProjectID:   "project_rank",
+		Scope:       []string{memory.ScopeProjectLocal},
+		MemoryTypes: []string{memory.TypeDecision},
+		Limit:       10,
+	}, 10)
+	if err != nil {
+		t.Fatalf("searchByMemoryKey() error = %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %+v, want 2 key hits", results)
+	}
+	if results[0].MemoryID != "mem_key_high" {
+		t.Fatalf("top result = %q, want mem_key_high; results=%+v", results[0].MemoryID, results)
+	}
+}
+
+func TestMemoryKeyProjectionFollowsEditArchiveAndDeleteLifecycle(t *testing.T) {
+	ctx := context.Background()
+	store, svc := newP1TestService(t)
+	defer store.Close()
+
+	rememberResp, err := svc.Remember(ctx, memory.RememberRequest{
+		Content:       "初始检索投影关键词是 QKV Retrieval Projection。",
+		Title:         "检索投影生命周期",
+		MemoryType:    memory.TypeProcedure,
+		Scope:         memory.ScopeProjectLocal,
+		WorkspaceID:   "ws",
+		ProjectID:     "project_lifecycle",
+		SourceType:    "manual_review",
+		RetrievalCues: []string{"QKV Retrieval Projection"},
+		Evidence: memory.EvidenceInput{
+			InterpretedStatement: "测试 key 投影跟随记忆生命周期变化。",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Remember() error = %v", err)
+	}
+
+	if _, err := svc.Review(ctx, memory.ReviewRequest{
+		Action:      "edit",
+		MemoryID:    rememberResp.MemoryID,
+		EditContent: "更新后的检索投影关键词是 MCP Prompt Cache。",
+	}); err != nil {
+		t.Fatalf("Review(edit) error = %v", err)
+	}
+
+	editedHit, err := svc.Search(ctx, memory.SearchRequest{
+		Query:       "mcppromptcache",
+		WorkspaceID: "ws",
+		ProjectID:   "project_lifecycle",
+		Scope:       []string{memory.ScopeProjectLocal},
+		MemoryTypes: []string{memory.TypeProcedure},
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("Search(edited key) error = %v", err)
+	}
+	if len(editedHit.Results) != 1 {
+		t.Fatalf("edited key results = %d, want 1", len(editedHit.Results))
+	}
+
+	oldKeyHit, err := svc.Search(ctx, memory.SearchRequest{
+		Query:       "qkvretrievalprojection",
+		WorkspaceID: "ws",
+		ProjectID:   "project_lifecycle",
+		Scope:       []string{memory.ScopeProjectLocal},
+		MemoryTypes: []string{memory.TypeProcedure},
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("Search(old key) error = %v", err)
+	}
+	if len(oldKeyHit.Results) != 0 {
+		t.Fatalf("old key results = %d, want 0 after edit", len(oldKeyHit.Results))
+	}
+
+	if _, err := svc.Review(ctx, memory.ReviewRequest{
+		Action:   "archive",
+		MemoryID: rememberResp.MemoryID,
+	}); err != nil {
+		t.Fatalf("Review(archive) error = %v", err)
+	}
+	archivedHit, err := svc.Search(ctx, memory.SearchRequest{
+		Query:       "mcppromptcache",
+		WorkspaceID: "ws",
+		ProjectID:   "project_lifecycle",
+		Scope:       []string{memory.ScopeProjectLocal},
+		MemoryTypes: []string{memory.TypeProcedure},
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("Search(archived key) error = %v", err)
+	}
+	if len(archivedHit.Results) != 0 {
+		t.Fatalf("archived key results = %d, want 0", len(archivedHit.Results))
+	}
+
+	if _, err := svc.Review(ctx, memory.ReviewRequest{
+		Action:   "delete",
+		MemoryID: rememberResp.MemoryID,
+	}); err != nil {
+		t.Fatalf("Review(delete) error = %v", err)
+	}
+	var keyCount int
+	if err := store.db.QueryRowContext(ctx,
+		"select count(*) from memory_key where memory_id = ?",
+		rememberResp.MemoryID,
+	).Scan(&keyCount); err != nil {
+		t.Fatalf("query memory_key count after delete error = %v", err)
+	}
+	if keyCount != 0 {
+		t.Fatalf("memory_key count after delete = %d, want 0", keyCount)
 	}
 }

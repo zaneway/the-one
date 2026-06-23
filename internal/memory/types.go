@@ -646,7 +646,7 @@ type ContextRequest struct {
 	AgentType string `json:"agent_type"`
 
 	// TokenBudget Token预算
-	// 上下文包的Token数量限制，默认1800
+	// 兼容旧调用方的入参字段；当前 memory.context 会忽略请求值，统一使用 retrieval.default_token_budget。
 	TokenBudget int `json:"token_budget"`
 
 	// IncludeCodeRefs 是否包含代码引用
@@ -742,6 +742,15 @@ type ContextDiagnostics struct {
 
 	// RetrievalMode 检索模式
 	RetrievalMode string `json:"retrieval_mode,omitempty"`
+
+	// UsedVector 是否使用向量召回
+	UsedVector bool `json:"used_vector,omitempty"`
+
+	// UsedRelation 是否使用关系扩展
+	UsedRelation bool `json:"used_relation,omitempty"`
+
+	// UsedCodeIndex 是否使用 Code Index
+	UsedCodeIndex bool `json:"used_code_index,omitempty"`
 
 	// UsedDocIndex 是否使用 Doc Index 辅助构造复查策略
 	UsedDocIndex bool `json:"used_doc_index,omitempty"`

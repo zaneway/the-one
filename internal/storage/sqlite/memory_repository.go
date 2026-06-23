@@ -86,6 +86,10 @@ func (s *Store) Remember(ctx context.Context, item memory.MemoryItem, evidence m
 			_ = tx.Rollback()
 			return err
 		}
+		if err := upsertMemoryKeys(ctx, tx, item); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
 	}
 	// 可选写入 review_checkpoint（设计复查检查点）
 	if checkpoint != nil {
@@ -210,6 +214,25 @@ func (s *Store) Search(ctx context.Context, req memory.SearchRequest) ([]memory.
 		}
 		results = fallbackResults
 		diag = fallbackDiag
+		if len(results) == 0 {
+			s.logger.Debug("memory.search LIKE 无命中，降级为 memory_key 查询",
+				"query", req.Query,
+				"fts_hits", diag.FTSHits,
+			)
+			keyResults, keyDiag, err := s.searchByMemoryKey(ctx, req, limit)
+			keyDiag.FTSHits = diag.FTSHits
+			keyDiag.FilteredCount += diag.FilteredCount
+			if err != nil {
+				s.logger.Error("memory.search memory_key 降级查询失败",
+					"query", req.Query,
+					"error", err,
+					"duration_ms", time.Since(startedAt).Milliseconds(),
+				)
+				return nil, keyDiag, err
+			}
+			results = keyResults
+			diag = keyDiag
+		}
 	}
 
 	// 查询后日志：打印结果摘要
@@ -347,6 +370,13 @@ func (s *Store) Edit(ctx context.Context, memoryID, editContent, reviewer, feedb
 			_ = tx.Rollback()
 			return memory.MemoryItem{}, err
 		}
+		item.Content = editContent
+		item.NormalizedContent = editContent
+		item.SearchText = searchText
+		if err := upsertMemoryKeys(ctx, tx, item); err != nil {
+			_ = tx.Rollback()
+			return memory.MemoryItem{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return memory.MemoryItem{}, storageErr(err)
@@ -464,8 +494,18 @@ func (s *Store) transition(ctx context.Context, memoryID, action, newState, revi
 			_ = tx.Rollback()
 			return memory.MemoryItem{}, err
 		}
+		item.State = newState
+		item.UserConfirmed = confirmed
+		if err := upsertMemoryKeys(ctx, tx, item); err != nil {
+			_ = tx.Rollback()
+			return memory.MemoryItem{}, err
+		}
 	} else {
 		if err := deleteFTS(ctx, tx, memoryID); err != nil {
+			_ = tx.Rollback()
+			return memory.MemoryItem{}, err
+		}
+		if err := deleteMemoryKeys(ctx, tx, memoryID); err != nil {
 			_ = tx.Rollback()
 			return memory.MemoryItem{}, err
 		}
@@ -652,17 +692,86 @@ func (s *Store) searchByLike(ctx context.Context, req memory.SearchRequest, limi
 	return results, memory.SearchDiagnostics{Fallback: "metadata_like"}, nil
 }
 
+// searchByMemoryKey 使用 Q/K/V 投影层的 K 表做兜底召回。
+// 该路径只在 FTS 和 LIKE 都无命中时触发，避免影响现有 BM25 优先级。
+func (s *Store) searchByMemoryKey(ctx context.Context, req memory.SearchRequest, limit int) ([]memory.SearchResult, memory.SearchDiagnostics, error) {
+	startedAt := time.Now()
+	normalizedQuery := normalizeKeyText(req.Query)
+	compactQuery := compactKeyText(req.Query)
+	if normalizedQuery == "" && compactQuery == "" {
+		return nil, memory.SearchDiagnostics{Fallback: "memory_key"}, nil
+	}
+	patterns := make([]string, 0, 2)
+	if normalizedQuery != "" {
+		patterns = append(patterns, "%"+escapeLike(normalizedQuery)+"%")
+	}
+	if compactQuery != "" && compactQuery != normalizedQuery {
+		patterns = append(patterns, "%"+escapeLike(compactQuery)+"%")
+	}
+
+	query := `select m.id, m.memory_type, m.scope, coalesce(m.title, ''), m.content,
+		m.confidence, m.importance, m.state, m.tier, max(k.weight) as rank
+		from memory_key k
+		join memory_item m on m.id = k.memory_id
+		where (`
+	args := make([]any, 0, len(patterns)+8)
+	for i, pattern := range patterns {
+		if i > 0 {
+			query += " or "
+		}
+		query += "k.key_text like ? escape '\\'"
+		args = append(args, pattern)
+	}
+	query += ")"
+	query, args = appendSearchFilters(query, args, req, false)
+	query += " group by m.id, m.memory_type, m.scope, m.title, m.content, m.confidence, m.importance, m.state, m.tier"
+	query += " order by rank desc, m.updated_at desc limit ?"
+	args = append(args, limit*3)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, memory.SearchDiagnostics{Fallback: "memory_key"}, storageErr(err)
+	}
+	defer rows.Close()
+	var raw []rankedMemory
+	for rows.Next() {
+		var item rankedMemory
+		if err := rows.Scan(&item.ID, &item.MemoryType, &item.Scope, &item.Title, &item.Content, &item.Confidence, &item.Importance, &item.State, &item.Tier, &item.Rank); err != nil {
+			return nil, memory.SearchDiagnostics{Fallback: "memory_key"}, storageErr(err)
+		}
+		item.RankMode = "key_weight"
+		item.WhyIncluded = []string{"memory_key_fallback"}
+		raw = append(raw, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, memory.SearchDiagnostics{Fallback: "memory_key"}, storageErr(err)
+	}
+	results := s.rankSearchResults(ctx, raw, req, limit)
+	s.logger.Debug("searchByMemoryKey 完成",
+		"query", req.Query,
+		"raw_count", len(raw),
+		"result_count", len(results),
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+	)
+	return results, memory.SearchDiagnostics{
+		FilteredCount: max(0, len(raw)-len(results)),
+		Fallback:      "memory_key",
+	}, nil
+}
+
 type rankedMemory struct {
-	ID         string
-	MemoryType string
-	Scope      string
-	Title      string
-	Content    string
-	Confidence float64
-	Importance float64
-	State      string
-	Tier       string
-	Rank       float64
+	ID          string
+	MemoryType  string
+	Scope       string
+	Title       string
+	Content     string
+	Confidence  float64
+	Importance  float64
+	State       string
+	Tier        string
+	Rank        float64
+	RankMode    string
+	WhyIncluded []string
 }
 
 // rankSearchResults 对检索结果执行二次排序和裁剪。
@@ -673,9 +782,7 @@ type rankedMemory struct {
 func (s *Store) rankSearchResults(ctx context.Context, raw []rankedMemory, req memory.SearchRequest, limit int) []memory.SearchResult {
 	results := make([]memory.SearchResult, 0, len(raw))
 	for _, item := range raw {
-		// BM25 归一化：FTS5 返回负值（越小越相关），转换为 0-1 范围
-		// 公式：1/(1+|rank|)，rank 越大（绝对值）-> bm25Norm 越小 -> 相关性越低
-		bm25Norm := 1.0 / (1.0 + math.Abs(item.Rank))
+		bm25Norm := normalizedRankScore(item)
 		// 综合评分公式：0.55*BM25 + 0.20*scope权重 + 0.15*置信度 + 0.10*重要度
 		score := 0.55*bm25Norm + 0.20*scopeWeight(item.Scope) + 0.15*item.Confidence + 0.10*item.Importance
 		// archived 状态惩罚：已归档记忆扣 0.4 分，降低其在检索结果中的排名
@@ -683,15 +790,16 @@ func (s *Store) rankSearchResults(ctx context.Context, raw []rankedMemory, req m
 			score -= 0.4
 		}
 		result := memory.SearchResult{
-			MemoryID:   item.ID,
-			MemoryType: item.MemoryType,
-			Scope:      item.Scope,
-			Title:      item.Title,
-			Content:    item.Content,
-			Score:      clamp(score),
-			Confidence: item.Confidence,
-			State:      item.State,
-			Tier:       item.Tier,
+			MemoryID:    item.ID,
+			MemoryType:  item.MemoryType,
+			Scope:       item.Scope,
+			Title:       item.Title,
+			Content:     item.Content,
+			Score:       clamp(score),
+			Confidence:  item.Confidence,
+			State:       item.State,
+			Tier:        item.Tier,
+			WhyIncluded: append([]string(nil), item.WhyIncluded...),
 		}
 		if req.IncludeEvidence {
 			result.EvidenceRefs = s.loadEvidenceRefs(ctx, item.ID)
@@ -703,6 +811,14 @@ func (s *Store) rankSearchResults(ctx context.Context, raw []rankedMemory, req m
 		results = results[:limit]
 	}
 	return results
+}
+
+func normalizedRankScore(item rankedMemory) float64 {
+	if item.RankMode == "key_weight" {
+		return clamp(item.Rank)
+	}
+	// FTS5 返回负值（越小越相关），转换为 0-1 范围。
+	return 1.0 / (1.0 + math.Abs(item.Rank))
 }
 
 // appendSearchFilters 为 SQL 查询追加通用过滤条件。
@@ -842,6 +958,7 @@ func deleteMemoryArtifacts(ctx context.Context, tx *sql.Tx, memoryID string) err
 		"delete from memory_relation where source_id = ? or target_id = ?",
 		"delete from code_ref where memory_id = ?",
 		"delete from memory_embedding where memory_id = ?",
+		"delete from memory_key where memory_id = ?",
 	}
 	for _, statement := range statements {
 		var err error
@@ -929,6 +1046,13 @@ func placeholders(n int) string {
 		parts[i] = "?"
 	}
 	return strings.Join(parts, ",")
+}
+
+func escapeLike(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	value = strings.ReplaceAll(value, `_`, `\_`)
+	return value
 }
 
 func storageErr(err error) error {

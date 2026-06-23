@@ -51,6 +51,13 @@ func TestRetentionRepositoryListsAndArchivesExpiredTemporary(t *testing.T) {
 	); err != nil {
 		t.Fatalf("update valid_until error = %v", err)
 	}
+	var keyCount int
+	if err := store.db.QueryRowContext(ctx, "select count(*) from memory_key where memory_id = ?", item.ID).Scan(&keyCount); err != nil {
+		t.Fatalf("query memory_key count before archive error = %v", err)
+	}
+	if keyCount == 0 {
+		t.Fatal("memory_key count before archive = 0, want key projection to clean")
+	}
 
 	records, err := store.ListExpiredTemporaryMemories(ctx, retention.ListRequest{
 		WorkspaceID:      "ws",
@@ -85,6 +92,12 @@ func TestRetentionRepositoryListsAndArchivesExpiredTemporary(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Fatalf("fts results = %+v, want archived memory removed from fts", results)
+	}
+	if err := store.db.QueryRowContext(ctx, "select count(*) from memory_key where memory_id = ?", item.ID).Scan(&keyCount); err != nil {
+		t.Fatalf("query memory_key count error = %v", err)
+	}
+	if keyCount != 0 {
+		t.Fatalf("memory_key count = %d, want archived memory removed from key projection", keyCount)
 	}
 }
 
@@ -295,7 +308,7 @@ func TestRetentionServiceRecomputeScoresKeepsRecentlyHitWeakMemory(t *testing.T)
 	defer store.Close()
 	requireFTS5(t, store)
 
-	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	evidence := memory.Evidence{
 		ID:                   "ev_recent_weak",
 		RawEventID:           "evt_recent_weak",

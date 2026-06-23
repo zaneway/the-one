@@ -86,6 +86,12 @@ func Open(ctx context.Context, cfg config.StorageConfig, logger *slog.Logger) (*
 		return nil, err
 	}
 	store.migrations = status
+	if status.CurrentVersion >= 12 {
+		if err := store.backfillMemoryKeys(ctx); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("STORAGE_OPEN_FAILED: backfill memory keys: %w", err)
+		}
+	}
 	// 探测 FTS5/sqlite-vec 能力，决定检索降级路径
 	store.capabilities = store.detectCapabilities(ctx)
 	return store, nil

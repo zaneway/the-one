@@ -195,6 +195,10 @@ func (s *Store) WriteAutomatedMemory(ctx context.Context, input automation.Autom
 			_ = tx.Rollback()
 			return memory.MemoryItem{}, err
 		}
+		if err := upsertMemoryKeys(ctx, tx, item); err != nil {
+			_ = tx.Rollback()
+			return memory.MemoryItem{}, err
+		}
 	}
 	// 可选写入 review_checkpoint
 	if input.ReviewCheckpoint != nil {
@@ -344,6 +348,28 @@ func (s *Store) OverwriteMemoryWithCorrection(ctx context.Context, input automat
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, fmt.Errorf("STATE_CONFLICT: deleted memory is terminal")
 	}
+	item.ID = input.TargetMemoryID
+	if item.Scope == "" {
+		item.Scope = original.Scope
+	}
+	if item.WorkspaceID == "" {
+		item.WorkspaceID = original.WorkspaceID
+	}
+	if item.UserID == "" {
+		item.UserID = original.UserID
+	}
+	if item.ProjectID == "" {
+		item.ProjectID = original.ProjectID
+	}
+	if item.RepoID == "" {
+		item.RepoID = original.RepoID
+	}
+	if item.SessionID == "" {
+		item.SessionID = original.SessionID
+	}
+	if item.TaskID == "" {
+		item.TaskID = original.TaskID
+	}
 	if item.MemoryType == "" {
 		item.MemoryType = original.MemoryType
 	}
@@ -407,7 +433,14 @@ func (s *Store) OverwriteMemoryWithCorrection(ctx context.Context, input automat
 			_ = tx.Rollback()
 			return memory.MemoryItem{}, err
 		}
+		if err := upsertMemoryKeys(ctx, tx, item); err != nil {
+			_ = tx.Rollback()
+			return memory.MemoryItem{}, err
+		}
 	} else if err := deleteFTS(ctx, tx, input.TargetMemoryID); err != nil {
+		_ = tx.Rollback()
+		return memory.MemoryItem{}, err
+	} else if err := deleteMemoryKeys(ctx, tx, input.TargetMemoryID); err != nil {
 		_ = tx.Rollback()
 		return memory.MemoryItem{}, err
 	}
@@ -497,21 +530,39 @@ func (s *Store) ArchiveMemoryForSupersedes(ctx context.Context, memoryID string,
 	if now.IsZero() {
 		now = time.Now()
 	}
-	result, err := s.db.ExecContext(ctx, `update memory_item
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return storageErr(err)
+	}
+	result, err := tx.ExecContext(ctx, `update memory_item
 		set state = ?, tier = ?, updated_at = ?
 		where id = ? and state not in (?, ?)`,
 		memory.StateArchived, memory.TierArchived, now.Format(time.RFC3339Nano),
 		memoryID, memory.StateDeleted, memory.StateArchived,
 	)
 	if err != nil {
+		_ = tx.Rollback()
 		return storageErr(err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
+		_ = tx.Rollback()
 		return storageErr(err)
 	}
 	if affected == 0 {
+		_ = tx.Rollback()
 		return fmt.Errorf("MEMORY_NOT_FOUND: %s", memoryID)
+	}
+	if err := deleteFTS(ctx, tx, memoryID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := deleteMemoryKeys(ctx, tx, memoryID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return storageErr(err)
 	}
 	return nil
 }

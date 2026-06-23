@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 const (
 	defaultSearchLimit       = 10
 	defaultContextBudget     = 1800
+	contextInjectionLimit    = 2
 	defaultRelationLimit     = 20
 	rawEventFallbackMaxItems = 5
 	retrievedAccessEventType = "retrieved"
@@ -31,6 +33,18 @@ const (
 type MemorySearcher interface {
 	// Search 执行 FTS + metadata 检索，返回兼容结果和基础诊断。
 	Search(ctx context.Context, req memory.SearchRequest) ([]memory.SearchResult, memory.SearchDiagnostics, error)
+}
+
+// VectorRepository 定义持久化 memory embedding 的在线向量召回能力。
+// 查询向量由外部模型 provider 生成；repository 只负责按同模型、同维度和 scope 过滤后返回相似候选。
+type VectorRepository interface {
+	SearchVector(ctx context.Context, req memory.SearchRequest, model string, queryVector []float32, limit int) ([]memory.SearchResult, error)
+}
+
+// QueryEmbeddingProvider 定义查询侧 embedding 生成能力。
+// 实现可以调用外部模型或本地模型；Orchestrator 只依赖该接口，不直接耦合供应商 SDK。
+type QueryEmbeddingProvider interface {
+	EmbedQuery(ctx context.Context, query string) ([]float32, error)
 }
 
 // TraceRepository 定义 retrieval_trace 的最小写入能力。
@@ -103,6 +117,8 @@ type RawEventRepository interface {
 type MemoryOrchestrator struct {
 	cfg            config.Config
 	memoryRepo     MemorySearcher
+	vectorRepo     VectorRepository
+	queryEmbedding QueryEmbeddingProvider
 	traceRepo      TraceRepository
 	accessLogRepo  AccessLogRepository
 	relationRepo   RelationRepository
@@ -130,6 +146,22 @@ func WithTraceRepository(repo TraceRepository) MemoryOrchestratorOption {
 func WithAccessLogRepository(repo AccessLogRepository) MemoryOrchestratorOption {
 	return func(o *MemoryOrchestrator) {
 		o.accessLogRepo = repo
+	}
+}
+
+// WithVectorRepository 注入 memory embedding 向量召回 repository。
+// 为空时检索退化为 FTS/key/relation/code 路径。
+func WithVectorRepository(repo VectorRepository) MemoryOrchestratorOption {
+	return func(o *MemoryOrchestrator) {
+		o.vectorRepo = repo
+	}
+}
+
+// WithQueryEmbeddingProvider 注入查询 embedding provider。
+// provider 与 vector repository 必须同时存在，且配置开启 online_query_embedding_enabled，向量召回才会生效。
+func WithQueryEmbeddingProvider(provider QueryEmbeddingProvider) MemoryOrchestratorOption {
+	return func(o *MemoryOrchestrator) {
+		o.queryEmbedding = provider
 	}
 }
 
@@ -243,6 +275,7 @@ func (o *MemoryOrchestrator) Search(ctx context.Context, req memory.SearchReques
 		return memory.SearchResponse{}, err
 	}
 	trace.Mode = retrieved.Mode
+	trace.UsedVector = retrieved.UsedVector
 	trace.UsedRelation = retrieved.UsedRelation
 	trace.UsedCodeIndex = retrieved.UsedCodeIndex
 	fallbackReasons = appendFallbackReasons(fallbackReasons, repoFallbackReason(retrieved.Diagnostics.Fallback)...)
@@ -276,7 +309,7 @@ func (o *MemoryOrchestrator) Search(ctx context.Context, req memory.SearchReques
 	diag.RetrievalIntent = string(intent)
 	diag.RetrievalMode = string(retrieved.Mode)
 	diag.UsedFTS = true
-	diag.UsedVector = false
+	diag.UsedVector = retrieved.UsedVector
 	diag.UsedRelation = retrieved.UsedRelation
 	diag.UsedCodeIndex = retrieved.UsedCodeIndex
 	diag.UsedDocIndex = false
@@ -286,18 +319,14 @@ func (o *MemoryOrchestrator) Search(ctx context.Context, req memory.SearchReques
 
 // Context 执行上下文构造。
 // 流程：参数校验 -> intent 检测 -> 创建 trace -> FTS 检索 + 补充检索（偏好/ checkpoint）-> 写 retrieved access log
-// -> buildContextPack（按预算裁剪）-> attachReviewStrategy（Doc Index 策略）-> 写 injected access log -> 更新 trace。
+// -> 选取全局最高分的少量候选 -> buildContextPack（按配置预算裁剪）-> attachReviewStrategy（Doc Index 策略）-> 写 injected access log -> 更新 trace。
 // 与 Search 的区别：Context 会做两次补充检索（偏好和 review_checkpoint），并按 token budget 裁剪输出。
 func (o *MemoryOrchestrator) Context(ctx context.Context, req memory.ContextRequest) (memory.ContextResponse, error) {
 	startedAt := time.Now()
 	if strings.TrimSpace(req.Task) == "" {
 		return memory.ContextResponse{}, fmt.Errorf("VALIDATION_FAILED: task is required")
 	}
-	if req.TokenBudget <= 0 {
-		req.TokenBudget = o.defaultTokenBudget()
-	} else if defaultBudget := o.defaultTokenBudget(); defaultBudget > 0 && req.TokenBudget > defaultBudget {
-		req.TokenBudget = defaultBudget
-	}
+	req.TokenBudget = o.defaultTokenBudget()
 
 	internalReq := FromMemoryContextRequest(req)
 	intent := DetectContextIntent(internalReq)
@@ -319,6 +348,7 @@ func (o *MemoryOrchestrator) Context(ctx context.Context, req memory.ContextRequ
 		return memory.ContextResponse{}, err
 	}
 	trace.Mode = retrieved.Mode
+	trace.UsedVector = retrieved.UsedVector
 	trace.UsedRelation = retrieved.UsedRelation
 	trace.UsedCodeIndex = retrieved.UsedCodeIndex
 	fallbackReasons = appendFallbackReasons(fallbackReasons, repoFallbackReason(retrieved.Diagnostics.Fallback)...)
@@ -334,11 +364,12 @@ func (o *MemoryOrchestrator) Context(ctx context.Context, req memory.ContextRequ
 		fallbackReasons = appendFallbackReasons(fallbackReasons, "access_log_unavailable")
 	}
 
-	contextPack, usedIDs, budgetReport := buildContextPack(retrieved.Results, contextBuilderOptions{
+	contextResults := selectTopContextResults(retrieved.Results, contextInjectionLimit)
+	contextPack, usedIDs, budgetReport := buildContextPack(contextResults, contextBuilderOptions{
 		Intent:      intent,
 		TokenBudget: req.TokenBudget,
 	})
-	o.logContextPackDiagnostics(trace.ID, shortHashForLog(req.Task), intent, retrieved.Results, budgetReport)
+	o.logContextPackDiagnostics(trace.ID, shortHashForLog(req.Task), intent, contextResults, budgetReport)
 	usedDocIndex, docFallbackReasons := o.attachReviewStrategy(ctx, req, &contextPack)
 	addDocChangedSectionBudget(&budgetReport, contextPack.ReviewStrategy)
 	if usedDocIndex {
@@ -384,11 +415,36 @@ func (o *MemoryOrchestrator) Context(ctx context.Context, req memory.ContextRequ
 		Diagnostics: &memory.ContextDiagnostics{
 			RetrievalIntent:  string(intent),
 			RetrievalMode:    string(retrieved.Mode),
+			UsedVector:       retrieved.UsedVector,
+			UsedRelation:     retrieved.UsedRelation,
+			UsedCodeIndex:    retrieved.UsedCodeIndex,
 			UsedDocIndex:     usedDocIndex,
 			BudgetAllocation: contextBudgetMap(budgetReport),
 			FallbackReasons:  fallbackReasons,
 		},
 	}, nil
+}
+
+// selectTopContextResults 在完整检索候选集上做最终注入前的全局截断。
+// 设计约束：这里不能影响 retrieved access log、candidate_count 或后续诊断中的完整候选集；
+// 因此必须复制切片后排序，只把 Top-N 候选传给 ContextPack 构造器。
+func selectTopContextResults(results []memory.SearchResult, limit int) []memory.SearchResult {
+	if limit <= 0 {
+		return nil
+	}
+	out := append([]memory.SearchResult(nil), results...)
+	sort.SliceStable(out, func(i, j int) bool {
+		leftScore := contextResultScore(out[i])
+		rightScore := contextResultScore(out[j])
+		if leftScore != rightScore {
+			return leftScore > rightScore
+		}
+		return out[i].MemoryID < out[j].MemoryID
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }
 
 func (o *MemoryOrchestrator) normalizeSearchRequest(req *memory.SearchRequest) {
@@ -423,6 +479,7 @@ type retrieveOutput struct {
 	Diagnostics     memory.SearchDiagnostics
 	Mode            RetrievalMode
 	UsedRelation    bool
+	UsedVector      bool
 	UsedCodeIndex   bool
 	FallbackReasons []string
 }
@@ -475,6 +532,23 @@ func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequ
 			CodeRefs:         append([]memory.CodeRef(nil), result.CodeRefs...),
 		}
 	}
+	initialSeedIDSet := make(map[string]bool, len(seedIDSet))
+	for id, ok := range seedIDSet {
+		initialSeedIDSet[id] = ok
+	}
+	usedVector, vectorFallback, seedIDs := o.retrieveVectorCandidates(ctx, req, candidates, byID, seedIDs, seedIDSet, now)
+	if usedVector {
+		vectorAdded := make([]memory.SearchResult, 0)
+		for id, result := range byID {
+			if initialSeedIDSet[id] {
+				continue
+			}
+			vectorAdded = append(vectorAdded, result)
+		}
+		if len(vectorAdded) > 0 {
+			o.logRetrievalStage("vector_seed", phase, logOpts.TraceID, req, vectorAdded)
+		}
+	}
 	usedRelation, relationFallback := o.expandRelations(ctx, req, candidates, byID, seedIDs)
 	if usedRelation {
 		relationAdded := make([]memory.SearchResult, 0)
@@ -496,7 +570,7 @@ func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequ
 		Query:         req.Query,
 		Scopes:        req.Scope,
 		Intent:        intent,
-		VectorEnabled: false,
+		VectorEnabled: usedVector,
 		TokenBudget:   tokenBudget,
 		Now:           now,
 	})
@@ -547,6 +621,9 @@ func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequ
 	if usedRelation {
 		mode = ModeFTSRelation
 	}
+	if usedVector {
+		mode = ModeFTSVectorRelation
+	}
 	if usedCodeIndex {
 		mode = ModeCodeAware
 	}
@@ -555,9 +632,103 @@ func (o *MemoryOrchestrator) retrieve(ctx context.Context, req memory.SearchRequ
 		Diagnostics:     diag,
 		Mode:            mode,
 		UsedRelation:    usedRelation,
+		UsedVector:      usedVector,
 		UsedCodeIndex:   usedCodeIndex,
-		FallbackReasons: appendFallbackReasons(appendFallbackReasons(relationFallback, codeFallback...), rawEventFallbackReasons...),
+		FallbackReasons: appendFallbackReasons(appendFallbackReasons(appendFallbackReasons(vectorFallback, relationFallback...), codeFallback...), rawEventFallbackReasons...),
 	}, nil
+}
+
+func (o *MemoryOrchestrator) retrieveVectorCandidates(ctx context.Context, req memory.SearchRequest, candidates map[string]Candidate, byID map[string]memory.SearchResult, seedIDs []string, seedIDSet map[string]bool, now time.Time) (bool, []string, []string) {
+	if !o.vectorSearchEnabled() {
+		return false, o.vectorDisabledReasons(), seedIDs
+	}
+	vector, err := o.queryEmbedding.EmbedQuery(ctx, req.Query)
+	if err != nil {
+		o.logger.Warn("query embedding failed", "query_hash", shortHashForLog(req.Query), "error", err)
+		return false, []string{"query_embedding_failed"}, seedIDs
+	}
+	if len(vector) == 0 {
+		return false, []string{"query_embedding_empty"}, seedIDs
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = o.defaultLimit()
+	}
+	vectorResults, err := o.vectorRepo.SearchVector(ctx, req, o.cfg.Embedding.Model, vector, limit)
+	if err != nil {
+		o.logger.Warn("vector search failed", "query_hash", shortHashForLog(req.Query), "error", err)
+		return false, []string{"vector_search_failed"}, seedIDs
+	}
+	if len(vectorResults) == 0 {
+		return false, nil, seedIDs
+	}
+	for _, result := range vectorResults {
+		reasons := append([]string(nil), result.WhyIncluded...)
+		if len(reasons) == 0 {
+			reasons = []string{"vector_seed"}
+		}
+		existing, ok := candidates[result.MemoryID]
+		if ok {
+			if result.Score > existing.SemanticScore {
+				existing.SemanticScore = result.Score
+			}
+			existing.InclusionReasons = mergeReasons(existing.InclusionReasons, reasons...)
+			candidates[result.MemoryID] = existing
+			if prior, found := byID[result.MemoryID]; found {
+				prior.WhyIncluded = mergeReasons(prior.WhyIncluded, reasons...)
+				byID[result.MemoryID] = prior
+			}
+			continue
+		}
+		byID[result.MemoryID] = result
+		candidates[result.MemoryID] = Candidate{
+			Memory: memory.MemoryItem{
+				ID:            result.MemoryID,
+				Scope:         result.Scope,
+				MemoryType:    result.MemoryType,
+				Title:         result.Title,
+				Content:       result.Content,
+				State:         result.State,
+				Confidence:    result.Confidence,
+				Importance:    0.5,
+				SourceQuality: 0.7,
+				Tier:          result.Tier,
+				UpdatedAt:     now,
+			},
+			SemanticScore:    result.Score,
+			InclusionReasons: reasons,
+			CodeRefs:         append([]memory.CodeRef(nil), result.CodeRefs...),
+		}
+		seedIDs = append(seedIDs, result.MemoryID)
+		seedIDSet[result.MemoryID] = true
+	}
+	return true, nil, seedIDs
+}
+
+func (o *MemoryOrchestrator) vectorSearchEnabled() bool {
+	return o.vectorRepo != nil &&
+		o.queryEmbedding != nil &&
+		o.cfg.Embedding.OnlineQueryEmbeddingEnabled &&
+		strings.TrimSpace(o.cfg.Embedding.Provider) != "" &&
+		strings.TrimSpace(o.cfg.Embedding.Provider) != "none" &&
+		strings.TrimSpace(o.cfg.Embedding.Model) != ""
+}
+
+func (o *MemoryOrchestrator) vectorDisabledReasons() []string {
+	switch {
+	case !o.cfg.Embedding.OnlineQueryEmbeddingEnabled:
+		return nil
+	case strings.TrimSpace(o.cfg.Embedding.Provider) == "" || strings.TrimSpace(o.cfg.Embedding.Provider) == "none":
+		return nil
+	case o.vectorRepo == nil:
+		return []string{"vector_repository_unavailable"}
+	case o.queryEmbedding == nil:
+		return []string{"query_embedding_unavailable"}
+	case strings.TrimSpace(o.cfg.Embedding.Model) == "":
+		return []string{"embedding_model_unconfigured"}
+	default:
+		return nil
+	}
 }
 
 func (o *MemoryOrchestrator) retrieveFromRawEvents(ctx context.Context, req memory.SearchRequest, limit int) ([]memory.SearchResult, string) {
@@ -706,11 +877,14 @@ func (o *MemoryOrchestrator) contextSearch(ctx context.Context, req memory.Conte
 			out.Results = appendMissingResults(out.Results, preferences.Results)
 			out.Diagnostics.FTSHits += preferences.Diagnostics.FTSHits
 			out.Diagnostics.FilteredCount += preferences.Diagnostics.FilteredCount
+			out.UsedVector = out.UsedVector || preferences.UsedVector
 			out.UsedRelation = out.UsedRelation || preferences.UsedRelation
 			out.UsedCodeIndex = out.UsedCodeIndex || preferences.UsedCodeIndex
 			out.FallbackReasons = appendFallbackReasons(out.FallbackReasons, preferences.FallbackReasons...)
 			if preferences.UsedCodeIndex {
 				out.Mode = ModeCodeAware
+			} else if preferences.UsedVector {
+				out.Mode = ModeFTSVectorRelation
 			} else if preferences.UsedRelation {
 				out.Mode = ModeFTSRelation
 			}
@@ -738,11 +912,14 @@ func (o *MemoryOrchestrator) contextSearch(ctx context.Context, req memory.Conte
 				out.Results = appendMissingResults(checkpoints.Results, out.Results)
 				out.Diagnostics.FTSHits += checkpoints.Diagnostics.FTSHits
 				out.Diagnostics.FilteredCount += checkpoints.Diagnostics.FilteredCount
+				out.UsedVector = out.UsedVector || checkpoints.UsedVector
 				out.UsedRelation = out.UsedRelation || checkpoints.UsedRelation
 				out.UsedCodeIndex = out.UsedCodeIndex || checkpoints.UsedCodeIndex
 				out.FallbackReasons = appendFallbackReasons(out.FallbackReasons, checkpoints.FallbackReasons...)
 				if checkpoints.UsedCodeIndex {
 					out.Mode = ModeCodeAware
+				} else if checkpoints.UsedVector {
+					out.Mode = ModeFTSVectorRelation
 				} else if checkpoints.UsedRelation {
 					out.Mode = ModeFTSRelation
 				}

@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/memory"
 )
 
 func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
@@ -26,7 +28,7 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	status := store.Status()
-	wantVersion := 11
+	wantVersion := 12
 	if status.Migrations.CurrentVersion != wantVersion {
 		t.Fatalf("current version = %d, want %d", status.Migrations.CurrentVersion, wantVersion)
 	}
@@ -47,6 +49,7 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		"memory_access_log",
 		"code_ref",
 		"memory_embedding",
+		"memory_key",
 		"doc_snapshot",
 		"doc_section_snapshot",
 		"memory_provenance",
@@ -70,6 +73,7 @@ func TestOpenRunsMigrationAndIsIdempotent(t *testing.T) {
 		},
 		"code_ref":             {"memory_id", "repo_id", "file_path", "symbol", "content_hash", "resolve_status"},
 		"memory_embedding":     {"memory_id", "embedding_model", "embedding_dim", "embedding"},
+		"memory_key":           {"memory_id", "key_type", "key_text", "key_hash", "weight", "scope", "memory_type", "state", "tier"},
 		"doc_snapshot":         {"workspace_id", "project_id", "repo_id", "doc_path", "content_hash", "section_count"},
 		"doc_section_snapshot": {"snapshot_id", "section_id", "heading_path_json", "content_hash", "summary"},
 		"memory_provenance":    {"memory_id", "raw_event_id", "evidence_id", "candidate_id", "source_producer", "hook_phase", "provider", "derivation_stage", "admission_decision"},
@@ -177,6 +181,69 @@ func TestOpenBackfillsMissingMemoryProvenance(t *testing.T) {
 	}
 	if producer != "claude_code_hook:Stop" || phase != "turn_end" || agentType != "claude_code" || sourceChannel != "agent_session" {
 		t.Fatalf("backfilled provenance = producer=%q phase=%q agent=%q channel=%q, want claude Stop turn_end", producer, phase, agentType, sourceChannel)
+	}
+}
+
+func TestOpenBackfillsMemoryKeyProjectionForExistingMemories(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "memory.db")
+	logger := slog.New(slog.DiscardHandler)
+
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	legacy := &Store{db: db, logger: logger}
+	if _, err := db.ExecContext(ctx, migrationTableDDL); err != nil {
+		t.Fatalf("create migration table: %v", err)
+	}
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatalf("loadMigrations() error = %v", err)
+	}
+	for _, item := range migrations {
+		if item.version > 11 {
+			continue
+		}
+		if item.name == "init_fts" && !legacy.canCreateFTS5(ctx) {
+			continue
+		}
+		if err := legacy.applyMigration(ctx, item); err != nil {
+			t.Fatalf("apply migration %d %s: %v", item.version, item.name, err)
+		}
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.ExecContext(ctx, `insert into memory_item(
+		id, scope, workspace_id, project_id, memory_type, content, search_text,
+		state, confidence, importance, decay_rate, tier, created_at, updated_at
+	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"mem_backfill_key", memory.ScopeProjectLocal, "ws", "project_backfill_key",
+		memory.TypeDecision, "旧库记忆使用 QKV Retrieval Projection。", "retrieval: QKV Retrieval Projection",
+		memory.StateStable, 0.8, 0.8, 0.8, memory.TierLongTerm, now, now,
+	); err != nil {
+		t.Fatalf("insert legacy memory_item: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	cfg := config.StorageConfig{
+		Backend:          "sqlite",
+		Path:             dbPath,
+		SQLiteVecEnabled: "auto",
+		BusyTimeoutMS:    1000,
+	}
+	store, err := Open(ctx, cfg, logger)
+	if err != nil {
+		t.Fatalf("Open() migrated db error = %v", err)
+	}
+	defer store.Close()
+	var keyCount int
+	if err := store.db.QueryRowContext(ctx, "select count(*) from memory_key where memory_id = ?", "mem_backfill_key").Scan(&keyCount); err != nil {
+		t.Fatalf("query memory_key count error = %v", err)
+	}
+	if keyCount == 0 {
+		t.Fatal("memory_key count = 0, want backfilled key projection")
 	}
 }
 

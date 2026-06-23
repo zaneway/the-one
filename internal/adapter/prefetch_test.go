@@ -88,6 +88,9 @@ func TestPrefetchProcessorBindAndContext(t *testing.T) {
 			if req.ProjectID != "risk-engine" || req.RepoID != "risk-engine" {
 				t.Fatalf("context scope = %q/%q, want risk-engine/risk-engine", req.ProjectID, req.RepoID)
 			}
+			if req.TokenBudget != 0 {
+				t.Fatalf("token_budget = %d, want 0 when prefetch request omits budget", req.TokenBudget)
+			}
 			return memory.ContextResponse{
 				ContextPack:      memory.ContextPack{Summary: "命中记忆"},
 				UsedMemoryIDs:    []string{"mem_x"},
@@ -104,7 +107,6 @@ func TestPrefetchProcessorBindAndContext(t *testing.T) {
 		AgentType:        "cursor",
 		GenerationID:     "gen_p3_001",
 		WorkingDirectory: conversationDir,
-		TokenBudget:      800,
 	})
 	if !out.OK || !out.TaskBound || contextCalls != 1 {
 		t.Fatalf("out=%+v contextCalls=%d", out, contextCalls)

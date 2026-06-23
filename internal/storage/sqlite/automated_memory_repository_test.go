@@ -125,6 +125,59 @@ func TestAutomatedMemoryRepositoryWriteMemoryAndSearch(t *testing.T) {
 	}
 }
 
+func TestAutomatedMemoryRepositoryWritesMemoryKeyProjection(t *testing.T) {
+	ctx := context.Background()
+	store := newCaptureTestStore(t)
+	defer store.Close()
+	requireFTS5(t, store)
+
+	evidence := memory.Evidence{
+		ID:                   "ev_key_auto",
+		RawEventID:           "evt_key_auto",
+		SourceType:           "agent_summary",
+		InterpretedStatement: "自动记忆使用 QKV Retrieval Projection。",
+		Confidence:           0.8,
+	}
+	if err := store.WriteEvidence(ctx, evidence); err != nil {
+		t.Fatalf("WriteEvidence() error = %v", err)
+	}
+	item := memory.MemoryItem{
+		ID:          "mem_key_auto",
+		Scope:       memory.ScopeProjectLocal,
+		WorkspaceID: "ws",
+		ProjectID:   "project_key_auto",
+		MemoryType:  memory.TypeDecision,
+		Content:     "自动记忆使用 QKV Retrieval Projection。",
+		SearchText:  "retrieval: QKV Retrieval Projection",
+		State:       memory.StatePendingReview,
+		Tier:        memory.TierLongTerm,
+	}
+	if _, err := store.WriteAutomatedMemory(ctx, automation.AutomatedMemoryWrite{
+		Item:        item,
+		EvidenceIDs: []string{evidence.ID},
+	}); err != nil {
+		t.Fatalf("WriteAutomatedMemory() error = %v", err)
+	}
+
+	resp, _, err := store.Search(ctx, memory.SearchRequest{
+		Query:       "qkvretrievalprojection",
+		WorkspaceID: "ws",
+		ProjectID:   "project_key_auto",
+		Scope:       []string{memory.ScopeProjectLocal},
+		MemoryTypes: []string{memory.TypeDecision},
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(resp) != 1 || resp[0].MemoryID != item.ID {
+		t.Fatalf("results = %+v, want automated memory_key fallback hit", resp)
+	}
+	if !containsString(resp[0].WhyIncluded, "memory_key_fallback") {
+		t.Fatalf("why_included = %#v, want memory_key_fallback", resp[0].WhyIncluded)
+	}
+}
+
 func TestAutomatedMemoryRepositoryWritesProvenanceWithMemory(t *testing.T) {
 	ctx := context.Background()
 	store := newCaptureTestStore(t)
@@ -300,6 +353,147 @@ func TestAutomatedMemoryRepositoryResolvesCorrectionTargetByEvent(t *testing.T) 
 	}
 	if !found || target.ID != "mem_target_event" {
 		t.Fatalf("target = %+v found=%v, want mem_target_event", target, found)
+	}
+}
+
+func TestAutomatedMemoryCorrectionRebuildsMemoryKeyProjection(t *testing.T) {
+	ctx := context.Background()
+	store := newCaptureTestStore(t)
+	defer store.Close()
+	requireFTS5(t, store)
+
+	evidence := memory.Evidence{
+		ID:                   "ev_correction_key",
+		RawEventID:           "evt_correction_key",
+		SourceType:           "agent_summary",
+		InterpretedStatement: "纠正前使用旧检索线索。",
+		Confidence:           0.8,
+	}
+	if err := store.WriteEvidence(ctx, evidence); err != nil {
+		t.Fatalf("WriteEvidence() error = %v", err)
+	}
+	item := memory.MemoryItem{
+		ID:          "mem_correction_key",
+		Scope:       memory.ScopeProjectLocal,
+		WorkspaceID: "ws",
+		ProjectID:   "project_correction_key",
+		MemoryType:  memory.TypeProjectFact,
+		Content:     "旧线索是 Legacy Retrieval Projection。",
+		SearchText:  "retrieval: Legacy Retrieval Projection",
+		State:       memory.StateStable,
+		Tier:        memory.TierLongTerm,
+	}
+	if _, err := store.WriteAutomatedMemory(ctx, automation.AutomatedMemoryWrite{
+		Item:        item,
+		EvidenceIDs: []string{evidence.ID},
+	}); err != nil {
+		t.Fatalf("WriteAutomatedMemory() error = %v", err)
+	}
+	correctionEvidence := memory.Evidence{
+		ID:                   "ev_correction_key_new",
+		RawEventID:           "evt_correction_key_new",
+		SourceType:           "user_confirmed",
+		InterpretedStatement: "纠正后使用 QKV Retrieval Projection。",
+		Confidence:           0.9,
+	}
+	if err := store.WriteEvidence(ctx, correctionEvidence); err != nil {
+		t.Fatalf("WriteEvidence(correction) error = %v", err)
+	}
+	if _, err := store.OverwriteMemoryWithCorrection(ctx, automation.AutomatedMemoryCorrection{
+		TargetMemoryID: item.ID,
+		Item: memory.MemoryItem{
+			Scope:       item.Scope,
+			WorkspaceID: item.WorkspaceID,
+			ProjectID:   item.ProjectID,
+			MemoryType:  item.MemoryType,
+			Content:     "新线索是 QKV Retrieval Projection。",
+			SearchText:  "retrieval: QKV Retrieval Projection",
+			State:       memory.StateStable,
+			Tier:        memory.TierLongTerm,
+		},
+		EvidenceIDs: []string{correctionEvidence.ID},
+	}); err != nil {
+		t.Fatalf("OverwriteMemoryWithCorrection() error = %v", err)
+	}
+
+	oldResults, _, err := store.Search(ctx, memory.SearchRequest{
+		Query:       "legacyretrievalprojection",
+		WorkspaceID: "ws",
+		ProjectID:   "project_correction_key",
+		Scope:       []string{memory.ScopeProjectLocal},
+		MemoryTypes: []string{memory.TypeProjectFact},
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("Search(old key) error = %v", err)
+	}
+	if len(oldResults) != 0 {
+		t.Fatalf("old key results = %+v, want no hit after correction", oldResults)
+	}
+	newResults, _, err := store.Search(ctx, memory.SearchRequest{
+		Query:       "qkvretrievalprojection",
+		WorkspaceID: "ws",
+		ProjectID:   "project_correction_key",
+		Scope:       []string{memory.ScopeProjectLocal},
+		MemoryTypes: []string{memory.TypeProjectFact},
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("Search(new key) error = %v", err)
+	}
+	if len(newResults) != 1 || newResults[0].MemoryID != item.ID {
+		t.Fatalf("new key results = %+v, want corrected memory hit", newResults)
+	}
+}
+
+func TestAutomatedArchivePathsDeleteMemoryKeyProjection(t *testing.T) {
+	ctx := context.Background()
+	store := newCaptureTestStore(t)
+	defer store.Close()
+	requireFTS5(t, store)
+
+	evidence := memory.Evidence{
+		ID:                   "ev_archive_key",
+		RawEventID:           "evt_archive_key",
+		SourceType:           "agent_summary",
+		InterpretedStatement: "归档前存在 key 投影。",
+		Confidence:           0.8,
+	}
+	if err := store.WriteEvidence(ctx, evidence); err != nil {
+		t.Fatalf("WriteEvidence() error = %v", err)
+	}
+	item := memory.MemoryItem{
+		ID:          "mem_archive_key",
+		Scope:       memory.ScopeProjectLocal,
+		WorkspaceID: "ws",
+		ProjectID:   "project_archive_key",
+		MemoryType:  memory.TypeProjectFact,
+		Content:     "归档测试使用 Archive Key Projection。",
+		SearchText:  "retrieval: Archive Key Projection",
+		State:       memory.StateStable,
+		Tier:        memory.TierLongTerm,
+	}
+	if _, err := store.WriteAutomatedMemory(ctx, automation.AutomatedMemoryWrite{
+		Item:        item,
+		EvidenceIDs: []string{evidence.ID},
+	}); err != nil {
+		t.Fatalf("WriteAutomatedMemory() error = %v", err)
+	}
+	var keyCount int
+	if err := store.db.QueryRowContext(ctx, "select count(*) from memory_key where memory_id = ?", item.ID).Scan(&keyCount); err != nil {
+		t.Fatalf("query memory_key count before archive error = %v", err)
+	}
+	if keyCount == 0 {
+		t.Fatal("memory_key count before archive = 0, want key projection to clean")
+	}
+	if err := store.ArchiveMemoryForSupersedes(ctx, item.ID, time.Now().UTC()); err != nil {
+		t.Fatalf("ArchiveMemoryForSupersedes() error = %v", err)
+	}
+	if err := store.db.QueryRowContext(ctx, "select count(*) from memory_key where memory_id = ?", item.ID).Scan(&keyCount); err != nil {
+		t.Fatalf("query memory_key count error = %v", err)
+	}
+	if keyCount != 0 {
+		t.Fatalf("memory_key count = %d, want 0 after supersedes archive", keyCount)
 	}
 }
 

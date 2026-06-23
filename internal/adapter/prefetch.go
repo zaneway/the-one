@@ -150,9 +150,6 @@ func (p *PrefetchProcessor) Run(ctx context.Context, req PrefetchRequest) Prefet
 	if ctxReq.Task == "" {
 		ctxReq.Task = "用户输入摘要未直接可见"
 	}
-	if ctxReq.TokenBudget <= 0 {
-		ctxReq.TokenBudget = 1200
-	}
 
 	runCtx := ctx
 	if p.Timeout > 0 {

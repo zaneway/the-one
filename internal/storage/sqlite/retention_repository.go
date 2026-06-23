@@ -97,6 +97,10 @@ func (s *Store) ArchiveTemporaryMemory(ctx context.Context, memoryID string, now
 		_ = tx.Rollback()
 		return err
 	}
+	if err := deleteMemoryKeys(ctx, tx, memoryID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	return storageErr(tx.Commit())
 }
 

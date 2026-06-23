@@ -78,7 +78,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	if cfg.CodeIndex.Provider != "none" {
 		codeIndexAdapter = codeindex.NewLocalBasicAdapter(cfg.CodeIndex, "")
 	}
-	retrievalOrchestrator := retrieval.NewMemoryOrchestrator(cfg, store,
+	queryEmbeddingProvider, err := newQueryEmbeddingProvider(cfg)
+	if err != nil {
+		logger.Error("query embedding provider init failed", "provider", cfg.Embedding.Provider, "error", err)
+		_ = store.Close()
+		_ = logCloser.Close()
+		return nil, err
+	}
+	retrievalOptions := []retrieval.MemoryOrchestratorOption{
 		retrieval.WithTraceRepository(store),
 		retrieval.WithAccessLogRepository(store),
 		retrieval.WithRelationRepository(store),
@@ -88,7 +95,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		retrieval.WithReviewCheckpointRepository(store),
 		retrieval.WithRawEventRepository(store),
 		retrieval.WithLogger(logger),
-	)
+	}
+	if queryEmbeddingProvider != nil {
+		retrievalOptions = append(retrievalOptions,
+			retrieval.WithVectorRepository(store),
+			retrieval.WithQueryEmbeddingProvider(queryEmbeddingProvider),
+		)
+	}
+	retrievalOrchestrator := retrieval.NewMemoryOrchestrator(cfg, store, retrievalOptions...)
 	// Step 7: 注册 自动化服务（observe 入队、准入管道、remember 准入）
 	automationService := automation.NewService(cfg, store, provider)
 	memoryService := memory.NewService(cfg, store,
@@ -128,6 +142,33 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		worker:            worker,
 		automationService: automationService,
 	}, nil
+}
+
+func newQueryEmbeddingProvider(cfg config.Config) (retrieval.QueryEmbeddingProvider, error) {
+	if !cfg.Embedding.OnlineQueryEmbeddingEnabled {
+		return nil, nil
+	}
+	providerName := strings.TrimSpace(cfg.Embedding.Provider)
+	if providerName == "" || providerName == "none" {
+		return nil, fmt.Errorf("CONFIG_INVALID: embedding.provider is required when online_query_embedding_enabled=true")
+	}
+	var provider retrieval.QueryEmbeddingProvider
+	switch providerName {
+	case processor.OpenAIProviderName, "deepseek", "external":
+		openaiProvider, err := retrieval.NewOpenAIQueryEmbeddingProvider(retrieval.OpenAIQueryEmbeddingProviderConfig{
+			APIKey:  strings.TrimSpace(cfg.Processor.OpenAI.APIKey),
+			BaseURL: cfg.Processor.OpenAI.BaseURL,
+			Model:   cfg.Embedding.Model,
+			Timeout: time.Duration(cfg.Processor.OpenAI.TimeoutMS) * time.Millisecond,
+		})
+		if err != nil {
+			return nil, err
+		}
+		provider = openaiProvider
+	default:
+		return nil, fmt.Errorf("CONFIG_INVALID: unsupported embedding provider %q", cfg.Embedding.Provider)
+	}
+	return retrieval.NewCachedQueryEmbeddingProvider(provider, cfg.Embedding.QueryCacheSize), nil
 }
 
 // newProcessorProvider 根据 config.Processor.Provider 构造 processor.Provider 实现。

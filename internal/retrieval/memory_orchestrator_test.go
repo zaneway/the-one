@@ -90,6 +90,82 @@ func TestMemoryOrchestratorSearchWritesTraceAndRetrievedLogs(t *testing.T) {
 	}
 }
 
+func TestMemoryOrchestratorSearchMergesVectorCandidates(t *testing.T) {
+	ctx := context.Background()
+	searcher := &fakeMemorySearcher{results: []memory.SearchResult{
+		{
+			MemoryID:   "mem-fts",
+			MemoryType: memory.TypeDecision,
+			Scope:      memory.ScopeProjectLocal,
+			Content:    "FTS 召回结果保留。",
+			Score:      0.3,
+			Confidence: 0.7,
+			State:      memory.StateStable,
+			Tier:       memory.TierLongTerm,
+		},
+	}}
+	vectorRepo := &fakeVectorRepo{results: []memory.SearchResult{
+		{
+			MemoryID:   "mem-vector",
+			MemoryType: memory.TypeDecision,
+			Scope:      memory.ScopeProjectLocal,
+			Content:    "QKV 方案 C 通过 query embedding 做语义召回。",
+			Score:      0.95,
+			Confidence: 0.8,
+			State:      memory.StateStable,
+			Tier:       memory.TierLongTerm,
+			WhyIncluded: []string{
+				"vector_seed",
+			},
+		},
+	}}
+	embeddingProvider := &fakeQueryEmbeddingProvider{vector: []float32{1, 0}}
+	cfg := config.Default()
+	cfg.Embedding.Provider = "external"
+	cfg.Embedding.Model = "embedding-test"
+	cfg.Embedding.OnlineQueryEmbeddingEnabled = true
+	orchestrator := NewMemoryOrchestrator(cfg, searcher,
+		WithTraceRepository(&fakeTraceRepo{}),
+		WithAccessLogRepository(&fakeAccessLogRepo{}),
+		WithVectorRepository(vectorRepo),
+		WithQueryEmbeddingProvider(embeddingProvider),
+		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+	)
+
+	resp, err := orchestrator.Search(ctx, memory.SearchRequest{
+		Query:       "方案 C QKV 语义召回",
+		WorkspaceID: "ws-1",
+		ProjectID:   "prj-1",
+		Scope:       []string{memory.ScopeProjectLocal},
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if !resp.Diagnostics.UsedVector {
+		t.Fatalf("UsedVector = false, want true: %+v", resp.Diagnostics)
+	}
+	if resp.Diagnostics.RetrievalMode != string(ModeFTSVectorRelation) {
+		t.Fatalf("retrieval mode = %q, want %q", resp.Diagnostics.RetrievalMode, ModeFTSVectorRelation)
+	}
+	if len(embeddingProvider.calls) != 1 || embeddingProvider.calls[0] != "方案 C QKV 语义召回" {
+		t.Fatalf("embedding provider calls = %+v", embeddingProvider.calls)
+	}
+	if len(vectorRepo.calls) != 1 || vectorRepo.calls[0].model != "embedding-test" {
+		t.Fatalf("vector repo calls = %+v", vectorRepo.calls)
+	}
+	vectorResult := findSearchResult(resp.Results, "mem-vector")
+	if vectorResult == nil {
+		t.Fatalf("vector result missing: %+v", resp.Results)
+	}
+	if vectorResult.ScoreBreakdown == nil || vectorResult.ScoreBreakdown.Semantic <= 0 {
+		t.Fatalf("vector result missing semantic score: %+v", vectorResult)
+	}
+	if !containsString(vectorResult.WhyIncluded, "vector_seed") {
+		t.Fatalf("why_included = %+v, want vector_seed", vectorResult.WhyIncluded)
+	}
+}
+
 func TestMemoryOrchestratorContextWritesInjectedLogs(t *testing.T) {
 	ctx := context.Background()
 	searcher := &fakeMemorySearcher{results: []memory.SearchResult{
@@ -157,6 +233,122 @@ func TestMemoryOrchestratorContextWritesInjectedLogs(t *testing.T) {
 		if record.EventType == injectedAccessEventType && !record.UsedInContext {
 			t.Fatalf("injected log not marked used_in_context: %+v", record)
 		}
+	}
+}
+
+func TestMemoryOrchestratorContextAlwaysUsesConfiguredBudget(t *testing.T) {
+	ctx := context.Background()
+	searcher := &fakeMemorySearcher{results: []memory.SearchResult{
+		{
+			MemoryID:   "mem-config-budget",
+			MemoryType: memory.TypeDecision,
+			Scope:      memory.ScopeProjectLocal,
+			Content:    "memory.context 的预算必须由 retrieval.default_token_budget 统一控制。",
+			Score:      0.9,
+			Confidence: 0.8,
+			State:      memory.StateStable,
+			Tier:       memory.TierLongTerm,
+		},
+	}}
+	traceRepo := &fakeTraceRepo{}
+	accessRepo := &fakeAccessLogRepo{}
+	cfg := config.Default()
+	cfg.Retrieval.DefaultTokenBudget = 300
+	orchestrator := NewMemoryOrchestrator(cfg, searcher,
+		WithTraceRepository(traceRepo),
+		WithAccessLogRepository(accessRepo),
+		WithRelationRepository(&fakeRelationRepo{}),
+		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+	)
+
+	resp, err := orchestrator.Context(ctx, memory.ContextRequest{
+		Task:        "检查 context 预算来源",
+		WorkspaceID: "ws-1",
+		ProjectID:   "prj-1",
+		TokenBudget: 1,
+	})
+	if err != nil {
+		t.Fatalf("Context() error = %v", err)
+	}
+
+	if resp.Diagnostics == nil {
+		t.Fatal("diagnostics = nil, want budget diagnostics")
+	}
+	if got := resp.Diagnostics.BudgetAllocation["total"]; got != 300 {
+		t.Fatalf("budget total = %d, want configured default 300", got)
+	}
+	if len(resp.UsedMemoryIDs) != 1 || resp.UsedMemoryIDs[0] != "mem-config-budget" {
+		t.Fatalf("used memory ids = %+v, want mem-config-budget", resp.UsedMemoryIDs)
+	}
+}
+
+func TestMemoryOrchestratorContextInjectsOnlyTopTwoByScore(t *testing.T) {
+	ctx := context.Background()
+	searcher := &fakeMemorySearcher{results: []memory.SearchResult{
+		{
+			MemoryID:   "mem-score-09",
+			MemoryType: memory.TypeDecision,
+			Scope:      memory.ScopeProjectLocal,
+			Content:    "最高分记忆应被注入。",
+			Score:      0.9,
+			Confidence: 0.8,
+			State:      memory.StateStable,
+			Tier:       memory.TierLongTerm,
+		},
+		{
+			MemoryID:   "mem-score-08",
+			MemoryType: memory.TypeDecision,
+			Scope:      memory.ScopeProjectLocal,
+			Content:    "第二高分记忆应被注入。",
+			Score:      0.8,
+			Confidence: 0.8,
+			State:      memory.StateStable,
+			Tier:       memory.TierLongTerm,
+		},
+		{
+			MemoryID:   "mem-score-07",
+			MemoryType: memory.TypeDecision,
+			Scope:      memory.ScopeProjectLocal,
+			Content:    "第三高分记忆不应被注入。",
+			Score:      0.7,
+			Confidence: 0.8,
+			State:      memory.StateStable,
+			Tier:       memory.TierLongTerm,
+		},
+	}}
+	traceRepo := &fakeTraceRepo{}
+	accessRepo := &fakeAccessLogRepo{}
+	orchestrator := newTestOrchestrator(searcher, traceRepo, accessRepo)
+
+	resp, err := orchestrator.Context(ctx, memory.ContextRequest{
+		Task:        "检查 context top two",
+		WorkspaceID: "ws-1",
+		ProjectID:   "prj-1",
+	})
+	if err != nil {
+		t.Fatalf("Context() error = %v", err)
+	}
+
+	wantIDs := []string{"mem-score-09", "mem-score-08"}
+	if len(resp.UsedMemoryIDs) != len(wantIDs) {
+		t.Fatalf("used memory ids = %+v, want %+v", resp.UsedMemoryIDs, wantIDs)
+	}
+	for i, want := range wantIDs {
+		if resp.UsedMemoryIDs[i] != want {
+			t.Fatalf("used memory ids = %+v, want %+v", resp.UsedMemoryIDs, wantIDs)
+		}
+	}
+	if resp.Diagnostics == nil || resp.Diagnostics.BudgetAllocation["memory_count"] != 2 {
+		t.Fatalf("diagnostics = %+v, want memory_count 2", resp.Diagnostics)
+	}
+	if len(traceRepo.updated) != 1 || traceRepo.updated[0].CandidateCount != 3 || traceRepo.updated[0].InjectedCount != 2 {
+		t.Fatalf("trace update = %+v, want candidate_count 3 and injected_count 2", traceRepo.updated)
+	}
+	if got := countAccessEvents(accessRepo.records, retrievedAccessEventType); got != 3 {
+		t.Fatalf("retrieved logs = %d, want 3", got)
+	}
+	if got := countAccessEvents(accessRepo.records, injectedAccessEventType); got != 2 {
+		t.Fatalf("injected logs = %d, want 2", got)
 	}
 }
 
@@ -534,6 +726,38 @@ type fakeRelationRepo struct {
 
 func (f *fakeRelationRepo) ListRelationExpansions(ctx context.Context, query RelationExpansionQuery) ([]RelationExpansion, error) {
 	return append([]RelationExpansion(nil), f.expansions...), nil
+}
+
+type fakeVectorRepo struct {
+	results []memory.SearchResult
+	calls   []fakeVectorSearchCall
+}
+
+type fakeVectorSearchCall struct {
+	req    memory.SearchRequest
+	model  string
+	vector []float32
+	limit  int
+}
+
+func (f *fakeVectorRepo) SearchVector(ctx context.Context, req memory.SearchRequest, model string, queryVector []float32, limit int) ([]memory.SearchResult, error) {
+	f.calls = append(f.calls, fakeVectorSearchCall{
+		req:    req,
+		model:  model,
+		vector: append([]float32(nil), queryVector...),
+		limit:  limit,
+	})
+	return append([]memory.SearchResult(nil), f.results...), nil
+}
+
+type fakeQueryEmbeddingProvider struct {
+	vector []float32
+	calls  []string
+}
+
+func (f *fakeQueryEmbeddingProvider) EmbedQuery(ctx context.Context, query string) ([]float32, error) {
+	f.calls = append(f.calls, query)
+	return append([]float32(nil), f.vector...), nil
 }
 
 type fakeCodeRefRepo struct {
