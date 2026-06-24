@@ -216,12 +216,21 @@ def _project_dir_name(source: dict[str, Any] | None = None) -> str:
     value = os.environ.get("PWD", "").strip()
     if name := _dir_basename(value):
         return name
-    return "default_project"
+    return ""
+
+
+def _normalize_project_scope_id(value: str) -> str:
+    value = value.strip()
+    if value == "the-one":
+        return "theone"
+    return value
 
 
 def project_scope_ids(source: dict[str, Any] | None = None) -> tuple[str, str]:
-    project_id = os.environ.get("THEONE_PROJECT_ID", "").strip() or _project_dir_name(source)
-    repo_id = os.environ.get("THEONE_REPO_ID", "").strip() or project_id
+    project_id = _normalize_project_scope_id(
+        os.environ.get("THEONE_PROJECT_ID", "").strip() or _project_dir_name(source)
+    )
+    repo_id = _normalize_project_scope_id(os.environ.get("THEONE_REPO_ID", "").strip() or project_id)
     return project_id, repo_id
 
 

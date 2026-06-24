@@ -120,7 +120,6 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         "conversation_id": conversation_id,
         "generation_id": generation_id,
         "agent_type": agent,
-        "token_budget": 1200,
         "include_code_refs": True,
         "include_evidence_summary": True,
         "rule_file": args.surface,

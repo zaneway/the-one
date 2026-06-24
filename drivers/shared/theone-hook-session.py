@@ -166,13 +166,13 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     os.makedirs(os.path.dirname(surface_file), exist_ok=True)
     if agent in {"claude_code", "codex"}:
         body = (
-            f"# The One 记忆上下文（{agent} 自动注入）\n\n"
+            f"# theone 记忆上下文（{agent} 自动注入）\n\n"
             "_（暂无命中记忆；新会话或 prefetch 后将自动更新。）_\n"
         )
     else:
         body = (
             "---\n"
-            "description: The One 本轮记忆上下文（beforeSubmitPrompt 自动刷新，勿手工编辑）\n"
+            "description: theone 本轮记忆上下文（beforeSubmitPrompt 自动刷新，勿手工编辑）\n"
             "alwaysApply: true\n"
             "---\n\n"
             "_（暂无命中记忆；新会话或 prefetch 后将自动更新。）_\n"

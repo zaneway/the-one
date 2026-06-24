@@ -50,6 +50,7 @@ class HookPrefetchTest(unittest.TestCase):
             self.assertNotIn("prompt_fingerprint", cached)
             self.assertTrue(cached["generation_id"].startswith("gen_"))
             self.assertEqual(prefetch["task"], "abcdefghijkl")
+            self.assertNotIn("token_budget", prefetch)
 
     def test_prepare_derives_project_and_repo_from_hook_cwd(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -87,6 +88,42 @@ class HookPrefetchTest(unittest.TestCase):
             prefetch = json.loads(proc.stdout)
             self.assertEqual(prefetch["project_id"], "payment-gateway")
             self.assertEqual(prefetch["repo_id"], "payment-gateway")
+
+    def test_prepare_normalizes_the_one_repo_scope_to_theone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            conversation_dir = tmp_path / "the-one"
+            conversation_dir.mkdir()
+            prompt_cache = tmp_path / "prompt-cache.json"
+            env = dict(os.environ)
+            env.pop("THEONE_PROJECT_ID", None)
+            env.pop("THEONE_REPO_ID", None)
+            env.pop("THEONE_PROJECT_DIR", None)
+            env.pop("ROOT_DIR", None)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "prepare",
+                    "--agent",
+                    "codex",
+                    "--prompt-cache",
+                    str(prompt_cache),
+                    "--surface",
+                    str(tmp_path / "surface.md"),
+                ],
+                input=json.dumps({"prompt": "检查项目命名", "session_id": "sess", "cwd": str(conversation_dir)}),
+                text=True,
+                capture_output=True,
+                check=True,
+                cwd=conversation_dir,
+                env=env,
+            )
+
+            prefetch = json.loads(proc.stdout)
+            self.assertEqual(prefetch["project_id"], "theone")
+            self.assertEqual(prefetch["repo_id"], "theone")
 
 
 if __name__ == "__main__":
