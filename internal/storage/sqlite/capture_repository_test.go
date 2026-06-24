@@ -102,9 +102,13 @@ func TestCaptureRepositorySessionTaskEventFlow(t *testing.T) {
 		t.Fatalf("InsertRawEvent() error = %v", err)
 	}
 	duplicate, found, err := store.FindDuplicateEvent(ctx, capture.EventDedupKey{
-		ContentHash: "sha256:test",
-		SessionID:   session.ID,
-		EventType:   capture.EventToolResultSummary,
+		ContentHash:   "sha256:test",
+		SessionID:     session.ID,
+		EventType:     capture.EventToolResultSummary,
+		SourceChannel: capture.SourceChannelAgentSession,
+		WorkspaceID:   "ws",
+		ProjectID:     "project_a",
+		RepoID:        "repo_a",
 	})
 	if err != nil {
 		t.Fatalf("FindDuplicateEvent() error = %v", err)
@@ -143,6 +147,79 @@ func TestCaptureRepositorySessionTaskEventFlow(t *testing.T) {
 	}
 	if len(sessions) != 1 || sessions[0].ID != session.ID {
 		t.Fatalf("sessions = %+v, want sess_001", sessions)
+	}
+}
+
+func TestCaptureRepositoryDedupSeparatesSourceChannelWithinSession(t *testing.T) {
+	ctx := context.Background()
+	store := newCaptureTestStore(t)
+	defer store.Close()
+
+	if _, err := store.UpsertSession(ctx, capture.AgentSession{
+		ID:           "sess_dedup_channel",
+		AgentType:    "codex",
+		WorkspaceID:  "ws",
+		ProjectID:    "project_a",
+		RepoID:       "repo_a",
+		CaptureLevel: 3,
+		Status:       capture.StatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertSession() error = %v", err)
+	}
+	base := capture.RawEvent{
+		SessionID:     "sess_dedup_channel",
+		WorkspaceID:   "ws",
+		ProjectID:     "project_a",
+		RepoID:        "repo_a",
+		AgentType:     "codex",
+		EventType:     capture.EventTurnCompleted,
+		OccurredAt:    time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC),
+		ContentHash:   "sha256:same-content",
+		Sensitivity:   capture.SensitivityNormal,
+		RetentionHint: "short_term",
+	}
+	first := base
+	first.ID = "evt_agent_session"
+	first.SourceChannel = capture.SourceChannelAgentSession
+	if err := store.InsertRawEvent(ctx, first); err != nil {
+		t.Fatalf("InsertRawEvent(first) error = %v", err)
+	}
+	second := base
+	second.ID = "evt_mcp_tool"
+	second.SourceChannel = capture.SourceChannelMCPTool
+	if err := store.InsertRawEvent(ctx, second); err != nil {
+		t.Fatalf("InsertRawEvent(second different source_channel) error = %v", err)
+	}
+
+	agentDuplicate, found, err := store.FindDuplicateEvent(ctx, capture.EventDedupKey{
+		ContentHash:   base.ContentHash,
+		SessionID:     base.SessionID,
+		EventType:     base.EventType,
+		SourceChannel: capture.SourceChannelAgentSession,
+		WorkspaceID:   base.WorkspaceID,
+		ProjectID:     base.ProjectID,
+		RepoID:        base.RepoID,
+	})
+	if err != nil {
+		t.Fatalf("FindDuplicateEvent(agent_session) error = %v", err)
+	}
+	if !found || agentDuplicate.ID != first.ID {
+		t.Fatalf("agent duplicate = %+v found=%v, want %s", agentDuplicate, found, first.ID)
+	}
+	mcpDuplicate, found, err := store.FindDuplicateEvent(ctx, capture.EventDedupKey{
+		ContentHash:   base.ContentHash,
+		SessionID:     base.SessionID,
+		EventType:     base.EventType,
+		SourceChannel: capture.SourceChannelMCPTool,
+		WorkspaceID:   base.WorkspaceID,
+		ProjectID:     base.ProjectID,
+		RepoID:        base.RepoID,
+	})
+	if err != nil {
+		t.Fatalf("FindDuplicateEvent(mcp_tool) error = %v", err)
+	}
+	if !found || mcpDuplicate.ID != second.ID {
+		t.Fatalf("mcp duplicate = %+v found=%v, want %s", mcpDuplicate, found, second.ID)
 	}
 }
 

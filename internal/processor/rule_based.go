@@ -373,20 +373,20 @@ func baseCandidate(input CandidateInput, content, memoryType, scope string, keyw
 // scopedIdentity 根据 scope 决定候选记忆的 identity 字段填充策略。
 // 不同 scope 的设计意图：
 //   - UserGlobal：只填 userID，跨项目/仓库/会话共享
-//   - ProjectLocal：只填 projectID，项目内共享
-//   - RepoLocal：只填 repoID，仓库内共享
-//   - Session：只填 sessionID，单次会话内有效
+//   - ProjectLocal：projectID 是隔离键，同时保留 raw_event 的 repo/session 来源上下文
+//   - RepoLocal：repoID 是隔离键，同时保留 raw_event 的 project/session 来源上下文
+//   - Session：sessionID 是隔离键，同时保留 raw_event 的 project/repo 来源上下文
 //   - default（兜底）：全部填充，保留完整上下文
 func scopedIdentity(event capture.RawEvent, scope string) (workspaceID, userID, projectID, repoID, sessionID string) {
 	switch scope {
 	case memory.ScopeUserGlobal:
 		return "", "local_default_user", "", "", ""
 	case memory.ScopeProjectLocal:
-		return event.WorkspaceID, "", event.ProjectID, "", ""
+		return event.WorkspaceID, "", event.ProjectID, event.RepoID, event.SessionID
 	case memory.ScopeRepoLocal:
-		return event.WorkspaceID, "", "", event.RepoID, ""
+		return event.WorkspaceID, "", event.ProjectID, event.RepoID, event.SessionID
 	case memory.ScopeSession:
-		return event.WorkspaceID, "", "", "", event.SessionID
+		return event.WorkspaceID, "", event.ProjectID, event.RepoID, event.SessionID
 	default:
 		return event.WorkspaceID, "local_default_user", event.ProjectID, event.RepoID, event.SessionID
 	}

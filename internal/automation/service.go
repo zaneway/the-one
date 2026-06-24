@@ -155,8 +155,8 @@ func (s *Service) EnqueueRawEvent(ctx context.Context, rawEvent capture.RawEvent
 	return err
 }
 
-// RunJob 执行单个已领取 job，并负责把结果状态回写为 succeeded 或 failed。
-// 处理流程：通过 JobDispatcher 分发到对应 handler → 成功则 MarkJobSucceeded，失败则 MarkJobFailed。
+// RunJob 执行单个已领取 job。
+// 处理流程：通过 JobDispatcher 分发到对应 handler → 成功则 MarkJobSucceeded，失败则把错误交还 Worker 决定 retry/failed。
 // 设计约束：Provider 执行发生在 claim 事务之外，避免长时间持锁。
 func (s *Service) RunJob(ctx context.Context, job AsyncJob) error {
 	now := time.Now()
@@ -174,13 +174,11 @@ func (s *Service) RunJob(ctx context.Context, job AsyncJob) error {
 			"job_type", job.JobType,
 			"error", err,
 		)
-		_ = s.repo.MarkJobFailed(ctx, job.ID, err.Error(), now)
 		return err
 	}
 	payloadJSON, err := jsonText(payload)
 	if err != nil {
 		s.logger.Error("job payload marshal failed", "job_id", job.ID, "error", err)
-		_ = s.repo.MarkJobFailed(ctx, job.ID, err.Error(), now)
 		return err
 	}
 	s.logger.Info("job succeeded",

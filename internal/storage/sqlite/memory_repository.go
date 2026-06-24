@@ -20,27 +20,17 @@ func (s *Store) FindDuplicate(ctx context.Context, item memory.MemoryItem) (memo
 	query := baseMemorySelect() + ` where scope = ?
 		and memory_type = ?
 		and content = ?
-		and coalesce(workspace_id, '') = ?
-		and coalesce(user_id, '') = ?
-		and coalesce(project_id, '') = ?
-		and coalesce(repo_id, '') = ?
-		and coalesce(session_id, '') = ?
-		and coalesce(task_id, '') = ?
-		and state != ?
-		order by updated_at desc
-		limit 1`
-	row := s.db.QueryRowContext(ctx, query,
+		and state != ?`
+	args := []any{
 		item.Scope,
 		item.MemoryType,
 		item.Content,
-		item.WorkspaceID,
-		item.UserID,
-		item.ProjectID,
-		item.RepoID,
-		item.SessionID,
-		item.TaskID,
 		memory.StateDeleted,
-	)
+	}
+	query, args = appendDuplicateScopeFilters(query, args, item)
+	query += ` order by updated_at desc
+		limit 1`
+	row := s.db.QueryRowContext(ctx, query, args...)
 	existing, err := scanMemory(row)
 	if err == sql.ErrNoRows {
 		return memory.MemoryItem{}, false, nil
@@ -49,6 +39,32 @@ func (s *Store) FindDuplicate(ctx context.Context, item memory.MemoryItem) (memo
 		return memory.MemoryItem{}, false, storageErr(err)
 	}
 	return existing, true, nil
+}
+
+func appendDuplicateScopeFilters(query string, args []any, item memory.MemoryItem) (string, []any) {
+	switch item.Scope {
+	case memory.ScopeUserGlobal:
+		query += " and coalesce(user_id, '') = ?"
+		args = append(args, item.UserID)
+	case memory.ScopeProjectLocal:
+		query += " and coalesce(workspace_id, '') = ? and coalesce(project_id, '') = ?"
+		args = append(args, item.WorkspaceID, item.ProjectID)
+	case memory.ScopeRepoLocal:
+		query += " and coalesce(workspace_id, '') = ? and coalesce(repo_id, '') = ?"
+		args = append(args, item.WorkspaceID, item.RepoID)
+	case memory.ScopeSession:
+		query += " and coalesce(workspace_id, '') = ? and coalesce(session_id, '') = ?"
+		args = append(args, item.WorkspaceID, item.SessionID)
+	default:
+		query += ` and coalesce(workspace_id, '') = ?
+			and coalesce(user_id, '') = ?
+			and coalesce(project_id, '') = ?
+			and coalesce(repo_id, '') = ?
+			and coalesce(session_id, '') = ?
+			and coalesce(task_id, '') = ?`
+		args = append(args, item.WorkspaceID, item.UserID, item.ProjectID, item.RepoID, item.SessionID, item.TaskID)
+	}
+	return query, args
 }
 
 // Remember 在一个短事务内写入 memory、evidence、link、FTS 和可选 review_checkpoint。

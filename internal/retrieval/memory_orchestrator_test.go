@@ -236,14 +236,14 @@ func TestMemoryOrchestratorContextWritesInjectedLogs(t *testing.T) {
 	}
 }
 
-func TestMemoryOrchestratorContextAlwaysUsesConfiguredBudget(t *testing.T) {
+func TestMemoryOrchestratorContextRequestBudgetOverridesConfiguredDefault(t *testing.T) {
 	ctx := context.Background()
 	searcher := &fakeMemorySearcher{results: []memory.SearchResult{
 		{
 			MemoryID:   "mem-config-budget",
 			MemoryType: memory.TypeDecision,
 			Scope:      memory.ScopeProjectLocal,
-			Content:    "memory.context 的预算必须由 retrieval.default_token_budget 统一控制。",
+			Content:    "memory.context 的预算应允许调用方按当前窗口覆盖默认配置。",
 			Score:      0.9,
 			Confidence: 0.8,
 			State:      memory.StateStable,
@@ -265,7 +265,7 @@ func TestMemoryOrchestratorContextAlwaysUsesConfiguredBudget(t *testing.T) {
 		Task:        "检查 context 预算来源",
 		WorkspaceID: "ws-1",
 		ProjectID:   "prj-1",
-		TokenBudget: 1,
+		TokenBudget: 60,
 	})
 	if err != nil {
 		t.Fatalf("Context() error = %v", err)
@@ -274,15 +274,15 @@ func TestMemoryOrchestratorContextAlwaysUsesConfiguredBudget(t *testing.T) {
 	if resp.Diagnostics == nil {
 		t.Fatal("diagnostics = nil, want budget diagnostics")
 	}
-	if got := resp.Diagnostics.BudgetAllocation["total"]; got != 300 {
-		t.Fatalf("budget total = %d, want configured default 300", got)
+	if got := resp.Diagnostics.BudgetAllocation["total"]; got != 60 {
+		t.Fatalf("budget total = %d, want request budget 60", got)
 	}
 	if len(resp.UsedMemoryIDs) != 1 || resp.UsedMemoryIDs[0] != "mem-config-budget" {
 		t.Fatalf("used memory ids = %+v, want mem-config-budget", resp.UsedMemoryIDs)
 	}
 }
 
-func TestMemoryOrchestratorContextInjectsOnlyTopTwoByScore(t *testing.T) {
+func TestMemoryOrchestratorContextCanInjectMoreThanTwoWhenBudgetAllows(t *testing.T) {
 	ctx := context.Background()
 	searcher := &fakeMemorySearcher{results: []memory.SearchResult{
 		{
@@ -309,7 +309,7 @@ func TestMemoryOrchestratorContextInjectsOnlyTopTwoByScore(t *testing.T) {
 			MemoryID:   "mem-score-07",
 			MemoryType: memory.TypeDecision,
 			Scope:      memory.ScopeProjectLocal,
-			Content:    "第三高分记忆不应被注入。",
+			Content:    "第三高分记忆预算允许时也应被注入。",
 			Score:      0.7,
 			Confidence: 0.8,
 			State:      memory.StateStable,
@@ -324,12 +324,13 @@ func TestMemoryOrchestratorContextInjectsOnlyTopTwoByScore(t *testing.T) {
 		Task:        "检查 context top two",
 		WorkspaceID: "ws-1",
 		ProjectID:   "prj-1",
+		TokenBudget: 600,
 	})
 	if err != nil {
 		t.Fatalf("Context() error = %v", err)
 	}
 
-	wantIDs := []string{"mem-score-09", "mem-score-08"}
+	wantIDs := []string{"mem-score-09", "mem-score-08", "mem-score-07"}
 	if len(resp.UsedMemoryIDs) != len(wantIDs) {
 		t.Fatalf("used memory ids = %+v, want %+v", resp.UsedMemoryIDs, wantIDs)
 	}
@@ -338,17 +339,17 @@ func TestMemoryOrchestratorContextInjectsOnlyTopTwoByScore(t *testing.T) {
 			t.Fatalf("used memory ids = %+v, want %+v", resp.UsedMemoryIDs, wantIDs)
 		}
 	}
-	if resp.Diagnostics == nil || resp.Diagnostics.BudgetAllocation["memory_count"] != 2 {
-		t.Fatalf("diagnostics = %+v, want memory_count 2", resp.Diagnostics)
+	if resp.Diagnostics == nil || resp.Diagnostics.BudgetAllocation["memory_count"] != 3 {
+		t.Fatalf("diagnostics = %+v, want memory_count 3", resp.Diagnostics)
 	}
-	if len(traceRepo.updated) != 1 || traceRepo.updated[0].CandidateCount != 3 || traceRepo.updated[0].InjectedCount != 2 {
-		t.Fatalf("trace update = %+v, want candidate_count 3 and injected_count 2", traceRepo.updated)
+	if len(traceRepo.updated) != 1 || traceRepo.updated[0].CandidateCount != 3 || traceRepo.updated[0].InjectedCount != 3 {
+		t.Fatalf("trace update = %+v, want candidate_count 3 and injected_count 3", traceRepo.updated)
 	}
 	if got := countAccessEvents(accessRepo.records, retrievedAccessEventType); got != 3 {
 		t.Fatalf("retrieved logs = %d, want 3", got)
 	}
-	if got := countAccessEvents(accessRepo.records, injectedAccessEventType); got != 2 {
-		t.Fatalf("injected logs = %d, want 2", got)
+	if got := countAccessEvents(accessRepo.records, injectedAccessEventType); got != 3 {
+		t.Fatalf("injected logs = %d, want 3", got)
 	}
 }
 

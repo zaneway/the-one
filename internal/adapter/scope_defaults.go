@@ -56,7 +56,7 @@ func projectDirName(payload map[string]any) string {
 			return name
 		}
 	}
-	return "default_project"
+	return ""
 }
 
 func baseName(path string) string {

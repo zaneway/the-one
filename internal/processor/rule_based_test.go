@@ -100,6 +100,36 @@ func TestRuleBasedAgentDecisionCandidate(t *testing.T) {
 	}
 }
 
+func TestRuleBasedProjectCandidatePreservesRawEventContext(t *testing.T) {
+	provider := NewRuleBasedProvider()
+	event := rawEvent(capture.EventAgentDecision, "")
+	event.WorkspaceID = "ws_ctx"
+	event.ProjectID = "proj_ctx"
+	event.RepoID = "repo_ctx"
+	event.SessionID = "sess_ctx"
+	event.TaskID = "task_ctx"
+	event.SourceRefsJSON = refsJSON(map[string]any{
+		"decision_summary": "记忆生成链路必须保留 raw_event 的 repo/session/task 来源上下文。",
+	})
+
+	evidence := extractOne(t, provider, event)
+	candidates := generate(t, provider, event, evidence)
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count = %d, want 1", len(candidates))
+	}
+	got := candidates[0]
+	if got.Scope != memory.ScopeProjectLocal {
+		t.Fatalf("scope = %q, want project_local", got.Scope)
+	}
+	if got.WorkspaceID != "ws_ctx" || got.ProjectID != "proj_ctx" || got.RepoID != "repo_ctx" || got.SessionID != "sess_ctx" || got.TaskID != "task_ctx" {
+		t.Fatalf("candidate context = ws:%q project:%q repo:%q session:%q task:%q, want raw_event context",
+			got.WorkspaceID, got.ProjectID, got.RepoID, got.SessionID, got.TaskID)
+	}
+	if got.UserID != "" {
+		t.Fatalf("user_id = %q, want empty for project_local", got.UserID)
+	}
+}
+
 func TestRuleBasedToolSuccessNoEvidence(t *testing.T) {
 	provider := NewRuleBasedProvider()
 	event := rawEvent(capture.EventToolResultSummary, "")

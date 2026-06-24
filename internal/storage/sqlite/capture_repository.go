@@ -153,13 +153,16 @@ func (s *Store) FindDuplicateEvent(ctx context.Context, dedup capture.EventDedup
 	if dedup.ContentHash == "" || dedup.EventType == "" {
 		return capture.RawEvent{}, false, fmt.Errorf("VALIDATION_FAILED: content_hash and event_type are required")
 	}
-	// 幂等键核心：content_hash + event_type
+	// 幂等键核心：content_hash + event_type + source/scope 隔离字段。
 	query := baseEventSelect() + ` where content_hash = ? and event_type = ?`
 	args := []any{dedup.ContentHash, dedup.EventType}
-	// 隔离策略：有 session_id 时按 session 隔离（会话内去重）
 	if dedup.SessionID != "" {
-		query += " and session_id = ?"
-		args = append(args, dedup.SessionID)
+		query += ` and session_id = ?
+			and coalesce(source_channel, '') = ?
+			and coalesce(workspace_id, '') = ?
+			and coalesce(project_id, '') = ?
+			and coalesce(repo_id, '') = ?`
+		args = append(args, dedup.SessionID, dedup.SourceChannel, dedup.WorkspaceID, dedup.ProjectID, dedup.RepoID)
 	} else {
 		// 无 session_id 时按 source_channel + workspace/project/repo 隔离（跨会话去重）
 		query += ` and coalesce(source_channel, '') = ?

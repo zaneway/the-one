@@ -21,7 +21,6 @@ import (
 const (
 	defaultSearchLimit       = 10
 	defaultContextBudget     = 1800
-	contextInjectionLimit    = 2
 	defaultRelationLimit     = 20
 	rawEventFallbackMaxItems = 5
 	retrievedAccessEventType = "retrieved"
@@ -326,7 +325,9 @@ func (o *MemoryOrchestrator) Context(ctx context.Context, req memory.ContextRequ
 	if strings.TrimSpace(req.Task) == "" {
 		return memory.ContextResponse{}, fmt.Errorf("VALIDATION_FAILED: task is required")
 	}
-	req.TokenBudget = o.defaultTokenBudget()
+	if req.TokenBudget <= 0 {
+		req.TokenBudget = o.defaultTokenBudget()
+	}
 
 	internalReq := FromMemoryContextRequest(req)
 	intent := DetectContextIntent(internalReq)
@@ -364,7 +365,7 @@ func (o *MemoryOrchestrator) Context(ctx context.Context, req memory.ContextRequ
 		fallbackReasons = appendFallbackReasons(fallbackReasons, "access_log_unavailable")
 	}
 
-	contextResults := selectTopContextResults(retrieved.Results, contextInjectionLimit)
+	contextResults := selectContextResults(retrieved.Results)
 	contextPack, usedIDs, budgetReport := buildContextPack(contextResults, contextBuilderOptions{
 		Intent:      intent,
 		TokenBudget: req.TokenBudget,
@@ -425,13 +426,10 @@ func (o *MemoryOrchestrator) Context(ctx context.Context, req memory.ContextRequ
 	}, nil
 }
 
-// selectTopContextResults 在完整检索候选集上做最终注入前的全局截断。
+// selectContextResults 在完整检索候选集上做最终注入前的全局排序。
 // 设计约束：这里不能影响 retrieved access log、candidate_count 或后续诊断中的完整候选集；
-// 因此必须复制切片后排序，只把 Top-N 候选传给 ContextPack 构造器。
-func selectTopContextResults(results []memory.SearchResult, limit int) []memory.SearchResult {
-	if limit <= 0 {
-		return nil
-	}
+// 注入数量由 buildContextPack 的预算和 bucket 策略决定，避免固定 Top-N 限制大窗口上下文。
+func selectContextResults(results []memory.SearchResult) []memory.SearchResult {
 	out := append([]memory.SearchResult(nil), results...)
 	sort.SliceStable(out, func(i, j int) bool {
 		leftScore := contextResultScore(out[i])
@@ -441,9 +439,6 @@ func selectTopContextResults(results []memory.SearchResult, limit int) []memory.
 		}
 		return out[i].MemoryID < out[j].MemoryID
 	})
-	if len(out) > limit {
-		out = out[:limit]
-	}
 	return out
 }
 

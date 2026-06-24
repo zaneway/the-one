@@ -311,6 +311,43 @@ func TestP1RememberDedupesSameContentInSameScope(t *testing.T) {
 	}
 }
 
+func TestP1RememberDedupesProjectLocalByScopeIdentityNotProvenance(t *testing.T) {
+	ctx := context.Background()
+	store, svc := newP1TestService(t)
+	defer store.Close()
+
+	req := memory.RememberRequest{
+		Content:     "项目级记忆去重必须按 workspace/project/content 判断，repo/session/task 仅作为来源上下文。",
+		Title:       "项目级记忆去重",
+		MemoryType:  memory.TypeDecision,
+		Scope:       memory.ScopeProjectLocal,
+		WorkspaceID: "ws_dedup",
+		ProjectID:   "project_dedup",
+		RepoID:      "repo_source_a",
+		SessionID:   "sess_source_a",
+		TaskID:      "task_source_a",
+		SourceType:  "agent_summary",
+		Evidence: memory.EvidenceInput{
+			InterpretedStatement: "项目级记忆的来源字段不应改变 scope 去重语义。",
+		},
+	}
+
+	first, err := svc.Remember(ctx, req)
+	if err != nil {
+		t.Fatalf("Remember(first) error = %v", err)
+	}
+	req.RepoID = "repo_source_b"
+	req.SessionID = "sess_source_b"
+	req.TaskID = "task_source_b"
+	second, err := svc.Remember(ctx, req)
+	if err != nil {
+		t.Fatalf("Remember(second) error = %v", err)
+	}
+	if !second.Deduped || second.MemoryID != first.MemoryID {
+		t.Fatalf("second = %+v, want deduped existing %s", second, first.MemoryID)
+	}
+}
+
 func TestP1SearchIsolatesProjectLocalByWorkspace(t *testing.T) {
 	ctx := context.Background()
 	store, svc := newP1TestService(t)

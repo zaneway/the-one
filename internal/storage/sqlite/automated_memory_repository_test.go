@@ -178,6 +178,62 @@ func TestAutomatedMemoryRepositoryWritesMemoryKeyProjection(t *testing.T) {
 	}
 }
 
+func TestFindRelatedMemoryUsesTokenOverlapInsteadOfFullSentenceLike(t *testing.T) {
+	ctx := context.Background()
+	store := newCaptureTestStore(t)
+	defer store.Close()
+	requireFTS5(t, store)
+
+	evidence := memory.Evidence{
+		ID:                   "ev_related_token",
+		RawEventID:           "evt_related_token",
+		SourceType:           "agent_summary",
+		InterpretedStatement: "数据库基线是 PostgreSQL。",
+		Confidence:           0.9,
+	}
+	if err := store.WriteEvidence(ctx, evidence); err != nil {
+		t.Fatalf("WriteEvidence() error = %v", err)
+	}
+	item := memory.MemoryItem{
+		ID:            "mem_related_postgres",
+		Scope:         memory.ScopeProjectLocal,
+		WorkspaceID:   "ws",
+		ProjectID:     "project_related",
+		MemoryType:    memory.TypeProjectFact,
+		Content:       "当前数据库使用 PostgreSQL。",
+		SearchText:    "database PostgreSQL postgres 数据库",
+		KeywordsJSON:  jsonArrayText("PostgreSQL", "database", "数据库"),
+		State:         memory.StateStable,
+		Confidence:    0.9,
+		Importance:    0.8,
+		EncodingDepth: 2,
+		DecayRate:     0.3,
+		Tier:          memory.TierLongTerm,
+		Version:       1,
+	}
+	if _, err := store.WriteAutomatedMemory(ctx, automation.AutomatedMemoryWrite{
+		Item:        item,
+		EvidenceIDs: []string{evidence.ID},
+	}); err != nil {
+		t.Fatalf("WriteAutomatedMemory() error = %v", err)
+	}
+
+	related, err := store.FindRelatedMemory(ctx, automation.RelatedMemoryRequest{
+		WorkspaceID: "ws",
+		ProjectID:   "project_related",
+		Scope:       memory.ScopeProjectLocal,
+		MemoryType:  memory.TypeProjectFact,
+		Query:       "当前数据库不再使用 MySQL，已经改为 PostgreSQL。",
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("FindRelatedMemory() error = %v", err)
+	}
+	if len(related) == 0 || related[0].ID != item.ID {
+		t.Fatalf("related = %+v, want PostgreSQL baseline memory", related)
+	}
+}
+
 func TestAutomatedMemoryRepositoryWritesProvenanceWithMemory(t *testing.T) {
 	ctx := context.Background()
 	store := newCaptureTestStore(t)

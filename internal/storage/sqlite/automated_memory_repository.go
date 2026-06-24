@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/zaneway/theone/internal/automation"
 	"github.com/zaneway/theone/internal/idgen"
@@ -99,9 +100,20 @@ func (s *Store) FindRelatedMemory(ctx context.Context, req automation.RelatedMem
 		args = append(args, req.RepoID)
 	}
 	if strings.TrimSpace(req.Query) != "" {
-		like := "%" + strings.TrimSpace(req.Query) + "%"
-		query += " and (content like ? or coalesce(title, '') like ? or coalesce(keywords_json, '') like ?)"
-		args = append(args, like, like, like)
+		tokens := relatedSearchTokens(req.Query)
+		if len(tokens) > 0 {
+			query += " and ("
+			for i, token := range tokens {
+				if i > 0 {
+					query += " or "
+				}
+				query += `(lower(content) like ? or lower(coalesce(title, '')) like ? or lower(coalesce(search_text, '')) like ?
+					or lower(coalesce(keywords_json, '')) like ? or lower(coalesce(retrieval_cues_json, '')) like ? or lower(coalesce(entities_json, '')) like ?)`
+				like := "%" + escapeLike(token) + "%"
+				args = append(args, like, like, like, like, like, like)
+			}
+			query += ")"
+		}
 	}
 	query += " order by updated_at desc limit ?"
 	args = append(args, automationLimit(req.Limit))
@@ -111,6 +123,47 @@ func (s *Store) FindRelatedMemory(ctx context.Context, req automation.RelatedMem
 	}
 	defer rows.Close()
 	return scanMemoryRows(rows)
+}
+
+func relatedSearchTokens(query string) []string {
+	seen := make(map[string]bool)
+	tokens := make([]string, 0, 8)
+	flush := func(raw string) {
+		token := strings.ToLower(strings.TrimSpace(raw))
+		token = strings.Trim(token, `"'“”‘’()[]{}<>.,;:!?，。；：！？、`)
+		if len([]rune(token)) < 2 || relatedStopWord(token) || seen[token] {
+			return
+		}
+		seen[token] = true
+		tokens = append(tokens, token)
+	}
+	var current []rune
+	for _, r := range query {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r > unicode.MaxASCII {
+			current = append(current, r)
+			continue
+		}
+		if len(current) > 0 {
+			flush(string(current))
+			current = nil
+		}
+	}
+	if len(current) > 0 {
+		flush(string(current))
+	}
+	if len(tokens) > 8 {
+		return tokens[:8]
+	}
+	return tokens
+}
+
+func relatedStopWord(token string) bool {
+	switch token {
+	case "当前", "已经", "不再", "使用", "改为", "需要", "必须", "should", "must", "the", "and", "with":
+		return true
+	default:
+		return false
+	}
 }
 
 // WriteAutomatedMemory 写入自动生成的记忆。

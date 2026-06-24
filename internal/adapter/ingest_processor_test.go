@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -374,6 +375,50 @@ func TestObserveFromAtomicDefaultsScopeFromHookWorkingDirectory(t *testing.T) {
 	}
 	if req.ProjectID != "inventory-service" || req.RepoID != "inventory-service" {
 		t.Fatalf("scope = project_id:%q repo_id:%q, want inventory-service/inventory-service", req.ProjectID, req.RepoID)
+	}
+}
+
+func TestObserveFromAtomicDefaultsScopeFromProcessWorkingDirectory(t *testing.T) {
+	projectDir := filepath.Join(t.TempDir(), "process-project")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("THEONE_PROJECT_DIR", "")
+	t.Setenv("THEONE_PROJECT_ID", "")
+	t.Setenv("THEONE_REPO_ID", "")
+	t.Setenv("ROOT_DIR", "")
+	t.Setenv("PWD", "")
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(oldWD); err != nil {
+			t.Fatalf("restore working directory: %v", err)
+		}
+	})
+
+	req, err := observeFromAtomic(IngestEnvelope{
+		Producer:  "claude_code_hook:PostToolUse",
+		AgentType: "claude_code",
+		EventType: capture.EventToolResultSummary,
+		Payload: map[string]any{
+			"workspace_id":    "ws",
+			"tool_name":       "Bash",
+			"content_summary": "【事实】go test ./... 输出 ok",
+		},
+	}, "sess_test", "task_test")
+	if err != nil {
+		t.Fatalf("observeFromAtomic() error = %v", err)
+	}
+	if req.ProjectID != "process-project" || req.RepoID != "process-project" {
+		t.Fatalf("scope = project_id:%q repo_id:%q, want process-project/process-project", req.ProjectID, req.RepoID)
+	}
+	if req.ProjectID == "default_project" || req.RepoID == "default_project" {
+		t.Fatalf("scope used fixed default_project: project_id:%q repo_id:%q", req.ProjectID, req.RepoID)
 	}
 }
 

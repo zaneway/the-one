@@ -76,6 +76,48 @@ func TestWorkerRetriesFailedJobThenMarksFailed(t *testing.T) {
 	}
 }
 
+func TestServiceRunJobDoesNotPersistFailureDecision(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(t.TempDir(), "memory.db")
+	store, err := sqlite.Open(ctx, cfg.Storage, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, _, err := store.EnqueueJob(ctx, automation.AsyncJob{
+		ID:         "job_service_failure",
+		JobType:    "unsupported_job",
+		TargetType: "raw_event",
+		TargetID:   "target_service_failure",
+		MaxRetries: 3,
+		NextRunAt:  now,
+	}); err != nil {
+		t.Fatalf("EnqueueJob() error = %v", err)
+	}
+	claimed, err := store.ClaimJobs(ctx, now, 1)
+	if err != nil {
+		t.Fatalf("ClaimJobs() error = %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed = %d, want 1", len(claimed))
+	}
+
+	service := automation.NewService(cfg, store, processor.NewRuleBasedProvider())
+	if err := service.RunJob(ctx, claimed[0]); err == nil {
+		t.Fatal("RunJob() error = nil, want unsupported job error")
+	}
+	job, err := store.GetJob(ctx, "job_service_failure")
+	if err != nil {
+		t.Fatalf("GetJob() error = %v", err)
+	}
+	if job.Status != automation.JobStatusRunning {
+		t.Fatalf("job status = %s, want still running so Worker owns retry/fail transition", job.Status)
+	}
+}
+
 func TestWorkerRunStopsWhenContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg := config.Default()
