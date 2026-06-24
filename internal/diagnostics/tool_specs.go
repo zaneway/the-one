@@ -6,7 +6,7 @@ func healthSpec(handler mcp.Handler) mcp.ToolSpec {
 	return mcp.ToolSpec{
 		Name:          "memory.health",
 		Title:         "Health check",
-		Description:   "Check The One runtime health, SQLite reachability, and configured external AI availability.",
+		Description:   "Check theone runtime health, SQLite reachability, and configured external AI availability.",
 		InputSchema:   mcp.ObjectSchema(nil, map[string]any{}),
 		OutputSchema:  mcp.RawObjectSchema(),
 		ReadOnlyHint:  true,

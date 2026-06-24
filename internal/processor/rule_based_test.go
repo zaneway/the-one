@@ -248,7 +248,7 @@ func TestRuleBasedDesignReviewCheckpointCandidate(t *testing.T) {
 	event := rawEvent(capture.EventTaskResult, "automation 详细设计复查完成，存在少量遗漏，已补充自动写入规则。")
 	event.SourceRefsJSON = refsJSON(map[string]any{
 		"target_docs": []map[string]any{{
-			"path": "doc/The One 长期记忆系统 automation 详细设计.md",
+			"path": "doc/theone 长期记忆系统 automation 详细设计.md",
 			"role": "implementation_design",
 		}},
 		"review_intent":      []string{"logic_consistency", "acceptance_completeness"},

@@ -57,8 +57,8 @@ func TestIngestProcessorAtomicDedupV2(t *testing.T) {
 			Payload: map[string]any{
 				"agent_type":      "cursor",
 				"workspace_id":    "local_default_workspace",
-				"project_id":      "the-one",
-				"repo_id":         "the-one",
+				"project_id":      "theone",
+				"repo_id":         "theone",
 				"content_summary": "diagnostic atomic event",
 			},
 		},

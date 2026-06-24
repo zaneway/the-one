@@ -232,8 +232,8 @@ func TestAppCrossPhaseReviewCheckpointObservedAndRetrievable(t *testing.T) {
 		SourceRefs: []capture.SourceRef{{
 			"checkpoint_type": "implementation_design_review",
 			"review_intent":   []string{"cross_feature_linkage", "acceptance_regression"},
-			"target_docs":     []map[string]any{{"path": "doc/The One 长期记忆系统 retrieval 详细设计.md", "content_hash": "sha256:p4-design"}},
-			"target_hashes":   []map[string]any{{"path": "doc/The One 长期记忆系统 retrieval 详细设计.md", "content_hash": "sha256:p4-design"}},
+			"target_docs":     []map[string]any{{"path": "doc/theone 长期记忆系统 retrieval 详细设计.md", "content_hash": "sha256:p4-design"}},
+			"target_hashes":   []map[string]any{{"path": "doc/theone 长期记忆系统 retrieval 详细设计.md", "content_hash": "sha256:p4-design"}},
 			"conclusion":      "supplemented",
 		}},
 		ContentHash: "sha256:cross-phase-review-checkpoint",

@@ -506,7 +506,7 @@ func TestP1ContextIncludesUserPreferenceAndCheckpoint(t *testing.T) {
 			CheckpointType: "architecture_design_review",
 			ReviewIntent:   []string{"logic_completeness"},
 			TargetDocs: []map[string]any{{
-				"path":         "The One 长期记忆系统总体架构设计.md",
+				"path":         "theone 长期记忆系统总体架构设计.md",
 				"doc_role":     "architecture_baseline",
 				"content_hash": "sha256:test",
 			}},
@@ -550,7 +550,7 @@ func TestP1ContextIncludesUserPreferenceAndCheckpoint(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"The One 长期记忆系统总体架构设计.md",
+		"theone 长期记忆系统总体架构设计.md",
 		"baseline_frozen",
 		"Code Index 与 Memory 分层",
 		"major_logic_gap_only",

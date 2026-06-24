@@ -19,7 +19,7 @@ func FormatInjectMarkdown(resp memory.ContextResponse, maxChars int) string {
 	}
 
 	lines := []string{
-		"# The One 记忆上下文（系统自动注入）",
+		"# theone 记忆上下文（系统自动注入）",
 		"",
 		"以下内容由 `theone` 根据当前任务召回，供回答参考；其中标记「未确认」的条目不可当作强约束。",
 		"",
@@ -129,7 +129,7 @@ func containsNormalizedContent(contents map[string]struct{}, content string) boo
 // ClaudeSurfaceContent 生成 Claude Code 侧车文件正文（P4，无 Cursor frontmatter）。
 func ClaudeSurfaceContent(body string) string {
 	stamp := time.Now().Format(time.RFC3339Nano)
-	return strings.TrimSpace(fmt.Sprintf(`# The One 记忆上下文（Claude Code 自动注入）
+	return strings.TrimSpace(fmt.Sprintf(`# theone 记忆上下文（Claude Code 自动注入）
 
 <!-- theone-context updated_at=%s -->
 
@@ -145,7 +145,7 @@ func RuleFileContent(body string, alwaysApply bool) string {
 		flag = "true"
 	}
 	return fmt.Sprintf(`---
-description: The One 本轮记忆上下文（beforeSubmitPrompt 自动刷新，勿手工编辑）
+description: theone 本轮记忆上下文（beforeSubmitPrompt 自动刷新，勿手工编辑）
 alwaysApply: %s
 ---
 

@@ -431,7 +431,7 @@ func TestServiceWritesReviewCheckpointFromCandidate(t *testing.T) {
 		OccurredAt:     now,
 		Actor:          capture.ActorAgent,
 		ContentSummary: "automation 详细设计复查完成。",
-		SourceRefsJSON: `[{"checkpoint_type":"implementation_design_review","review_intent":["logic_consistency"],"target_docs":[{"path":"doc/The One 长期记忆系统 automation 详细设计.md"}],"conclusion":"supplemented"}]`,
+		SourceRefsJSON: `[{"checkpoint_type":"implementation_design_review","review_intent":["logic_consistency"],"target_docs":[{"path":"doc/theone 长期记忆系统 automation 详细设计.md"}],"conclusion":"supplemented"}]`,
 		ContentHash:    "sha256:p3-checkpoint-chain",
 		CreatedAt:      now,
 	}

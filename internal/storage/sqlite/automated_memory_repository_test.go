@@ -348,7 +348,7 @@ func TestAutomatedMemoryRepositoryReviewCheckpoint(t *testing.T) {
 		ProjectID:            item.ProjectID,
 		CheckpointType:       "implementation_design_review",
 		ReviewIntentJSON:     jsonArrayText("logic_consistency"),
-		TargetDocsJSON:       `[{"path":"doc/The One 长期记忆系统 automation 详细设计.md"}]`,
+		TargetDocsJSON:       `[{"path":"doc/theone 长期记忆系统 automation 详细设计.md"}]`,
 		Conclusion:           "supplemented",
 		NextReviewPolicyJSON: `{"focus":"major_logic_gap"}`,
 	}

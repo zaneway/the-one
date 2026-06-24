@@ -104,8 +104,8 @@ func TestSessionBinderConcurrentSaveLoadDoesNotExposePartialJSON(t *testing.T) {
 		TaskID:             "task-initial",
 		ExternalSessionKey: "session-initial",
 		WorkspaceID:        "local_default_workspace",
-		ProjectID:          "the-one",
-		RepoID:             "the-one",
+		ProjectID:          "theone",
+		RepoID:             "theone",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestSessionBinderConcurrentSaveLoadDoesNotExposePartialJSON(t *testing.T) {
 					TaskID:             "task-writer",
 					ExternalSessionKey: "session-writer",
 					WorkspaceID:        "local_default_workspace",
-					ProjectID:          "the-one",
+					ProjectID:          "theone",
 					RepoID:             strings.Repeat("repo", worker+j+1),
 				}); err != nil {
 					select {
