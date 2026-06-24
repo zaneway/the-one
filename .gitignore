@@ -1120,3 +1120,5 @@ fabric.properties
 !/.cursor/
 !/go.sum
 !/.understand-anything/
+!/.cursor/
+!/.codegraph/
