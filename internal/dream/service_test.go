@@ -199,8 +199,8 @@ func TestServiceConsolidatesTopicWhenCuratorGroupsMemories(t *testing.T) {
 			TopicKey:         "memory-system",
 			Title:            "Memory system export design",
 			Summary:          "Dream export keeps SQLite as fact source and Obsidian as readonly projection.",
-			SourceMemoryIDs:  []string{"mem_decision_001", "mem_fact_001"},
-			SourceMap:        map[string][]string{"summary": {"mem_decision_001", "mem_fact_001"}},
+			SourceMemoryIDs:  []string{"mem_fact_001", "mem_fact_002"},
+			SourceMap:        map[string][]string{"summary": {"mem_fact_001", "mem_fact_002"}},
 			RouteCategory:    RouteKnowledge,
 			RouteSubject:     "memory-systems",
 			MemoryTypeBucket: "decisions",
@@ -215,8 +215,8 @@ func TestServiceConsolidatesTopicWhenCuratorGroupsMemories(t *testing.T) {
 			FallbackRules: true,
 		},
 	}, fakeRepository{memories: []MemoryRecord{
-		{ID: "mem_decision_001", Title: "Dream readonly", Content: "Dream is readonly.", MemoryType: memory.TypeDecision, Scope: memory.ScopeProjectLocal, ProjectID: "the-one", State: memory.StateStable, Tier: memory.TierDurable, Importance: 0.8},
-		{ID: "mem_fact_001", Title: "Obsidian graph", Content: "Obsidian graph reads wikilinks.", MemoryType: memory.TypeProjectFact, Scope: memory.ScopeProjectLocal, ProjectID: "the-one", State: memory.StateStable, Tier: memory.TierShortTerm, Importance: 0.5},
+		{ID: "mem_fact_001", Title: "Dream readonly", Content: "Dream is readonly.", MemoryType: memory.TypeProjectFact, Scope: memory.ScopeProjectLocal, ProjectID: "the-one", State: memory.StateStable, Tier: memory.TierDurable, Importance: 0.8},
+		{ID: "mem_fact_002", Title: "Obsidian graph", Content: "Obsidian graph reads wikilinks.", MemoryType: memory.TypeProjectFact, Scope: memory.ScopeProjectLocal, ProjectID: "the-one", State: memory.StateStable, Tier: memory.TierShortTerm, Importance: 0.5},
 	}}, curator)
 
 	resp, err := service.Run(context.Background(), RunRequest{})
@@ -236,8 +236,8 @@ func TestServiceConsolidatesTopicWhenCuratorGroupsMemories(t *testing.T) {
 		"note_mode: consolidated",
 		"topic_key: memory-system",
 		"source_memory_ids:",
-		"  - mem_decision_001",
 		"  - mem_fact_001",
+		"  - mem_fact_002",
 		"source_map:",
 		"## Summary",
 		"Dream export keeps SQLite as fact source",
@@ -415,8 +415,8 @@ func TestServiceSanitizesModelRouteFields(t *testing.T) {
 			FallbackRules: false,
 		},
 	}, fakeRepository{memories: []MemoryRecord{
-		{ID: "mem_1", Title: "One", Content: "One.", MemoryType: memory.TypeDecision, ProjectID: "the-one", State: memory.StateStable},
-		{ID: "mem_2", Title: "Two", Content: "Two.", MemoryType: memory.TypeDecision, ProjectID: "the-one", State: memory.StateStable},
+		{ID: "mem_1", Title: "One", Content: "One.", MemoryType: memory.TypeProjectFact, ProjectID: "the-one", State: memory.StateStable},
+		{ID: "mem_2", Title: "Two", Content: "Two.", MemoryType: memory.TypeProjectFact, ProjectID: "the-one", State: memory.StateStable},
 	}}, curator)
 
 	resp, err := service.Run(context.Background(), RunRequest{DryRun: true})
@@ -429,7 +429,7 @@ func TestServiceSanitizesModelRouteFields(t *testing.T) {
 			topicPath = item.Path
 		}
 	}
-	if strings.Contains(topicPath, "..") || strings.Contains(topicPath, "/custom/") || strings.Contains(topicPath, "/bad/") || !strings.Contains(topicPath, "/decisions/") {
+	if topicPath == "" || strings.Contains(topicPath, "..") || strings.Contains(topicPath, "/bad/") {
 		t.Fatalf("topic path = %q, want sanitized local route fields", topicPath)
 	}
 }

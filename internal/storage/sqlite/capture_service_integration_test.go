@@ -38,28 +38,29 @@ func TestCaptureServiceObserveWithSQLiteRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Observe(session.start) error = %v", err)
 	}
-	if start.SessionID == "" || start.TaskID == "" || start.RawEventID == "" {
-		t.Fatalf("start response = %+v, want generated ids", start)
+	if start.SessionID == "" || start.TaskID == "" {
+		t.Fatalf("start response = %+v, want generated session and task ids", start)
+	}
+	if start.RawEventID != "" {
+		t.Fatalf("start raw_event_id = %q, want empty for suppressed session.start", start.RawEventID)
 	}
 
 	req := capture.ObserveRequest{
 		SessionID:      start.SessionID,
-		EventType:      capture.EventToolResultSummary,
+		EventType:      capture.EventTurnCompleted,
 		SourceChannel:  capture.SourceChannelAgentSession,
 		WorkspaceID:    "ws",
 		ProjectID:      "project_a",
 		RepoID:         "repo_a",
 		AgentType:      "codex",
-		Actor:          capture.ActorTool,
-		ToolName:       "go test",
-		OutputSummary:  "测试通过",
-		ContentSummary: "【事件】工具执行结果：go test\n【事实】测试通过",
+		Actor:          capture.ActorAdapter,
+		InputSummary:   "sqlite integration dedup",
+		OutputSummary:  "sqlite integration dedup ok",
+		ContentSummary: "【结论/决策】sqlite observe integration dedup 测试。",
 		ContentHash:    "sha256:sqlite-service",
 		CaptureCapabilities: capture.CaptureCapabilities{
-			SessionLifecycle:  true,
-			ToolCallCapture:   true,
-			ToolOutputCapture: true,
-			MCPObserve:        true,
+			SessionLifecycle: true,
+			MCPObserve:       true,
 		},
 	}
 	first, err := service.Observe(ctx, req)
@@ -116,8 +117,8 @@ func TestCaptureServiceObserveWithSQLiteRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTasks() after session.end error = %v", err)
 	}
-	if len(tasks) != 1 || tasks[0].Status != capture.StatusUnknown || tasks[0].EndedAt.IsZero() {
-		t.Fatalf("tasks after session.end = %+v, want default task ended as unknown", tasks)
+	if len(tasks) != 1 || tasks[0].Status != capture.StatusCompleted || tasks[0].EndedAt.IsZero() {
+		t.Fatalf("tasks after session.end = %+v, want default task ended as completed", tasks)
 	}
 }
 

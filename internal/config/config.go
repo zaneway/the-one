@@ -215,6 +215,10 @@ type CaptureConfig struct {
 	// keywords数组的长度限制，默认30
 	MaxKeywordCount int `yaml:"max_keyword_count" json:"max_keyword_count"`
 
+	// SuppressRawEventTypes 抑制写入 raw_event 的事件类型列表。
+	// nil 时 fallback 到 adapter.suppress_raw_event_types，再 fallback 到内置默认；显式 [] 表示不抑制。
+	SuppressRawEventTypes []string `yaml:"suppress_raw_event_types" json:"suppress_raw_event_types"`
+
 	// DefaultAgentType 默认Agent类型
 	// 当请求未指定agent_type时使用，默认unknown
 	DefaultAgentType string `yaml:"default_agent_type" json:"default_agent_type"`

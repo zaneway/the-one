@@ -165,10 +165,10 @@ func TestAsyncRepositoryCandidateLifecycle(t *testing.T) {
 		CandidateReasonJSON:   jsonArrayText("architecture_decision"),
 		DedupKey:              "cand:evt_001:ev_001",
 	}
-	if err := store.WriteCandidate(ctx, candidate); err != nil {
+	if _, _, err := store.WriteCandidate(ctx, candidate); err != nil {
 		t.Fatalf("WriteCandidate() error = %v", err)
 	}
-	if err := store.WriteCandidate(ctx, automation.MemoryCandidateRecord{
+	if _, _, err := store.WriteCandidate(ctx, automation.MemoryCandidateRecord{
 		ID:         "cand_duplicate",
 		Provider:   "rule_based",
 		MemoryType: memory.TypeDecision,
@@ -177,6 +177,20 @@ func TestAsyncRepositoryCandidateLifecycle(t *testing.T) {
 		DedupKey:   candidate.DedupKey,
 	}); err != nil {
 		t.Fatalf("WriteCandidate duplicate error = %v", err)
+	}
+	dupID, inserted, err := store.WriteCandidate(ctx, automation.MemoryCandidateRecord{
+		ID:         "cand_duplicate_again",
+		Provider:   "rule_based",
+		MemoryType: memory.TypeDecision,
+		Scope:      memory.ScopeProjectLocal,
+		Content:    "duplicate again",
+		DedupKey:   candidate.DedupKey,
+	})
+	if err != nil {
+		t.Fatalf("WriteCandidate duplicate lookup error = %v", err)
+	}
+	if inserted || dupID != candidate.ID {
+		t.Fatalf("duplicate write = (%s, %t), want (%s, false)", dupID, inserted, candidate.ID)
 	}
 
 	candidates, err := store.ListCandidates(ctx, automation.ListCandidatesRequest{Status: automation.CandidateStatusGenerated, MemoryType: memory.TypeDecision})
@@ -220,7 +234,7 @@ func TestAsyncRepositoryCandidateFiltersAndNotFound(t *testing.T) {
 		{ID: "cand_a", Provider: "rule_based", MemoryType: memory.TypeFailure, Scope: memory.ScopeRepoLocal, WorkspaceID: "ws", RepoID: "repo_a", Content: "failure a", Status: automation.CandidateStatusGenerated},
 		{ID: "cand_b", Provider: "rule_based", MemoryType: memory.TypeFailure, Scope: memory.ScopeRepoLocal, WorkspaceID: "ws", RepoID: "repo_b", Content: "failure b", Status: automation.CandidateStatusDropped},
 	} {
-		if err := store.WriteCandidate(ctx, candidate); err != nil {
+		if _, _, err := store.WriteCandidate(ctx, candidate); err != nil {
 			t.Fatalf("WriteCandidate(%s) error = %v", candidate.ID, err)
 		}
 	}

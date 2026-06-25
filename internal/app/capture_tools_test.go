@@ -74,19 +74,53 @@ func TestAppRegistersCaptureTools(t *testing.T) {
 		t.Fatalf("memory.capture.events error = %v", toolErr)
 	}
 	events, ok := rawEvents.(capture.ListEventsResponse)
-	if !ok || len(events.Events) != 1 || events.Events[0].ID != start.RawEventID {
-		t.Fatalf("events response = %#v, want event %s", rawEvents, start.RawEventID)
+	if !ok || len(events.Events) != 0 {
+		t.Fatalf("events response = %#v, want no raw_event for suppressed session.start", rawEvents)
+	}
+
+	rawTurn, toolErr := app.CallTool(ctx, "memory.observe", capture.ObserveRequest{
+		SessionID:      start.SessionID,
+		TaskID:         start.TaskID,
+		EventType:      capture.EventTurnCompleted,
+		SourceChannel:  capture.SourceChannelAgentSession,
+		WorkspaceID:    "ws",
+		ProjectID:      "project_a",
+		AgentType:      "cursor",
+		Actor:          capture.ActorAdapter,
+		InputSummary:   "验证 capture 工具注册",
+		OutputSummary:  "capture 工具注册已验证",
+		ContentSummary: "【结论/决策】验证 capture 工具注册与事件列表。",
+		CaptureCapabilities: capture.CaptureCapabilities{
+			SessionLifecycle: true,
+			MCPObserve:       true,
+		},
+	})
+	if toolErr != nil {
+		t.Fatalf("memory.observe turn.completed error = %v", toolErr)
+	}
+	turn, ok := rawTurn.(capture.ObserveResponse)
+	if !ok || !turn.Accepted || turn.RawEventID == "" {
+		t.Fatalf("turn.completed response = %#v, want accepted raw_event", rawTurn)
+	}
+
+	rawEvents, toolErr = app.CallTool(ctx, "memory.capture.events", capture.ListEventsRequest{SessionID: start.SessionID})
+	if toolErr != nil {
+		t.Fatalf("memory.capture.events error = %v", toolErr)
+	}
+	events, ok = rawEvents.(capture.ListEventsResponse)
+	if !ok || len(events.Events) != 1 || events.Events[0].ID != turn.RawEventID {
+		t.Fatalf("events response = %#v, want event %s", rawEvents, turn.RawEventID)
 	}
 	rawFilteredEvents, toolErr := app.CallTool(ctx, "memory.capture.events", map[string]any{
 		"session_id":  start.SessionID,
-		"event_types": []string{capture.EventSessionStart, capture.EventToolResultSummary},
+		"event_types": []string{capture.EventSessionStart, capture.EventTurnCompleted},
 	})
 	if toolErr != nil {
 		t.Fatalf("memory.capture.events with event_types error = %v", toolErr)
 	}
 	filteredEvents, ok := rawFilteredEvents.(capture.ListEventsResponse)
-	if !ok || len(filteredEvents.Events) != 1 || filteredEvents.Events[0].EventType != capture.EventSessionStart {
-		t.Fatalf("filtered events response = %#v, want session.start event", rawFilteredEvents)
+	if !ok || len(filteredEvents.Events) != 1 || filteredEvents.Events[0].EventType != capture.EventTurnCompleted {
+		t.Fatalf("filtered events response = %#v, want turn.completed event", rawFilteredEvents)
 	}
 
 	rawQuality, toolErr := app.CallTool(ctx, "memory.capture.quality", capture.QualityRequest{SessionID: start.SessionID})
@@ -150,16 +184,18 @@ func TestEnsureCaptureSessionDoesNotResetExistingQuality(t *testing.T) {
 	rawFile, toolErr := app.CallTool(ctx, "memory.observe", capture.ObserveRequest{
 		SessionID:      startReq.SessionID,
 		TaskID:         startReq.TaskID,
-		EventType:      capture.EventFileEditSummary,
+		EventType:      capture.EventTurnCompleted,
 		SourceChannel:  capture.SourceChannelAgentSession,
 		WorkspaceID:    "ws",
 		ProjectID:      "project_a",
 		AgentType:      "cursor",
-		Actor:          capture.ActorAgent,
+		Actor:          capture.ActorAdapter,
+		InputSummary:   "更新 README",
+		OutputSummary:  "README 已更新",
 		ContentSummary: "【事实】更新 README",
 		CaptureCapabilities: capture.CaptureCapabilities{
-			FileEditCapture: true,
-			MCPObserve:      true,
+			SessionLifecycle: true,
+			MCPObserve:       true,
 		},
 	})
 	if toolErr != nil {
@@ -180,7 +216,7 @@ func TestEnsureCaptureSessionDoesNotResetExistingQuality(t *testing.T) {
 	if err := json.Unmarshal([]byte(report.CaptureQualityJSON), &quality); err != nil {
 		t.Fatalf("decode quality: %v", err)
 	}
-	if quality.FileEditCount != 1 || quality.CapturedEventCount != 1 {
-		t.Fatalf("quality = %+v, want file edit stats preserved", quality)
+	if quality.FileEditCount != 0 || quality.CapturedEventCount != 1 {
+		t.Fatalf("quality = %+v, want one captured turn.completed event", quality)
 	}
 }

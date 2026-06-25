@@ -110,6 +110,10 @@ func buildContextPack(results []memory.SearchResult, opts contextBuilderOptions)
 		bucketUsed := 0
 		bucketItems := 0
 		for _, result := range candidates {
+			if memory.IsEphemeralMemoryID(result.MemoryID) {
+				recordDrop(result, spec.name, "ephemeral_memory_id")
+				continue
+			}
 			if seenMemoryIDs[result.MemoryID] {
 				recordDrop(result, spec.name, "duplicate_memory_id")
 				continue

@@ -437,6 +437,9 @@ type SearchResult struct {
 	// 可选，解释该记忆为什么被召回或注入上下文
 	WhyIncluded []string `json:"why_included,omitempty"`
 
+	// Ephemeral 是否为非 memory_item 的临时检索结果（如 raw_event fallback）。
+	Ephemeral bool `json:"ephemeral,omitempty"`
+
 	// CodeRefs 代码引用
 	// 可选，只返回文件路径、symbol、hash和解析状态，不返回源码
 	CodeRefs []CodeRef `json:"code_refs,omitempty"`

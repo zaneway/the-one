@@ -71,7 +71,7 @@ func TestAppRegistersAutomationDiagnosticsTools(t *testing.T) {
 		t.Fatalf("job json = %s, must not expose payload_json", jobJSON)
 	}
 
-	if err := app.store.WriteCandidate(ctx, automation.MemoryCandidateRecord{
+	if _, _, err := app.store.WriteCandidate(ctx, automation.MemoryCandidateRecord{
 		ID:                    "cand_tool_diag",
 		RawEventID:            observed.RawEventID,
 		EvidenceID:            "ev_tool_diag",

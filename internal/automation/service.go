@@ -39,7 +39,7 @@ type Repository interface {
 	FindDuplicateEvidence(ctx context.Context, draft EvidenceDraftKey) (memory.Evidence, bool, error)
 	WriteEvidence(ctx context.Context, evidence memory.Evidence) error
 	GetEvidence(ctx context.Context, evidenceID string) (memory.Evidence, error)
-	WriteCandidate(ctx context.Context, candidate MemoryCandidateRecord) error
+	WriteCandidate(ctx context.Context, candidate MemoryCandidateRecord) (effectiveID string, inserted bool, err error)
 	GetCandidate(ctx context.Context, candidateID string) (MemoryCandidateRecord, error)
 	ListCandidates(ctx context.Context, req ListCandidatesRequest) ([]MemoryCandidateRecord, error)
 	UpdateCandidateAdmission(ctx context.Context, candidateID string, admission AdmissionResult, status string, memoryID string) error
@@ -239,10 +239,13 @@ func (s *Service) runExtractEvidence(ctx context.Context, job AsyncJob) (map[str
 	)
 	written := 0
 	for _, draft := range drafts {
-		evidence, err := s.materializeEvidence(ctx, rawEvent.ID, draft)
+		evidence, inserted, err := s.materializeEvidence(ctx, rawEvent.ID, draft)
 		if err != nil {
 			s.logger.Error("extract evidence materialize failed", "job_id", job.ID, "error", err)
 			return nil, err
+		}
+		if !inserted {
+			continue
 		}
 		written++
 		if err := s.enqueueNext(ctx, JobTypeGenerateMemoryCandidate, TargetTypeEvidence, evidence.ID, 4); err != nil {
@@ -283,12 +286,14 @@ func (s *Service) runProcessRawEvent(ctx context.Context, job AsyncJob, provider
 	evidenceWritten := 0
 	candidatesWritten := 0
 	for _, item := range processed {
-		evidence, err := s.materializeEvidence(ctx, rawEvent.ID, item.Evidence)
+		evidence, inserted, err := s.materializeEvidence(ctx, rawEvent.ID, item.Evidence)
 		if err != nil {
 			s.logger.Error("process raw event evidence materialize failed", "job_id", job.ID, "error", err)
 			return nil, err
 		}
-		evidenceWritten++
+		if inserted {
+			evidenceWritten++
+		}
 		for _, candidate := range item.Candidates {
 			candidate.SourceEvidenceIDs = []string{evidence.ID}
 			record, err := s.materializeCandidate(candidate, evidence, rawEvent)
@@ -296,15 +301,11 @@ func (s *Service) runProcessRawEvent(ctx context.Context, job AsyncJob, provider
 				s.logger.Error("process raw event candidate materialize failed", "job_id", job.ID, "error", err)
 				return nil, err
 			}
-			if err := s.repo.WriteCandidate(ctx, record); err != nil {
-				s.logger.Error("process raw event candidate write failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
+			if err := s.persistCandidateAndEnqueueAdmission(ctx, record); err != nil {
+				s.logger.Error("process raw event candidate persist failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
 				return nil, err
 			}
 			candidatesWritten++
-			if err := s.enqueueNext(ctx, JobTypeComputeAdmission, TargetTypeMemoryCandidate, record.ID, 5); err != nil {
-				s.logger.Error("process raw event enqueue admission failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
-				return nil, err
-			}
 		}
 	}
 	s.logger.Info("process raw event completed",
@@ -396,15 +397,11 @@ func (s *Service) runGenerateMemoryCandidate(ctx context.Context, job AsyncJob) 
 			s.logger.Error("generate candidate materialize failed", "job_id", job.ID, "error", err)
 			return nil, err
 		}
-		if err := s.repo.WriteCandidate(ctx, record); err != nil {
-			s.logger.Error("generate candidate write failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
+		if err := s.persistCandidateAndEnqueueAdmission(ctx, record); err != nil {
+			s.logger.Error("generate candidate persist failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
 			return nil, err
 		}
 		written++
-		if err := s.enqueueNext(ctx, JobTypeComputeAdmission, TargetTypeMemoryCandidate, record.ID, 5); err != nil {
-			s.logger.Error("generate candidate enqueue next failed", "job_id", job.ID, "candidate_id", record.ID, "error", err)
-			return nil, err
-		}
 	}
 	s.logger.Info("generate candidate completed",
 		"job_id", job.ID,
@@ -430,6 +427,21 @@ func (s *Service) runComputeAdmission(ctx context.Context, job AsyncJob) (map[st
 	if err != nil {
 		s.logger.Error("compute admission get candidate failed", "job_id", job.ID, "target_id", job.TargetID, "error", err)
 		return nil, err
+	}
+	switch record.Status {
+	case CandidateStatusAdmitted:
+		return map[string]any{
+			"admission_decision": record.AdmissionDecision,
+			"memory_id":          record.ResultingMemoryID,
+			"skipped":            "already_admitted",
+		}, nil
+	case CandidateStatusDropped:
+		return map[string]any{
+			"admission_decision": record.AdmissionDecision,
+			"skipped":            "already_dropped",
+		}, nil
+	case CandidateStatusMerged, CandidateStatusFailed:
+		return map[string]any{"skipped": record.Status}, nil
 	}
 	evidence, err := s.repo.GetEvidence(ctx, record.EvidenceID)
 	if err != nil {
@@ -714,31 +726,31 @@ func reviewCheckpointFromRecord(record MemoryCandidateRecord, item memory.Memory
 // materializeEvidence 将 Provider 生成的 EvidenceDraft 物化为持久化的 Evidence 记录。
 // 处理流程：校验必填字段 → 幂等检测（按 rawEventID + sourceType + interpretedStatement 去重）→
 // 生成 evidence_id → 序列化 JSON 字段 → 写入 repository。
-func (s *Service) materializeEvidence(ctx context.Context, rawEventID string, draft processor.EvidenceDraft) (memory.Evidence, error) {
+func (s *Service) materializeEvidence(ctx context.Context, rawEventID string, draft processor.EvidenceDraft) (memory.Evidence, bool, error) {
 	if strings.TrimSpace(draft.SourceType) == "" || strings.TrimSpace(draft.InterpretedStatement) == "" {
-		return memory.Evidence{}, fmt.Errorf("VALIDATION_FAILED: evidence source_type and interpreted_statement are required")
+		return memory.Evidence{}, false, fmt.Errorf("VALIDATION_FAILED: evidence source_type and interpreted_statement are required")
 	}
 	key := EvidenceDraftKey{RawEventID: rawEventID, SourceType: draft.SourceType, InterpretedStatement: draft.InterpretedStatement}
 	if existing, found, err := s.repo.FindDuplicateEvidence(ctx, key); err != nil {
-		return memory.Evidence{}, err
+		return memory.Evidence{}, false, err
 	} else if found {
-		return existing, nil
+		return existing, false, nil
 	}
 	evidenceID, err := idgen.New("ev")
 	if err != nil {
-		return memory.Evidence{}, err
+		return memory.Evidence{}, false, err
 	}
 	keywordsJSON, err := jsonText(draft.Keywords)
 	if err != nil {
-		return memory.Evidence{}, err
+		return memory.Evidence{}, false, err
 	}
 	spansJSON, err := jsonText(draft.SalientSpans)
 	if err != nil {
-		return memory.Evidence{}, err
+		return memory.Evidence{}, false, err
 	}
 	sourceRefJSON, err := jsonText(draft.SourceRef)
 	if err != nil {
-		return memory.Evidence{}, err
+		return memory.Evidence{}, false, err
 	}
 	evidence := memory.Evidence{
 		ID:                   evidenceID,
@@ -752,9 +764,28 @@ func (s *Service) materializeEvidence(ctx context.Context, rawEventID string, dr
 		CreatedAt:            time.Now(),
 	}
 	if err := s.repo.WriteEvidence(ctx, evidence); err != nil {
-		return memory.Evidence{}, err
+		return memory.Evidence{}, false, err
 	}
-	return evidence, nil
+	return evidence, true, nil
+}
+
+// persistCandidateAndEnqueueAdmission 写入 candidate 并在需要时入队 compute_admission。
+// dedup 命中时复用已有 candidate ID；若该 candidate 已处理完成则不再入队。
+func (s *Service) persistCandidateAndEnqueueAdmission(ctx context.Context, record MemoryCandidateRecord) error {
+	effectiveID, inserted, err := s.repo.WriteCandidate(ctx, record)
+	if err != nil {
+		return err
+	}
+	if !inserted {
+		existing, err := s.repo.GetCandidate(ctx, effectiveID)
+		if err != nil {
+			return err
+		}
+		if existing.Status != CandidateStatusGenerated {
+			return nil
+		}
+	}
+	return s.enqueueNext(ctx, JobTypeComputeAdmission, TargetTypeMemoryCandidate, effectiveID, 5)
 }
 
 // materializeCandidate 将 Provider 生成的 MemoryCandidate 物化为 MemoryCandidateRecord。

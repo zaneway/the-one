@@ -117,38 +117,3 @@ func validMemoryType(memoryType string) bool {
 		return false
 	}
 }
-
-// defaultStateAndTier 根据记忆类型和来源类型确定默认状态和层级
-// 规则：
-// - session作用域: stable + temporary
-// - review_checkpoint: stable + long_term
-// - assumption/open_issue: pending_review + long_term
-// - decision/constraint: pending_review + long_term
-// - failure且importance>=0.8: pending_review + long_term
-// - user_declared: stable + durable
-// - 其他: stable + long_term
-func defaultStateAndTier(req RememberRequest) (string, string) {
-	switch {
-	// session scope 的记忆是临时的，直接 stable 但 tier=temporary（会被 TTL 自动清理）
-	case req.Scope == ScopeSession:
-		return StateStable, TierTemporary
-	// review_checkpoint 直接 stable（设计复查检查点由人工创建，无需审核）
-	case req.MemoryType == TypeReviewCheckpoint:
-		return StateStable, TierLongTerm
-	// assumption/open_issue 是未验证的假设，需要人工审核后才能 stable
-	case req.MemoryType == TypeAssumption || req.MemoryType == TypeOpenIssue:
-		return StatePendingReview, TierLongTerm
-	// decision/constraint 是重要决策和约束，需要人工确认
-	case req.MemoryType == TypeDecision || req.MemoryType == TypeConstraint:
-		return StatePendingReview, TierLongTerm
-	// 高重要度的 failure（>=0.8）需要人工审核，避免误判
-	case req.MemoryType == TypeFailure && req.Importance >= 0.8:
-		return StatePendingReview, TierLongTerm
-	// 用户直接声明的记忆默认 stable + durable（最高等级，不自动衰减）
-	case req.SourceType == "user_declared":
-		return StateStable, TierDurable
-	// 其他类型默认 stable + long_term
-	default:
-		return StateStable, TierLongTerm
-	}
-}

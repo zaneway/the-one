@@ -10,7 +10,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/zaneway/theone/internal/memory"
 )
 
 const (
@@ -22,6 +25,7 @@ type Service struct {
 	cfg     Config
 	repo    Repository
 	curator Curator
+	mu      sync.Mutex
 }
 
 func NewService(cfg Config, repo Repository, curator Curator) *Service {
@@ -30,6 +34,9 @@ func NewService(cfg Config, repo Repository, curator Curator) *Service {
 }
 
 func (s *Service) Run(ctx context.Context, req RunRequest) (RunResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	started := time.Now()
 	if s.repo == nil {
 		return RunResponse{}, fmt.Errorf("VALIDATION_FAILED: dream repository is required")
@@ -75,6 +82,9 @@ func (s *Service) Run(ctx context.Context, req RunRequest) (RunResponse, error) 
 	newManifest := buildManifest(plans)
 	resp := RunResponse{DryRun: req.DryRun, Planned: len(plans), Diagnostics: diagnostics, Items: make([]PlanItem, 0, len(plans)), StartedAt: started}
 	for _, plan := range plans {
+		if err := ctx.Err(); err != nil {
+			return resp, err
+		}
 		action := s.planAction(oldManifest, plan)
 		resp.Items = append(resp.Items, PlanItem{
 			ProjectionID: plan.ProjectionID,
@@ -94,17 +104,20 @@ func (s *Service) Run(ctx context.Context, req RunRequest) (RunResponse, error) 
 		if action == actionSkip {
 			continue
 		}
-		if err := s.writeProjection(plan); err != nil {
+		if err := s.writeProjection(ctx, oldManifest, plan); err != nil {
 			return resp, err
 		}
 		resp.Written++
 	}
 	if !req.DryRun {
-		if err := s.removeStaleManagedFiles(oldManifest, newManifest); err != nil {
+		if err := ctx.Err(); err != nil {
+			return resp, err
+		}
+		if err := s.removeStaleManagedFiles(ctx, oldManifest, newManifest); err != nil {
 			return resp, err
 		}
 		if !manifestItemsEqual(oldManifest, newManifest) {
-			if err := s.writeManifest(newManifest); err != nil {
+			if err := s.writeManifest(ctx, newManifest); err != nil {
 				return resp, err
 			}
 		}
@@ -132,18 +145,27 @@ func (s *Service) planProjections(ctx context.Context, memories []MemoryRecord, 
 			diagnostics = append(diagnostics, "dream curation failed; fallback to rule export: "+err.Error())
 		}
 		if err == nil {
+			minGroup := curationMinGroupSize(s.cfg.Curation.MinGroupSize)
 			for _, group := range result.Groups {
-				if len(group.SourceMemoryIDs) < curationMinGroupSize(s.cfg.Curation.MinGroupSize) {
+				if len(group.SourceMemoryIDs) < minGroup {
 					continue
 				}
 				sourceMemories := make([]MemoryRecord, 0, len(group.SourceMemoryIDs))
 				for _, id := range group.SourceMemoryIDs {
-					if item, ok := remaining[id]; ok {
-						sourceMemories = append(sourceMemories, item)
-						delete(remaining, id)
+					item, ok := remaining[id]
+					if !ok {
+						continue
 					}
+					if isStandaloneDreamMemory(item) {
+						continue
+					}
+					sourceMemories = append(sourceMemories, item)
+					delete(remaining, id)
 				}
-				if len(sourceMemories) == 0 {
+				if len(sourceMemories) < minGroup {
+					for _, item := range sourceMemories {
+						remaining[item.ID] = item
+					}
 					continue
 				}
 				plans = append(plans, s.planConsolidated(group, sourceMemories, relations))
@@ -206,20 +228,19 @@ func (s *Service) planMOC(plans []projectionPlan) projectionPlan {
 	}
 }
 
-func (s *Service) writeProjection(plan projectionPlan) error {
+func (s *Service) writeProjection(ctx context.Context, oldManifest manifestFile, plan projectionPlan) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	fullPath, err := safeJoin(s.cfg.Vault.Root, plan.Path)
 	if err != nil {
 		return err
 	}
+	if err := s.ensureProjectionWritable(fullPath, plan.Path, oldManifest); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
 		return fmt.Errorf("DREAM_EXPORT_FAILED: mkdir %s: %w", plan.Path, err)
-	}
-	if _, err := os.Stat(fullPath); err == nil {
-		if err := os.Chmod(fullPath, 0o644); err != nil {
-			return fmt.Errorf("DREAM_EXPORT_FAILED: chmod writable %s: %w", plan.Path, err)
-		}
-	} else if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("DREAM_EXPORT_FAILED: stat %s: %w", plan.Path, err)
 	}
 	if err := os.WriteFile(fullPath, []byte(plan.Body), 0o644); err != nil {
 		return fmt.Errorf("DREAM_EXPORT_FAILED: write %s: %w", plan.Path, err)
@@ -280,10 +301,16 @@ func (s *Service) planAction(old manifestFile, plan projectionPlan) string {
 	return actionWrite
 }
 
-func (s *Service) writeManifest(manifest manifestFile) error {
+func (s *Service) writeManifest(ctx context.Context, manifest manifestFile) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	path := filepath.ToSlash(filepath.Join(s.cfg.Vault.SystemDir, "dream-manifest.json"))
 	fullPath, err := safeJoin(s.cfg.Vault.Root, path)
 	if err != nil {
+		return err
+	}
+	if err := ensureWritableVaultPath(s.cfg.Vault.Root, fullPath); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
@@ -301,8 +328,11 @@ func (s *Service) writeManifest(manifest manifestFile) error {
 	return nil
 }
 
-func (s *Service) removeStaleManagedFiles(old, current manifestFile) error {
+func (s *Service) removeStaleManagedFiles(ctx context.Context, old, current manifestFile) error {
 	for projectionID, oldItem := range old.Items {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		newItem, ok := current.Items[projectionID]
 		if ok && newItem.Path == oldItem.Path {
 			continue
@@ -314,11 +344,41 @@ func (s *Service) removeStaleManagedFiles(old, current manifestFile) error {
 		if err != nil {
 			return err
 		}
+		if err := ensureWritableVaultPath(s.cfg.Vault.Root, fullPath); err != nil {
+			return err
+		}
 		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("DREAM_EXPORT_FAILED: remove stale projection %s: %w", oldItem.Path, err)
 		}
 	}
 	return nil
+}
+
+func isStandaloneDreamMemory(item MemoryRecord) bool {
+	switch item.MemoryType {
+	case memory.TypeDecision, memory.TypeConstraint, memory.TypeFailure, memory.TypePreference, memory.TypeReviewCheckpoint:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) ensureProjectionWritable(fullPath, relativePath string, oldManifest manifestFile) error {
+	if err := ensureWritableVaultPath(s.cfg.Vault.Root, fullPath); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(fullPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("DREAM_EXPORT_FAILED: stat %s: %w", relativePath, err)
+	}
+	for _, item := range oldManifest.Items {
+		if item.Path == relativePath {
+			return nil
+		}
+	}
+	return fmt.Errorf("DREAM_EXPORT_FAILED: refuse to overwrite non-system file %s", relativePath)
 }
 
 func (s *Service) isUserNotePath(path string) bool {
@@ -416,6 +476,29 @@ func safeJoin(root, relative string) (string, error) {
 		return "", fmt.Errorf("VALIDATION_FAILED: unsafe dream export path")
 	}
 	return filepath.Join(root, cleaned), nil
+}
+
+func ensureWritableVaultPath(root, fullPath string) error {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("DREAM_EXPORT_FAILED: resolve vault root: %w", err)
+	}
+	absPath, err := filepath.Abs(fullPath)
+	if err != nil {
+		return fmt.Errorf("DREAM_EXPORT_FAILED: resolve export path: %w", err)
+	}
+	rootPrefix := absRoot + string(filepath.Separator)
+	if absPath != absRoot && !strings.HasPrefix(absPath, rootPrefix) {
+		return fmt.Errorf("VALIDATION_FAILED: dream export path escapes vault root")
+	}
+	if fi, err := os.Lstat(absPath); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("VALIDATION_FAILED: refuse to write through symlink %s", fullPath)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("DREAM_EXPORT_FAILED: stat %s: %w", fullPath, err)
+	}
+	return nil
 }
 
 func slugTitle(title, fallback string) string {

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"math/rand"
 	"sync/atomic"
 	"time"
 
@@ -24,11 +25,11 @@ func startDreamExportScheduler(ctx context.Context, cfg config.DreamConfig, runn
 	initialDelay := time.Duration(cfg.Scheduler.InitialDelayMS) * time.Millisecond
 	maxRunDuration := time.Duration(cfg.Scheduler.MaxRunDurationMS) * time.Millisecond
 	skipIfRunning := cfg.Scheduler.SkipIfPreviousRunning
-	go runDreamExportScheduler(ctx, initialDelay, interval, maxRunDuration, skipIfRunning, runner, logger)
+	go runDreamExportScheduler(ctx, initialDelay, interval, cfg.Scheduler.JitterRatio, maxRunDuration, skipIfRunning, runner, logger)
 	return true
 }
 
-func runDreamExportScheduler(ctx context.Context, initialDelay, interval, maxRunDuration time.Duration, skipIfRunning bool, runner dreamExportRunner, logger *slog.Logger) {
+func runDreamExportScheduler(ctx context.Context, initialDelay, interval time.Duration, jitterRatio float64, maxRunDuration time.Duration, skipIfRunning bool, runner dreamExportRunner, logger *slog.Logger) {
 	if initialDelay > 0 {
 		timer := time.NewTimer(initialDelay)
 		select {
@@ -73,16 +74,31 @@ func runDreamExportScheduler(ctx context.Context, initialDelay, interval, maxRun
 	}
 
 	triggerExport()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	wait := dreamExportTickInterval(interval, jitterRatio)
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			triggerExport()
+			wait = dreamExportTickInterval(interval, jitterRatio)
+			timer.Reset(wait)
 		}
 	}
+}
+
+func dreamExportTickInterval(interval time.Duration, jitterRatio float64) time.Duration {
+	if interval <= 0 || jitterRatio <= 0 {
+		return interval
+	}
+	delta := float64(interval) * jitterRatio * (rand.Float64()*2 - 1)
+	next := interval + time.Duration(delta)
+	if next <= 0 {
+		return interval
+	}
+	return next
 }
 
 func dreamExportInterval(intervalMS int) time.Duration {

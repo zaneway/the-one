@@ -202,8 +202,15 @@ func captureObserveSpec(handler mcp.Handler) mcp.ToolSpec {
 	return mcp.ToolSpec{
 		Name:        "memory.observe",
 		Title:       "Observe agent event",
-		Description: "Capture a bounded agent event into raw_event storage with summaries plus optional raw_payload_json metadata for replayable evidence extraction.",
-		InputSchema: mcp.ObjectSchema([]string{"event_type"}, map[string]any{
+		Description: "Capture a bounded agent event into raw_event storage with summaries plus optional raw_payload_json metadata for replayable evidence extraction. For agent_session events also provide session_id. Conversation-like events should include keywords (3-8) and salient_spans (1-5). content_summary must use structured labels per doc/shared/content-summary-structured.md.",
+		InputSchema: mcp.ObjectSchema([]string{
+			"event_type",
+			"content_summary",
+			"actor",
+			"workspace_id",
+			"agent_type",
+			"source_channel",
+		}, map[string]any{
 			"session_id":           mcp.StringProp("Agent session id."),
 			"task_id":              mcp.StringProp("Agent task id."),
 			"agent_type":           mcp.EnumStringProp("Agent type.", "codex", "claude_code", "cursor", "unknown"),

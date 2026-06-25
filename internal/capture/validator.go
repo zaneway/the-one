@@ -87,6 +87,9 @@ func NormalizeObserve(cfg config.CaptureConfig, req *ObserveRequest) error {
 	if req.Actor != "" && !validActor(req.Actor) {
 		return fmt.Errorf("VALIDATION_FAILED: unsupported actor %q", req.Actor)
 	}
+	if req.Actor == "" {
+		req.Actor = ActorAdapter
+	}
 	// agent_session 来源的事件有更严格的校验：必须有 workspace_id 和 agent_type
 	// session.start 事件除外（此时 session_id 尚未生成）
 	if req.SourceChannel == SourceChannelAgentSession {

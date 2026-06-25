@@ -408,6 +408,9 @@ func (o *MemoryOrchestrator) Context(ctx context.Context, req memory.ContextRequ
 	latencyMS = time.Since(startedAt).Milliseconds()
 	o.finishTrace(ctx, trace, tracePersisted, traceStatus(fallbackReasons), len(retrieved.Results), len(usedIDs), latencyMS, fallbackReasons)
 
+	usedIDs = memory.FilterPersistentMemoryIDs(usedIDs)
+	contextPack = dropEphemeralContextMemories(contextPack)
+
 	return memory.ContextResponse{
 		ContextPack:      contextPack,
 		UsedMemoryIDs:    usedIDs,
@@ -776,7 +779,7 @@ func (o *MemoryOrchestrator) retrieveFromRawEvents(ctx context.Context, req memo
 			continue
 		}
 		results = append(results, memory.SearchResult{
-			MemoryID:   "rawevt:" + event.ID,
+			MemoryID:   memory.EphemeralMemoryIDPrefix + event.ID,
 			MemoryType: event.EventType,
 			Scope:      scopedRawEvent(event),
 			Title:      "raw_event fallback",
@@ -785,6 +788,7 @@ func (o *MemoryOrchestrator) retrieveFromRawEvents(ctx context.Context, req memo
 			Confidence: score,
 			State:      memory.StateProvisional,
 			Tier:       memory.TierTemporary,
+			Ephemeral:  true,
 			WhyIncluded: []string{
 				"raw_event_fallback",
 				"recent_window",
@@ -803,12 +807,12 @@ func (o *MemoryOrchestrator) retrieveFromRawEvents(ctx context.Context, req memo
 
 func scopedRawEvent(event capture.RawEvent) string {
 	switch {
-	case event.SessionID != "":
-		return memory.ScopeSession
 	case event.ProjectID != "":
 		return memory.ScopeProjectLocal
 	case event.RepoID != "":
 		return memory.ScopeRepoLocal
+	case event.SessionID != "":
+		return memory.ScopeSession
 	default:
 		return memory.ScopeUserGlobal
 	}
@@ -1648,6 +1652,9 @@ func (o *MemoryOrchestrator) writeAccessLogs(ctx context.Context, input accessLo
 	}
 	records := make([]AccessLogRecord, 0, len(input.Results))
 	for i, result := range input.Results {
+		if memory.IsEphemeralMemoryID(result.MemoryID) {
+			continue
+		}
 		breakdown := memory.ScoreBreakdown{}
 		if result.ScoreBreakdown != nil {
 			breakdown = *result.ScoreBreakdown
@@ -1753,6 +1760,21 @@ func appendMissingResults(base []memory.SearchResult, additions []memory.SearchR
 		out = append(out, result)
 	}
 	return out
+}
+
+func dropEphemeralContextMemories(pack memory.ContextPack) memory.ContextPack {
+	if len(pack.Memories) == 0 {
+		return pack
+	}
+	memories := make([]memory.ContextMemory, 0, len(pack.Memories))
+	for _, item := range pack.Memories {
+		if memory.IsEphemeralMemoryID(item.MemoryID) {
+			continue
+		}
+		memories = append(memories, item)
+	}
+	pack.Memories = memories
+	return pack
 }
 
 func filterUsedResults(results []memory.SearchResult, usedIDs []string) []memory.SearchResult {

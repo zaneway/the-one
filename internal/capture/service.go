@@ -195,6 +195,10 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		req.TaskID = task.ID
 	}
 
+	if shouldSuppressRawEvent(s.cfg, req.EventType) {
+		return s.observeSuppressed(ctx, requestID, req, captureLevel, hasSession)
+	}
+
 	// Step 9: 幂等检测——按 content_hash + session_id + event_type + source_channel + workspace/project/repo 去重
 	dedup := EventDedupKey{
 		ContentHash:   req.ContentHash,
@@ -218,6 +222,18 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 		if hasSession {
 			_ = s.updateQuality(ctx, req, true)
 		}
+		diagnostics := make([]string, 0, 1)
+		// 首次写入成功但入队失败时，dedup 重试仍应补偿 enqueue。
+		if s.enqueuer != nil {
+			if err := s.enqueuer.EnqueueRawEvent(ctx, existing); err != nil {
+				s.logger.Error("observe deduped automation enqueue failed",
+					"request_id", requestID,
+					"event_id", existing.ID,
+					"error", err,
+				)
+				diagnostics = append(diagnostics, "automation_enqueue_failed")
+			}
+		}
 		return ObserveResponse{
 			RequestID:    requestID,
 			RawEventID:   existing.ID,
@@ -227,6 +243,7 @@ func (s *Service) Observe(ctx context.Context, req ObserveRequest) (ObserveRespo
 			Pipeline:     pipelineRawEventOnly,
 			Deduped:      true,
 			CaptureLevel: captureLevel,
+			Diagnostics:  diagnostics,
 		}, nil
 	}
 
@@ -692,7 +709,7 @@ func sessionEndTaskStatus(req ObserveRequest) string {
 	if req.Task != nil && req.Task.Status != "" && req.Task.Status != StatusActive {
 		return req.Task.Status
 	}
-	return StatusUnknown
+	return StatusCompleted
 }
 
 // taskOutcome 从请求中提取任务结果摘要。
@@ -704,6 +721,36 @@ func taskOutcome(req ObserveRequest) string {
 		return ""
 	}
 	return req.Task.OutcomeSummary
+}
+
+// observeSuppressed 处理配置为抑制 raw_event 的事件类型。
+// session.start 仍通过 resolveSession 落库；其余抑制类型直接返回 accepted。
+func (s *Service) observeSuppressed(
+	ctx context.Context,
+	requestID string,
+	req ObserveRequest,
+	captureLevel int,
+	hasSession bool,
+) (ObserveResponse, error) {
+	s.logger.Info("observe suppressed",
+		"request_id", requestID,
+		"event_type", req.EventType,
+		"session_id", req.SessionID,
+	)
+	if hasSession {
+		if err := s.updateQuality(ctx, req, false); err != nil {
+			return ObserveResponse{}, err
+		}
+	}
+	return ObserveResponse{
+		RequestID:    requestID,
+		SessionID:    req.SessionID,
+		TaskID:       req.TaskID,
+		Accepted:     true,
+		Pipeline:     pipelineRawEventOnly,
+		CaptureLevel: captureLevel,
+		Diagnostics:  []string{"event_type_suppressed"},
+	}, nil
 }
 
 // jsonText 将任意值序列化为 JSON 字符串，失败时返回 VALIDATION_FAILED 错误。

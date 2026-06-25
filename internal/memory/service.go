@@ -545,25 +545,7 @@ func (s *Service) Context(ctx context.Context, req ContextRequest) (ContextRespo
 			Constraints: constraints,
 			CodeRefs:    []CodeRef{},
 		},
-		UsedMemoryIDs:    usedIDs,
-		RetrievalTraceID: searchResp.Diagnostics.RetrievalTraceID,
-		LatencyMS:        time.Since(startedAt).Milliseconds(),
-	}, nil
-	s.logger.Info("context completed",
-		"memory_count", len(memories),
-		"used_memory_count", len(usedIDs),
-		"constraint_count", len(constraints),
-		"retrieval_trace_id", searchResp.Diagnostics.RetrievalTraceID,
-		"latency_ms", time.Since(startedAt).Milliseconds(),
-	)
-	return ContextResponse{
-		ContextPack: ContextPack{
-			Summary:     summary,
-			Memories:    memories,
-			Constraints: constraints,
-			CodeRefs:    []CodeRef{},
-		},
-		UsedMemoryIDs:    usedIDs,
+		UsedMemoryIDs:    FilterPersistentMemoryIDs(usedIDs),
 		RetrievalTraceID: searchResp.Diagnostics.RetrievalTraceID,
 		LatencyMS:        time.Since(startedAt).Milliseconds(),
 	}, nil

@@ -12,6 +12,12 @@ import (
 	"github.com/zaneway/theone/internal/config"
 )
 
+func testConfigWithoutSuppress() config.Config {
+	cfg := config.Default()
+	cfg.Capture.SuppressRawEventTypes = []string{}
+	return cfg
+}
+
 func TestServiceObserveSessionStartCreatesRawEventAndDefaultTask(t *testing.T) {
 	repo := newFakeRepository()
 	service := NewService(config.Default(), repo)
@@ -36,11 +42,17 @@ func TestServiceObserveSessionStartCreatesRawEventAndDefaultTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Observe() error = %v", err)
 	}
-	if !resp.Accepted || resp.RawEventID == "" || resp.SessionID == "" || resp.TaskID == "" {
-		t.Fatalf("response = %+v, want accepted with ids", resp)
+	if !resp.Accepted || resp.SessionID == "" || resp.TaskID == "" {
+		t.Fatalf("response = %+v, want accepted with session and task ids", resp)
 	}
-	if len(repo.events) != 1 {
-		t.Fatalf("events = %d, want 1", len(repo.events))
+	if resp.RawEventID != "" {
+		t.Fatalf("raw_event_id = %q, want empty for suppressed session.start", resp.RawEventID)
+	}
+	if len(repo.events) != 0 {
+		t.Fatalf("events = %d, want 0 for suppressed session.start", len(repo.events))
+	}
+	if !containsDiagnostic(resp.Diagnostics, "event_type_suppressed") {
+		t.Fatalf("diagnostics = %+v, want event_type_suppressed", resp.Diagnostics)
 	}
 	task := repo.tasks[resp.TaskID]
 	if task.TaskSummary != "default task" {
@@ -76,20 +88,18 @@ func TestServiceObserveDedupesRawEvent(t *testing.T) {
 
 	req := ObserveRequest{
 		SessionID:      start.SessionID,
-		EventType:      EventToolResultSummary,
+		EventType:      EventTurnCompleted,
 		SourceChannel:  SourceChannelAgentSession,
 		WorkspaceID:    "ws",
 		AgentType:      "codex",
-		Actor:          ActorTool,
-		ToolName:       "go test",
-		OutputSummary:  "测试通过",
-		ContentSummary: "【事件】工具执行结果：go test\n【事实】测试通过",
+		Actor:          ActorAdapter,
+		InputSummary:   "推进 dedup 测试",
+		OutputSummary:  "已记录 dedup 测试",
+		ContentSummary: "【结论/决策】dedup 测试应复用已有 raw_event。",
 		ContentHash:    "sha256:same",
 		CaptureCapabilities: CaptureCapabilities{
-			ToolCallCapture:   true,
-			ToolOutputCapture: true,
-			SessionLifecycle:  true,
-			MCPObserve:        true,
+			SessionLifecycle: true,
+			MCPObserve:       true,
 		},
 	}
 	first, err := service.Observe(context.Background(), req)
@@ -107,7 +117,7 @@ func TestServiceObserveDedupesRawEvent(t *testing.T) {
 
 func TestServiceObservePreservesRawPayloadMetadata(t *testing.T) {
 	repo := newFakeRepository()
-	service := NewService(config.Default(), repo)
+	service := NewService(testConfigWithoutSuppress(), repo)
 
 	resp, err := service.Observe(context.Background(), ObserveRequest{
 		EventType:       EventToolResultSummary,
@@ -221,8 +231,8 @@ func TestServiceObserveEnqueuesAutomationForNewRawEventOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Observe(session.start) error = %v", err)
 	}
-	if len(enqueuer.rawEventIDs) != 1 || enqueuer.rawEventIDs[0] != start.RawEventID {
-		t.Fatalf("enqueued raw events after start = %+v, want %s", enqueuer.rawEventIDs, start.RawEventID)
+	if len(enqueuer.rawEventIDs) != 0 {
+		t.Fatalf("enqueued raw events after suppressed start = %+v, want none", enqueuer.rawEventIDs)
 	}
 
 	req := ObserveRequest{
@@ -250,9 +260,18 @@ func TestServiceObserveEnqueuesAutomationForNewRawEventOnly(t *testing.T) {
 	if !second.Deduped {
 		t.Fatalf("second response = %+v, want deduped", second)
 	}
-	if len(enqueuer.rawEventIDs) != 2 || enqueuer.rawEventIDs[1] != first.RawEventID {
-		t.Fatalf("enqueued raw events = %+v, want start and first declaration only", enqueuer.rawEventIDs)
+	if len(enqueuer.rawEventIDs) != 2 || enqueuer.rawEventIDs[0] != first.RawEventID || enqueuer.rawEventIDs[1] != first.RawEventID {
+		t.Fatalf("enqueued raw events = %+v, want first declaration enqueued twice on dedup retry", enqueuer.rawEventIDs)
 	}
+}
+
+func containsDiagnostic(diagnostics []string, want string) bool {
+	for _, item := range diagnostics {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestServiceObserveDoesNotCallSemanticEnhancerBeforeRawEventPersistence(t *testing.T) {
@@ -428,12 +447,14 @@ func TestServiceObserveTracksContentBoundaryRejectionForSession(t *testing.T) {
 	}
 
 	_, err = service.Observe(context.Background(), ObserveRequest{
-		SessionID:     start.SessionID,
-		EventType:     EventToolResultSummary,
-		SourceChannel: SourceChannelAgentSession,
-		WorkspaceID:   "ws",
-		AgentType:     "cursor",
-		SourceRefs:    []SourceRef{{"full_output": "完整输出"}},
+		SessionID:      start.SessionID,
+		EventType:      EventTurnCompleted,
+		SourceChannel:  SourceChannelAgentSession,
+		WorkspaceID:    "ws",
+		AgentType:      "cursor",
+		Actor:          ActorAdapter,
+		ContentSummary: "【事实】boundary rejection test",
+		SourceRefs:     []SourceRef{{"full_output": "完整输出"}},
 		CaptureCapabilities: CaptureCapabilities{
 			SessionLifecycle: true,
 			MCPObserve:       true,
@@ -449,8 +470,8 @@ func TestServiceObserveTracksContentBoundaryRejectionForSession(t *testing.T) {
 	if !strings.Contains(report.CaptureQualityJSON, `"content_boundary_rejections":1`) {
 		t.Fatalf("quality json = %s, want one content boundary rejection", report.CaptureQualityJSON)
 	}
-	if len(repo.events) != 1 {
-		t.Fatalf("events = %d, want only session.start raw event", len(repo.events))
+	if len(repo.events) != 0 {
+		t.Fatalf("events = %d, want no raw_event after rejected turn.completed", len(repo.events))
 	}
 }
 

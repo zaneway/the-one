@@ -323,17 +323,18 @@ func candidateScopeWhere(alias string, workspaceID string, projectID string, rep
 }
 
 // WriteCandidate 写入 Provider 生成的候选记忆记录，重复 dedup_key 会被视为幂等命中。
-func (s *Store) WriteCandidate(ctx context.Context, candidate automation.MemoryCandidateRecord) error {
+// 返回实际 candidate ID 以及是否为新建记录。
+func (s *Store) WriteCandidate(ctx context.Context, candidate automation.MemoryCandidateRecord) (string, bool, error) {
 	if candidate.ID == "" || candidate.Provider == "" || candidate.MemoryType == "" || candidate.Scope == "" || candidate.Content == "" {
-		return fmt.Errorf("VALIDATION_FAILED: candidate id, provider, memory_type, scope and content are required")
+		return "", false, fmt.Errorf("VALIDATION_FAILED: candidate id, provider, memory_type, scope and content are required")
 	}
 	if candidate.DedupKey != "" {
-		_, found, err := s.getCandidateByDedupKey(ctx, candidate.DedupKey)
+		existing, found, err := s.getCandidateByDedupKey(ctx, candidate.DedupKey)
 		if err != nil {
-			return err
+			return "", false, err
 		}
 		if found {
-			return nil
+			return existing.ID, false, nil
 		}
 	}
 	now := time.Now()
@@ -372,7 +373,10 @@ func (s *Store) WriteCandidate(ctx context.Context, candidate automation.MemoryC
 		nullString(candidate.AdmissionReasonJSON), nullString(candidate.ResultingMemoryID), candidate.Status,
 		nullString(candidate.DedupKey), candidate.CreatedAt.Format(time.RFC3339Nano), candidate.UpdatedAt.Format(time.RFC3339Nano),
 	)
-	return storageErr(err)
+	if err != nil {
+		return "", false, storageErr(err)
+	}
+	return candidate.ID, true, nil
 }
 
 // UpdateCandidateAdmission 回填 Admission 结果和最终 memory_id。
