@@ -5,7 +5,7 @@ import "github.com/zaneway/theone/internal/memory"
 func DefaultVaultConfig(root string) VaultConfig {
 	return VaultConfig{
 		Root:      root,
-		SystemDir: ".theone",
+		SystemDir: ".theone-data",
 		Directories: DirectoryConfig{
 			Inbox:     "00-inbox",
 			Projects:  "10-projects",

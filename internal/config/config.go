@@ -122,8 +122,15 @@ type LoggingConfig struct {
 	Format string `yaml:"format" json:"format"`
 
 	// Path 日志文件路径
-	// 支持 ~ 展开；默认写入 ~/.theone/logs/theone.log
+	// 支持 ~ 展开；默认写入 ~/.theone-data/logs/theone.log
 	Path string `yaml:"path" json:"path"`
+
+	// StartupCleanupEnabled 是否在 serve 启动时清理 startup_cleanup_dirs 下的旧日志文件。
+	StartupCleanupEnabled bool `yaml:"startup_cleanup_enabled" json:"startup_cleanup_enabled"`
+
+	// StartupCleanupDirs serve 启动时清理的日志目录列表，支持 ~ 展开。
+	// 为空时在 Load 末尾自动设为 <data-dir>/logs。
+	StartupCleanupDirs []string `yaml:"startup_cleanup_dirs" json:"startup_cleanup_dirs"`
 }
 
 // MemoryConfig 记忆配置结构体
@@ -504,13 +511,13 @@ type Overrides struct {
 	LogLevel string
 }
 
-// defaultDataDir 返回内置默认数据根目录：$HOME/.theone。
+// defaultDataDir 返回内置默认数据根目录：$HOME/.theone-data。
 func defaultDataDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		home = "."
 	}
-	return filepath.Join(home, ".theone")
+	return filepath.Join(home, ".theone-data")
 }
 
 // DataDirFromStoragePath 从 SQLite 库文件路径推导数据根目录（与 memory.db 同级）。
@@ -539,9 +546,10 @@ func Default() Config {
 			MCPAddr: "stdio",
 		},
 		Logging: LoggingConfig{
-			Level:  "info",
-			Format: "text",
-			Path:   LogFilePath(dataDir),
+			Level:                 "info",
+			Format:                "text",
+			Path:                  LogFilePath(dataDir),
+			StartupCleanupEnabled: true,
 		},
 		Memory: MemoryConfig{
 			DefaultUserID:       "local_default_user",
@@ -641,7 +649,7 @@ func Default() Config {
 			Enabled: false,
 			Vault: DreamVaultConfig{
 				Root:         "",
-				SystemDir:    ".theone",
+				SystemDir:    ".theone-data",
 				UserNotesDir: "99-user-notes",
 				Directories: DreamDirectoryConfig{
 					Inbox:     "00-inbox",
@@ -738,7 +746,26 @@ func Load(overrides Overrides) (Config, error) {
 	} else {
 		cfg.Logging.Path = expandHome(cfg.Logging.Path)
 	}
+	if env := strings.TrimSpace(os.Getenv("THEONE_LOG_STARTUP_CLEANUP")); env != "" {
+		cfg.Logging.StartupCleanupEnabled = env == "1" || strings.EqualFold(env, "true")
+	}
+	cfg.Logging.StartupCleanupDirs = resolveStartupCleanupDirs(cfg)
 	return cfg, validate(cfg)
+}
+
+// resolveStartupCleanupDirs 解析 serve 启动时要清理的日志目录。
+func resolveStartupCleanupDirs(cfg Config) []string {
+	if len(cfg.Logging.StartupCleanupDirs) > 0 {
+		out := make([]string, 0, len(cfg.Logging.StartupCleanupDirs))
+		for _, dir := range cfg.Logging.StartupCleanupDirs {
+			if trimmed := strings.TrimSpace(dir); trimmed != "" {
+				out = append(out, expandHome(trimmed))
+			}
+		}
+		return out
+	}
+	dataDir := DataDirFromStoragePath(cfg.Storage.Path)
+	return []string{filepath.Join(dataDir, "logs")}
 }
 
 // loadYAML 从给定路径读取 YAML 配置并反序列化到 cfg。

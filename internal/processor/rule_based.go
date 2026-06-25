@@ -181,8 +181,8 @@ func (RuleBasedProvider) GenerateCandidates(ctx context.Context, input Candidate
 		} else if handled {
 			return candidates, nil
 		}
-		// 包含决策信号：归类为架构决策
-		if hasAnySignal(statement, "决策", "decision") {
+		// 显式决策语义：归类为架构决策；模板标签里的“结论/决策”本身不算决策。
+		if hasExplicitDecisionSignal(statement) {
 			return []MemoryCandidate{baseCandidate(input, statement, memory.TypeDecision, memory.ScopeProjectLocal, keywords, evidenceIDs, "architecture_decision", eventScore)}, nil
 		}
 		// 与 ExtractEvidence 高信号门槛对齐：对 turn/响应摘要复用声明分类规则
@@ -193,6 +193,10 @@ func (RuleBasedProvider) GenerateCandidates(ctx context.Context, input Candidate
 		}
 	}
 	return nil, nil
+}
+
+func hasExplicitDecisionSignal(statement string) bool {
+	return hasAnySignal(statement, "采用", "决定", "选用", "架构决策", "技术决策", "decision:", "decision is", "decided")
 }
 
 func evidenceIfStatement(sourceType, statement string, keywords, spans []string, sourceRef map[string]any, input EvidenceInput, ambiguous bool) []EvidenceDraft {

@@ -90,6 +90,41 @@ func TestMemoryOrchestratorSearchWritesTraceAndRetrievedLogs(t *testing.T) {
 	}
 }
 
+func TestMemoryOrchestratorUsesMemoryUpdatedAtForRecency(t *testing.T) {
+	ctx := context.Background()
+	updatedAt := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	searcher := &fakeMemorySearcher{results: []memory.SearchResult{{
+		MemoryID:   "mem-old",
+		MemoryType: memory.TypeDecision,
+		Scope:      memory.ScopeProjectLocal,
+		Content:    "旧设计决策。",
+		Score:      0.8,
+		Confidence: 0.8,
+		State:      memory.StateStable,
+		Tier:       memory.TierLongTerm,
+		UpdatedAt:  updatedAt,
+	}}}
+	traceRepo := &fakeTraceRepo{}
+	accessRepo := &fakeAccessLogRepo{}
+	orchestrator := newTestOrchestrator(searcher, traceRepo, accessRepo)
+
+	resp, err := orchestrator.Search(ctx, memory.SearchRequest{
+		Query:       "旧设计决策",
+		WorkspaceID: "ws-1",
+		ProjectID:   "prj-1",
+		Scope:       []string{memory.ScopeProjectLocal},
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(resp.Results) != 1 || resp.Results[0].ScoreBreakdown == nil {
+		t.Fatalf("results = %+v, want one result with score breakdown", resp.Results)
+	}
+	if resp.Results[0].ScoreBreakdown.Recency >= 1 {
+		t.Fatalf("recency = %v, want real updated_at to avoid treating old memory as just updated", resp.Results[0].ScoreBreakdown.Recency)
+	}
+}
+
 func TestMemoryOrchestratorSearchMergesVectorCandidates(t *testing.T) {
 	ctx := context.Background()
 	searcher := &fakeMemorySearcher{results: []memory.SearchResult{
@@ -289,7 +324,7 @@ func TestMemoryOrchestratorContextCanInjectMoreThanTwoWhenBudgetAllows(t *testin
 			MemoryID:   "mem-score-09",
 			MemoryType: memory.TypeDecision,
 			Scope:      memory.ScopeProjectLocal,
-			Content:    "最高分记忆应被注入。",
+			Content:    "检查 context top two 时，最高分记忆应被注入。",
 			Score:      0.9,
 			Confidence: 0.8,
 			State:      memory.StateStable,
@@ -299,7 +334,7 @@ func TestMemoryOrchestratorContextCanInjectMoreThanTwoWhenBudgetAllows(t *testin
 			MemoryID:   "mem-score-08",
 			MemoryType: memory.TypeDecision,
 			Scope:      memory.ScopeProjectLocal,
-			Content:    "第二高分记忆应被注入。",
+			Content:    "检查 context top two 时，第二高分记忆应被注入。",
 			Score:      0.8,
 			Confidence: 0.8,
 			State:      memory.StateStable,
@@ -309,7 +344,7 @@ func TestMemoryOrchestratorContextCanInjectMoreThanTwoWhenBudgetAllows(t *testin
 			MemoryID:   "mem-score-07",
 			MemoryType: memory.TypeDecision,
 			Scope:      memory.ScopeProjectLocal,
-			Content:    "第三高分记忆预算允许时也应被注入。",
+			Content:    "检查 context top two 时，第三高分记忆预算允许也应被注入。",
 			Score:      0.7,
 			Confidence: 0.8,
 			State:      memory.StateStable,

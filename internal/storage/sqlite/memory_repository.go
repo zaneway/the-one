@@ -594,7 +594,8 @@ func (s *Store) searchByFTS(ctx context.Context, req memory.SearchRequest, match
 	// FTS5 虚表查询：通过 memory_item_fts match 匹配，JOIN memory_item 获取完整字段
 	// bm25() 返回负值（越小越相关），用于后续排序
 	query := `select m.id, m.memory_type, m.scope, coalesce(m.title, ''), m.content,
-		m.confidence, m.importance, m.state, m.tier, bm25(memory_item_fts) as rank
+		coalesce(m.keywords_json, ''), coalesce(m.retrieval_cues_json, ''),
+		m.confidence, m.importance, m.state, m.tier, m.updated_at, bm25(memory_item_fts) as rank
 		from memory_item_fts
 		join memory_item m on m.id = memory_item_fts.memory_id
 		where memory_item_fts match ?`
@@ -623,7 +624,7 @@ func (s *Store) searchByFTS(ctx context.Context, req memory.SearchRequest, match
 	var raw []rankedMemory
 	for rows.Next() {
 		var item rankedMemory
-		if err := rows.Scan(&item.ID, &item.MemoryType, &item.Scope, &item.Title, &item.Content, &item.Confidence, &item.Importance, &item.State, &item.Tier, &item.Rank); err != nil {
+		if err := rows.Scan(&item.ID, &item.MemoryType, &item.Scope, &item.Title, &item.Content, &item.KeywordsJSON, &item.RetrievalCuesJSON, &item.Confidence, &item.Importance, &item.State, &item.Tier, &item.UpdatedAt, &item.Rank); err != nil {
 			return nil, memory.SearchDiagnostics{Fallback: "fts_metadata"}, storageErr(err)
 		}
 		raw = append(raw, item)
@@ -663,7 +664,8 @@ func (s *Store) searchByLike(ctx context.Context, req memory.SearchRequest, limi
 	// rank 固定为 0.0（无 BM25 分数），排序依赖 metadata 权重
 	likePattern := "%" + strings.ToLower(req.Query) + "%"
 	query := `select id, memory_type, scope, coalesce(title, ''), content,
-		confidence, importance, state, tier, 0.0 as rank
+		coalesce(keywords_json, ''), coalesce(retrieval_cues_json, ''),
+		confidence, importance, state, tier, updated_at, 0.0 as rank
 		from memory_item
 		where lower(search_text) like ?`
 	args := []any{likePattern}
@@ -691,7 +693,7 @@ func (s *Store) searchByLike(ctx context.Context, req memory.SearchRequest, limi
 	var raw []rankedMemory
 	for rows.Next() {
 		var item rankedMemory
-		if err := rows.Scan(&item.ID, &item.MemoryType, &item.Scope, &item.Title, &item.Content, &item.Confidence, &item.Importance, &item.State, &item.Tier, &item.Rank); err != nil {
+		if err := rows.Scan(&item.ID, &item.MemoryType, &item.Scope, &item.Title, &item.Content, &item.KeywordsJSON, &item.RetrievalCuesJSON, &item.Confidence, &item.Importance, &item.State, &item.Tier, &item.UpdatedAt, &item.Rank); err != nil {
 			return nil, memory.SearchDiagnostics{Fallback: "metadata_like"}, storageErr(err)
 		}
 		raw = append(raw, item)
@@ -730,7 +732,8 @@ func (s *Store) searchByMemoryKey(ctx context.Context, req memory.SearchRequest,
 	}
 
 	query := `select m.id, m.memory_type, m.scope, coalesce(m.title, ''), m.content,
-		m.confidence, m.importance, m.state, m.tier, max(k.weight) as rank
+		coalesce(m.keywords_json, ''), coalesce(m.retrieval_cues_json, ''),
+		m.confidence, m.importance, m.state, m.tier, m.updated_at, max(k.weight) as rank
 		from memory_key k
 		join memory_item m on m.id = k.memory_id
 		where (`
@@ -744,7 +747,7 @@ func (s *Store) searchByMemoryKey(ctx context.Context, req memory.SearchRequest,
 	}
 	query += ")"
 	query, args = appendSearchFilters(query, args, req, false)
-	query += " group by m.id, m.memory_type, m.scope, m.title, m.content, m.confidence, m.importance, m.state, m.tier"
+	query += " group by m.id, m.memory_type, m.scope, m.title, m.content, m.keywords_json, m.retrieval_cues_json, m.confidence, m.importance, m.state, m.tier, m.updated_at"
 	query += " order by rank desc, m.updated_at desc limit ?"
 	args = append(args, limit*3)
 
@@ -756,7 +759,7 @@ func (s *Store) searchByMemoryKey(ctx context.Context, req memory.SearchRequest,
 	var raw []rankedMemory
 	for rows.Next() {
 		var item rankedMemory
-		if err := rows.Scan(&item.ID, &item.MemoryType, &item.Scope, &item.Title, &item.Content, &item.Confidence, &item.Importance, &item.State, &item.Tier, &item.Rank); err != nil {
+		if err := rows.Scan(&item.ID, &item.MemoryType, &item.Scope, &item.Title, &item.Content, &item.KeywordsJSON, &item.RetrievalCuesJSON, &item.Confidence, &item.Importance, &item.State, &item.Tier, &item.UpdatedAt, &item.Rank); err != nil {
 			return nil, memory.SearchDiagnostics{Fallback: "memory_key"}, storageErr(err)
 		}
 		item.RankMode = "key_weight"
@@ -780,18 +783,21 @@ func (s *Store) searchByMemoryKey(ctx context.Context, req memory.SearchRequest,
 }
 
 type rankedMemory struct {
-	ID          string
-	MemoryType  string
-	Scope       string
-	Title       string
-	Content     string
-	Confidence  float64
-	Importance  float64
-	State       string
-	Tier        string
-	Rank        float64
-	RankMode    string
-	WhyIncluded []string
+	ID                string
+	MemoryType        string
+	Scope             string
+	Title             string
+	Content           string
+	KeywordsJSON      string
+	RetrievalCuesJSON string
+	Confidence        float64
+	Importance        float64
+	State             string
+	Tier              string
+	UpdatedAt         string
+	Rank              float64
+	RankMode          string
+	WhyIncluded       []string
 }
 
 // rankSearchResults 对检索结果执行二次排序和裁剪。
@@ -810,16 +816,19 @@ func (s *Store) rankSearchResults(ctx context.Context, raw []rankedMemory, req m
 			score -= 0.4
 		}
 		result := memory.SearchResult{
-			MemoryID:    item.ID,
-			MemoryType:  item.MemoryType,
-			Scope:       item.Scope,
-			Title:       item.Title,
-			Content:     item.Content,
-			Score:       clamp(score),
-			Confidence:  item.Confidence,
-			State:       item.State,
-			Tier:        item.Tier,
-			WhyIncluded: append([]string(nil), item.WhyIncluded...),
+			MemoryID:          item.ID,
+			MemoryType:        item.MemoryType,
+			Scope:             item.Scope,
+			Title:             item.Title,
+			Content:           item.Content,
+			KeywordsJSON:      item.KeywordsJSON,
+			RetrievalCuesJSON: item.RetrievalCuesJSON,
+			Score:             clamp(score),
+			Confidence:        item.Confidence,
+			State:             item.State,
+			Tier:              item.Tier,
+			UpdatedAt:         parseTime(item.UpdatedAt),
+			WhyIncluded:       append([]string(nil), item.WhyIncluded...),
 		}
 		if req.IncludeEvidence {
 			result.EvidenceRefs = s.loadEvidenceRefs(ctx, item.ID)
@@ -837,8 +846,9 @@ func normalizedRankScore(item rankedMemory) float64 {
 	if item.RankMode == "key_weight" {
 		return clamp(item.Rank)
 	}
-	// FTS5 返回负值（越小越相关），转换为 0-1 范围。
-	return 1.0 / (1.0 + math.Abs(item.Rank))
+	// FTS5 bm25() 返回负值，绝对值越大越相关；转换为 0-1 范围。
+	magnitude := math.Abs(item.Rank)
+	return magnitude / (1.0 + magnitude)
 }
 
 // appendSearchFilters 为 SQL 查询追加通用过滤条件。
@@ -1021,13 +1031,14 @@ func (s *Store) loadEvidenceRefs(ctx context.Context, memoryID string) []string 
 func buildFTSQuery(query string) string {
 	terms := make([]string, 0)
 	var current []rune
+	hasPathSeparator := strings.ContainsAny(query, `/\`)
 	// 将累积的字符作为完整词输出：双引号包裹实现精确匹配，内部双引号转义
 	flush := func() {
 		if len(current) == 0 {
 			return
 		}
 		term := strings.TrimSpace(string(current))
-		if term != "" {
+		if term != "" && !shouldDropFTSTerm(term, hasPathSeparator) {
 			terms = append(terms, `"`+strings.ReplaceAll(term, `"`, `""`)+`"`)
 		}
 		current = nil
@@ -1047,6 +1058,34 @@ func buildFTSQuery(query string) string {
 	}
 	// 词间用 OR 连接：提高召回率，避免一个词不匹配就丢失整条记忆
 	return strings.Join(terms, " OR ")
+}
+
+func shouldDropFTSTerm(term string, pathQuery bool) bool {
+	if !pathQuery {
+		return false
+	}
+	normalized := strings.Trim(strings.ToLower(term), "._- ")
+	if normalized == "" {
+		return true
+	}
+	pathNoise := map[string]bool{
+		"users":          true,
+		"user":           true,
+		"home":           true,
+		"private":        true,
+		"tmp":            true,
+		"var":            true,
+		"zaneway":        true,
+		"synologydrive":  true,
+		"code":           true,
+		"space":          true,
+		"golandprojects": true,
+		"theone":         true,
+		"the":            true,
+		"one":            true,
+		"data":           true,
+	}
+	return pathNoise[normalized]
 }
 
 // shouldIndex 判断指定状态的记忆是否应纳入 FTS 索引。

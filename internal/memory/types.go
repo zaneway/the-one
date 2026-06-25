@@ -412,6 +412,14 @@ type SearchResult struct {
 	// Content 记忆内容
 	Content string `json:"content"`
 
+	// KeywordsJSON 关键词画像
+	// 用于 rerank 阶段计算 query-memory 相关性，不默认注入上下文正文
+	KeywordsJSON string `json:"keywords_json,omitempty"`
+
+	// RetrievalCuesJSON 检索线索画像
+	// 包括 canonical question / retrieval cues，用于 rerank 阶段提升精准匹配
+	RetrievalCuesJSON string `json:"retrieval_cues_json,omitempty"`
+
 	// Score 检索分数
 	// 综合BM25、scope、confidence、importance等因素计算
 	Score float64 `json:"score"`
@@ -424,6 +432,10 @@ type SearchResult struct {
 
 	// Tier 记忆层级
 	Tier string `json:"tier"`
+
+	// UpdatedAt 记忆更新时间
+	// 用于 rerank 计算真实 recency，避免把检索时间误当成记忆更新时间。
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
 
 	// EvidenceRefs 证据引用列表
 	// 可选，当IncludeEvidence=true时返回

@@ -13,6 +13,14 @@ const (
 	contextDefaultCodeRefs = 8
 )
 
+const (
+	contextMinTaskFitForDesign        = 0.30
+	contextMinSemanticForDesign       = 0.55
+	contextStrongBM25TaskFitForDesign = 0.25
+	contextStrongBM25ForDesign        = 0.85
+	contextArchitectureTaskFitFloor   = 0.25
+)
+
 type contextBucketName string
 
 const (
@@ -356,11 +364,15 @@ func stateRank(state string) int {
 // 丢弃条件：
 //   - temporary_state 且非 TaskContinuation 意图（临时状态对非延续场景无价值）
 //   - provisional 状态且分数 < 0.2（低分的临时记忆不值得注入）
+//   - stable_design 类记忆缺少直接相关性信号（避免只因 scope/recency/source_quality 被注入）
 func shouldDropContextCandidate(result memory.SearchResult, intent RetrievalIntent) bool {
 	if result.MemoryType == memory.TypeTemporaryState && intent != IntentTaskContinuation {
 		return true
 	}
 	if result.State == memory.StateProvisional && contextResultScore(result) < 0.2 {
+		return true
+	}
+	if shouldDropLowRelevanceDesignCandidate(result, intent) {
 		return true
 	}
 	return false
@@ -373,7 +385,43 @@ func dropReasonForCandidate(result memory.SearchResult, intent RetrievalIntent) 
 	if result.State == memory.StateProvisional && contextResultScore(result) < 0.2 {
 		return "provisional_low_score"
 	}
+	if shouldDropLowRelevanceDesignCandidate(result, intent) {
+		return "low_context_relevance"
+	}
 	return "drop_policy"
+}
+
+func shouldDropLowRelevanceDesignCandidate(result memory.SearchResult, intent RetrievalIntent) bool {
+	if !isDesignContextMemory(result.MemoryType) {
+		return false
+	}
+	if result.ScoreBreakdown == nil || !hasDirectRelevanceSignal(*result.ScoreBreakdown) {
+		return false
+	}
+	score := *result.ScoreBreakdown
+	if score.TaskFit >= contextMinTaskFitForDesign || score.Semantic >= contextMinSemanticForDesign {
+		return false
+	}
+	if score.BM25 >= contextStrongBM25ForDesign && score.TaskFit >= contextStrongBM25TaskFitForDesign {
+		return false
+	}
+	if intent == IntentArchitectureReview && score.TaskFit >= contextArchitectureTaskFitFloor {
+		return false
+	}
+	return true
+}
+
+func isDesignContextMemory(memoryType string) bool {
+	switch memoryType {
+	case memory.TypeConstraint, memory.TypeDecision, memory.TypeProjectFact, memory.TypeRequirement, memory.TypeAssumption, memory.TypeOpenIssue:
+		return true
+	default:
+		return false
+	}
+}
+
+func hasDirectRelevanceSignal(score memory.ScoreBreakdown) bool {
+	return score.TaskFit > 0 || score.Semantic > 0 || score.BM25 > 0 || score.ScopeFit > 0
 }
 
 // compressForTokenBudget 按 token 预算压缩内容。

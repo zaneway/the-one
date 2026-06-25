@@ -93,7 +93,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Dream.Enabled || cfg.Dream.Scheduler.Enabled {
 		t.Fatalf("dream defaults = %+v, want disabled by default", cfg.Dream)
 	}
-	if cfg.Dream.Vault.SystemDir != ".theone" || cfg.Dream.Vault.Directories.Projects != "10-projects" ||
+	if cfg.Dream.Vault.SystemDir != ".theone-data" || cfg.Dream.Vault.Directories.Projects != "10-projects" ||
 		cfg.Dream.Vault.Directories.Knowledge != "20-knowledge" || cfg.Dream.Vault.UserNotesDir != "99-user-notes" {
 		t.Fatalf("dream vault defaults = %+v, want configured readonly vault directories", cfg.Dream.Vault)
 	}
@@ -118,6 +118,13 @@ func TestLoadDataDirSyncsLogPath(t *testing.T) {
 	wantLog := filepath.Join(dataDir, "logs", "theone.log")
 	if cfg.Logging.Path != wantLog {
 		t.Fatalf("log path = %q, want %q", cfg.Logging.Path, wantLog)
+	}
+	wantCleanupDir := filepath.Join(dataDir, "logs")
+	if len(cfg.Logging.StartupCleanupDirs) != 1 || cfg.Logging.StartupCleanupDirs[0] != wantCleanupDir {
+		t.Fatalf("startup cleanup dirs = %#v, want [%q]", cfg.Logging.StartupCleanupDirs, wantCleanupDir)
+	}
+	if !cfg.Logging.StartupCleanupEnabled {
+		t.Fatal("startup cleanup enabled = false, want true")
 	}
 }
 

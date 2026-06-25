@@ -195,6 +195,21 @@ func TestRuleBasedTurnCompletedExtractsHighSignalEvidence(t *testing.T) {
 	}
 }
 
+func TestRuleBasedTurnCompletedCompletionSummaryIsProjectFact(t *testing.T) {
+	provider := NewRuleBasedProvider()
+	event := rawEvent(capture.EventTurnCompleted, "【事件】修复这些问题\n【结论/决策】已修复上下文注入门禁，并补充回归测试。")
+	event.ProjectID = "proj_001"
+
+	evidence := extractOne(t, provider, event)
+	candidates := generate(t, provider, event, evidence)
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count = %d, want 1", len(candidates))
+	}
+	if candidates[0].MemoryType != memory.TypeProjectFact {
+		t.Fatalf("candidate type = %s, want project_fact for completion summary", candidates[0].MemoryType)
+	}
+}
+
 func TestRuleBasedFailedToolTemporaryCandidate(t *testing.T) {
 	provider := NewRuleBasedProvider()
 	event := rawEvent(capture.EventToolResultSummary, "")

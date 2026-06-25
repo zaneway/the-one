@@ -83,6 +83,85 @@ func TestBuildContextPackMarksStatesAndLimitsCodeRefs(t *testing.T) {
 	}
 }
 
+func TestBuildContextPackDropsLowRelevancePendingDecision(t *testing.T) {
+	result := contextTestResult("mem-dream", memory.TypeDecision, memory.ScopeProjectLocal, "Dream 导出改成真正增量，读取旧 manifest 判定 write/skip。", 0.62)
+	result.State = memory.StatePendingReview
+	result.ScoreBreakdown = &memory.ScoreBreakdown{
+		BM25:               1.0,
+		TaskFit:            0.14,
+		ScopeFit:           1.0,
+		Retention:          0.4,
+		SourceQuality:      0.7,
+		Recency:            1.0,
+		ContextCostPenalty: 0.1,
+		Final:              0.62,
+	}
+	result.WhyIncluded = []string{"scope_match", "decision_memory", "vector_disabled"}
+
+	pack, usedIDs, report := buildContextPack([]memory.SearchResult{result}, contextBuilderOptions{
+		Intent:      IntentGeneralSearch,
+		TokenBudget: 400,
+	})
+
+	if len(usedIDs) != 0 || len(pack.Memories) != 0 {
+		t.Fatalf("used ids = %+v memories=%+v, want low-relevance pending decision dropped", usedIDs, pack.Memories)
+	}
+	if len(report.Diagnostics.Dropped) != 1 || report.Diagnostics.Dropped[0].Reason != "low_context_relevance" {
+		t.Fatalf("dropped diagnostics = %+v, want low_context_relevance", report.Diagnostics.Dropped)
+	}
+}
+
+func TestBuildContextPackKeepsRelevantPendingDecision(t *testing.T) {
+	result := contextTestResult("mem-retrieval", memory.TypeDecision, memory.ScopeProjectLocal, "检索上下文注入前必须增加相关性门禁，避免低 task_fit 记忆污染 prompt。", 0.58)
+	result.State = memory.StatePendingReview
+	result.ScoreBreakdown = &memory.ScoreBreakdown{
+		BM25:               0.7,
+		TaskFit:            0.36,
+		ScopeFit:           1.0,
+		Retention:          0.4,
+		SourceQuality:      0.7,
+		Recency:            1.0,
+		ContextCostPenalty: 0.1,
+		Final:              0.58,
+	}
+
+	pack, usedIDs, report := buildContextPack([]memory.SearchResult{result}, contextBuilderOptions{
+		Intent:      IntentGeneralSearch,
+		TokenBudget: 400,
+	})
+
+	if len(usedIDs) != 1 || usedIDs[0] != "mem-retrieval" || len(pack.Memories) != 1 {
+		t.Fatalf("used ids = %+v memories=%+v report=%+v, want relevant pending decision injected", usedIDs, pack.Memories, report.Diagnostics)
+	}
+}
+
+func TestBuildContextPackDropsLowRelevanceStableDecision(t *testing.T) {
+	result := contextTestResult("mem-stable-noise", memory.TypeDecision, memory.ScopeProjectLocal, "Dream 导出 manifest 清理策略。", 0.52)
+	result.State = memory.StateStable
+	result.ScoreBreakdown = &memory.ScoreBreakdown{
+		BM25:               0.20,
+		TaskFit:            0.04,
+		ScopeFit:           1.0,
+		Retention:          0.7,
+		SourceQuality:      0.8,
+		Recency:            1.0,
+		ContextCostPenalty: 0.1,
+		Final:              0.52,
+	}
+
+	pack, usedIDs, report := buildContextPack([]memory.SearchResult{result}, contextBuilderOptions{
+		Intent:      IntentGeneralSearch,
+		TokenBudget: 400,
+	})
+
+	if len(usedIDs) != 0 || len(pack.Memories) != 0 {
+		t.Fatalf("used ids = %+v memories=%+v, want low-relevance stable decision dropped", usedIDs, pack.Memories)
+	}
+	if len(report.Diagnostics.Dropped) != 1 || report.Diagnostics.Dropped[0].Reason != "low_context_relevance" {
+		t.Fatalf("dropped diagnostics = %+v, want low_context_relevance", report.Diagnostics.Dropped)
+	}
+}
+
 func TestEstimateContextTokensUsesCeilRuneHalf(t *testing.T) {
 	if got := estimateContextTokens("abcde"); got != 3 {
 		t.Fatalf("estimateContextTokens(abcde) = %d, want 3", got)

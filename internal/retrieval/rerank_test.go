@@ -7,7 +7,7 @@ import (
 	"github.com/zaneway/theone/internal/memory"
 )
 
-func TestScoreCandidateVectorDisabledRenormalizesPositiveWeights(t *testing.T) {
+func TestScoreCandidateVectorDisabledDoesNotRenormalizePositiveWeights(t *testing.T) {
 	now := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
 	candidate := Candidate{
 		Memory: memory.MemoryItem{
@@ -38,8 +38,8 @@ func TestScoreCandidateVectorDisabledRenormalizesPositiveWeights(t *testing.T) {
 	if score.Semantic != 0 {
 		t.Fatalf("semantic score = %v, want 0 when vector disabled", score.Semantic)
 	}
-	if score.Final <= 0.6 || score.Final > 1 {
-		t.Fatalf("final score = %v, want high normalized score in (0.6, 1]", score.Final)
+	if score.Final >= 0.6 || score.Final <= 0 {
+		t.Fatalf("final score = %v, want conservative score in (0, 0.6) when vector is disabled", score.Final)
 	}
 	if candidate.ScoreBreakdown.Final != score.Final || candidate.FinalScore != score.Final {
 		t.Fatalf("candidate score not persisted: candidate=%+v score=%+v", candidate.ScoreBreakdown, score)
@@ -164,6 +164,79 @@ func TestScoreCandidateAppliesConflictStalenessAndContextCostPenalty(t *testing.
 	}
 	if score.Final >= 0.8 {
 		t.Fatalf("final score = %v, want penalties to reduce final score", score.Final)
+	}
+}
+
+func TestTaskFitUsesRetrievalProfileAndIgnoresPathNoise(t *testing.T) {
+	now := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+	relevant := Candidate{
+		Memory: memory.MemoryItem{
+			ID:                "mem_retrieval_gate",
+			Scope:             memory.ScopeProjectLocal,
+			MemoryType:        memory.TypeDecision,
+			Title:             "context injection gate",
+			Content:           "低相关记忆不能进入 prompt。",
+			KeywordsJSON:      `["上下文注入","召回评分","污染"]`,
+			RetrievalCuesJSON: `["如何防止 FTS 宽召回污染上下文","上下文 注入 门禁 task_fit"]`,
+			State:             memory.StatePendingReview,
+			Tier:              memory.TierLongTerm,
+			UpdatedAt:         now,
+		},
+	}
+	noise := Candidate{
+		Memory: memory.MemoryItem{
+			ID:         "mem_dream_export",
+			Scope:      memory.ScopeProjectLocal,
+			MemoryType: memory.TypeDecision,
+			Title:      "Dream 导出修复",
+			Content:    "Dream 导出使用 .theone/dream-manifest.json 做增量 write/skip。",
+			State:      memory.StatePendingReview,
+			Tier:       memory.TierLongTerm,
+			UpdatedAt:  now,
+		},
+	}
+	opts := RerankOptions{
+		Query:       "/Users/zaneway/.theone-data theone 记忆 上下文 注入 门禁 task_fit",
+		Scopes:      []string{memory.ScopeProjectLocal},
+		Intent:      IntentGeneralSearch,
+		TokenBudget: 1000,
+		Now:         now,
+	}
+
+	relevantScore := taskFitScore(relevant, opts)
+	noiseScore := taskFitScore(noise, opts)
+
+	if relevantScore < 0.35 {
+		t.Fatalf("relevant task fit = %v, want retrieval profile to produce a usable context relevance score", relevantScore)
+	}
+	if noiseScore >= 0.20 {
+		t.Fatalf("noise task fit = %v, want path/project tokens downweighted", noiseScore)
+	}
+	if relevantScore <= noiseScore {
+		t.Fatalf("relevant task fit = %v noise = %v, want retrieval profile to outrank path-noise memory", relevantScore, noiseScore)
+	}
+}
+
+func TestTaskFitDoesNotPromotePathOnlyMatch(t *testing.T) {
+	candidate := Candidate{
+		Memory: memory.MemoryItem{
+			ID:         "mem_path_noise",
+			Scope:      memory.ScopeProjectLocal,
+			MemoryType: memory.TypeDecision,
+			Title:      "theone data",
+			Content:    "项目目录命名记录。",
+			State:      memory.StatePendingReview,
+			Tier:       memory.TierLongTerm,
+		},
+	}
+
+	score := taskFitScore(candidate, RerankOptions{
+		Query:  "/Users/zaneway/.theone-data",
+		Intent: IntentGeneralSearch,
+	})
+
+	if score != 0 {
+		t.Fatalf("path-only task fit = %v, want 0", score)
 	}
 }
 

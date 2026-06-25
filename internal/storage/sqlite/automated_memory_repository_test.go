@@ -178,6 +178,61 @@ func TestAutomatedMemoryRepositoryWritesMemoryKeyProjection(t *testing.T) {
 	}
 }
 
+func TestSearchResultCarriesRetrievalProfile(t *testing.T) {
+	ctx := context.Background()
+	store := newCaptureTestStore(t)
+	defer store.Close()
+	requireFTS5(t, store)
+
+	evidence := memory.Evidence{
+		ID:                   "ev_profile",
+		RawEventID:           "evt_profile",
+		SourceType:           "agent_summary",
+		InterpretedStatement: "上下文注入应使用检索画像。",
+		Confidence:           0.8,
+	}
+	if err := store.WriteEvidence(ctx, evidence); err != nil {
+		t.Fatalf("WriteEvidence() error = %v", err)
+	}
+	item := memory.MemoryItem{
+		ID:                "mem_profile",
+		Scope:             memory.ScopeProjectLocal,
+		WorkspaceID:       "ws",
+		ProjectID:         "project_profile",
+		MemoryType:        memory.TypeDecision,
+		Content:           "上下文注入前应比较 query profile 与 memory retrieval profile。",
+		SearchText:        "上下文 注入 retrieval profile",
+		KeywordsJSON:      jsonArrayText("上下文注入", "retrieval profile"),
+		RetrievalCuesJSON: jsonArrayText("如何防止 FTS 宽召回污染上下文", "query profile 对比 memory profile"),
+		State:             memory.StatePendingReview,
+		Tier:              memory.TierLongTerm,
+	}
+	if _, err := store.WriteAutomatedMemory(ctx, automation.AutomatedMemoryWrite{
+		Item:        item,
+		EvidenceIDs: []string{evidence.ID},
+	}); err != nil {
+		t.Fatalf("WriteAutomatedMemory() error = %v", err)
+	}
+
+	results, _, err := store.Search(ctx, memory.SearchRequest{
+		Query:       "上下文 注入",
+		WorkspaceID: "ws",
+		ProjectID:   "project_profile",
+		Scope:       []string{memory.ScopeProjectLocal},
+		MemoryTypes: []string{memory.TypeDecision},
+		Limit:       5,
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(results) != 1 || results[0].MemoryID != item.ID {
+		t.Fatalf("results = %+v, want mem_profile", results)
+	}
+	if results[0].KeywordsJSON == "" || results[0].RetrievalCuesJSON == "" {
+		t.Fatalf("search result profile = keywords:%q cues:%q, want retrieval profile carried to rerank", results[0].KeywordsJSON, results[0].RetrievalCuesJSON)
+	}
+}
+
 func TestFindRelatedMemoryUsesTokenOverlapInsteadOfFullSentenceLike(t *testing.T) {
 	ctx := context.Background()
 	store := newCaptureTestStore(t)

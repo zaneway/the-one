@@ -123,8 +123,8 @@ func normalizeFTSScores(candidates []Candidate) {
 // finalScore 计算最终排序分数。
 // 公式：positive_sum - conflict_penalty - staleness_penalty - context_cost_penalty
 //
-// 正向因子（权重归一化后求和）：
-//   - Semantic (0.28): 向量相似度，vector_enabled=false 时权重为 0
+// 正向因子：
+//   - Semantic (0.28): 向量相似度，vector_enabled=false 时分数为 0，权重不重分配
 //   - BM25 (0.22): FTS 全文检索分数（已归一化）
 //   - TaskFit (0.16): 查询/任务与记忆内容的 token 重叠度 + intent boost
 //   - ScopeFit (0.12): 作用域匹配度（exact match=1.0, partial=0.6~0.8）
@@ -138,15 +138,15 @@ func normalizeFTSScores(candidates []Candidate) {
 //   - StalenessPenalty (0.16): 过时惩罚（deleted=1.0, archived=0.8）
 //   - ContextCostPenalty (0.10): 上下文成本惩罚（token 预算占用比例）
 func finalScore(score memory.ScoreBreakdown, vectorEnabled bool) float64 {
-	semanticWeight := 0.28
+	semantic := score.Semantic
 	if !vectorEnabled {
-		semanticWeight = 0
+		semantic = 0
 	}
 	positiveWeights := []struct {
 		value  float64
 		weight float64
 	}{
-		{score.Semantic, semanticWeight},
+		{semantic, 0.28},
 		{score.BM25, 0.22},
 		{score.TaskFit, 0.16},
 		{score.ScopeFit, 0.12},
@@ -155,15 +155,10 @@ func finalScore(score memory.ScoreBreakdown, vectorEnabled bool) float64 {
 		{score.SourceQuality, 0.04},
 		{score.Recency, 0.02},
 	}
-	totalPositiveWeight := 0.0
-	for _, item := range positiveWeights {
-		totalPositiveWeight += item.weight
-	}
-	// 权重归一化：当 semantic 被禁用时，其余因子权重按比例放大
 	positive := 0.0
 	for _, item := range positiveWeights {
 		if item.weight > 0 {
-			positive += clamp01(item.value) * (item.weight / totalPositiveWeight)
+			positive += clamp01(item.value) * item.weight
 		}
 	}
 	raw := positive -
@@ -190,19 +185,80 @@ func taskFitScore(candidate Candidate, opts RerankOptions) float64 {
 	if candidate.TaskFit > 0 {
 		return clamp01(candidate.TaskFit)
 	}
-	textTokens := tokenSet(opts.Query + " " + opts.Task)
-	if len(textTokens) == 0 {
+	profile := buildQueryProfile(opts.Query, opts.Task)
+	if len(profile.AllTokens) == 0 {
 		return 0.3
+	}
+	if len(profile.CoreTokens) == 0 {
+		return 0
 	}
 	memoryTokens := tokenSet(candidate.Memory.Title + " " + candidate.Memory.Content + " " + candidate.Memory.KeywordsJSON + " " + candidate.Memory.RetrievalCuesJSON)
 	overlap := 0
-	for token := range textTokens {
+	for token := range profile.CoreTokens {
 		if memoryTokens[token] {
 			overlap++
 		}
 	}
-	base := float64(overlap) / float64(len(textTokens))
+	base := float64(overlap) / float64(len(profile.CoreTokens))
 	return clamp01(base + intentBoost(candidate.Memory.MemoryType, opts.Intent, len(candidate.CodeRefs) > 0))
+}
+
+type queryProfile struct {
+	AllTokens  map[string]bool
+	CoreTokens map[string]bool
+}
+
+func buildQueryProfile(query, task string) queryProfile {
+	raw := strings.TrimSpace(query + " " + task)
+	all := tokenSet(raw)
+	pathTokens := pathLikeTokenSet(raw)
+	core := make(map[string]bool, len(all))
+	for token := range all {
+		if pathTokens[token] || isLowSignalQueryToken(token) {
+			continue
+		}
+		core[token] = true
+	}
+	return queryProfile{AllTokens: all, CoreTokens: core}
+}
+
+func pathLikeTokenSet(raw string) map[string]bool {
+	out := map[string]bool{}
+	for _, segment := range strings.Fields(raw) {
+		if !strings.ContainsAny(segment, `/\`) {
+			continue
+		}
+		for token := range tokenSet(segment) {
+			if isASCIIAlphaNumericToken(token) {
+				out[token] = true
+			}
+		}
+	}
+	return out
+}
+
+func isASCIIAlphaNumericToken(token string) bool {
+	if token == "" {
+		return false
+	}
+	for _, r := range token {
+		if r > unicode.MaxASCII {
+			return false
+		}
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+func isLowSignalQueryToken(token string) bool {
+	switch strings.ToLower(token) {
+	case "users", "user", "home", "private", "tmp", "var", "volumes", "synologydrive", "code", "space", "golandprojects", "data", "theone", "the", "one":
+		return true
+	default:
+		return false
+	}
 }
 
 // intentBoost 根据检索意图和记忆类型的匹配度返回加成分数。

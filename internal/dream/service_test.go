@@ -31,7 +31,7 @@ func TestServiceDryRunPlansConfiguredProjectPathWithoutWritingFiles(t *testing.T
 		Enabled: true,
 		Vault: VaultConfig{
 			Root:      root,
-			SystemDir: ".theone",
+			SystemDir: ".theone-data",
 			Directories: DirectoryConfig{
 				Projects:  "engineering",
 				Knowledge: "domains",
@@ -154,7 +154,7 @@ func TestServiceWritesReadonlyMarkdownWithRelationsAndManifest(t *testing.T) {
 			t.Fatalf("note missing %q:\n%s", want, text)
 		}
 	}
-	manifestPath := filepath.Join(root, ".theone", "dream-manifest.json")
+	manifestPath := filepath.Join(root, ".theone-data", "dream-manifest.json")
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
@@ -317,7 +317,7 @@ func TestServiceRemovesStaleManagedFilesButKeepsUserNotes(t *testing.T) {
 	if err := os.WriteFile(userNotePath, []byte("manual note"), 0o644); err != nil {
 		t.Fatalf("write user note: %v", err)
 	}
-	manifestPath := filepath.Join(root, ".theone", "dream-manifest.json")
+	manifestPath := filepath.Join(root, ".theone-data", "dream-manifest.json")
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0o755); err != nil {
 		t.Fatalf("mkdir manifest: %v", err)
 	}
