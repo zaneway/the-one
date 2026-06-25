@@ -157,6 +157,33 @@ func memoryReviewSpec(handler mcp.Handler) mcp.ToolSpec {
 	}
 }
 
+// dreamExportSpec 构建 "memory.dream.export" 工具规格。
+// 该工具用于把 SQLite 中的持久化记忆投影为 Obsidian 可打开的只读 Markdown Vault。
+// 设计思路：
+//   - 导出是离线 projection，不改变 memory_item、relation、evidence 等核心事实表；
+//   - dry_run 支持先查看计划，便于用户确认目录、过滤条件和写入规模；
+//   - scope 过滤与 memory.search/context 保持一致，避免跨工作区或项目误导出。
+func dreamExportSpec(handler mcp.Handler) mcp.ToolSpec {
+	return mcp.ToolSpec{
+		Name:        "memory.dream.export",
+		Title:       "Export dream vault",
+		Description: "Export persistent memories and relations into a configured read-only Obsidian Markdown vault. Supports dry-run, workspace, project, repo, and limit filters.",
+		InputSchema: mcp.ObjectSchema([]string{}, map[string]any{
+			"dry_run":      mcp.BooleanProp("Plan the export without writing Markdown files."),
+			"workspace_id": mcp.StringProp("Workspace id filter."),
+			"project_id":   mcp.StringProp("Project id filter."),
+			"repo_id":      mcp.StringProp("Repository id filter."),
+			"limit":        mcp.IntegerProp("Maximum memory count to export."),
+		}),
+		OutputSchema:    mcp.RawObjectSchema(),
+		ReadOnlyHint:    false,
+		DestructiveHint: mcp.BoolPtr(false),
+		IdempotentHint:  true,
+		OpenWorldHint:   mcp.BoolPtr(false),
+		Handler:         handler,
+	}
+}
+
 // captureObserveSpec 构建 "memory.observe" 工具规格。
 // 该工具用于捕获 Agent 的事件到原始事件存储（raw_event），是事件采集管道的入口。
 // 设计思路是：

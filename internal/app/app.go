@@ -15,6 +15,7 @@ import (
 	"github.com/zaneway/theone/internal/codeindex"
 	"github.com/zaneway/theone/internal/config"
 	"github.com/zaneway/theone/internal/diagnostics"
+	"github.com/zaneway/theone/internal/dream"
 	"github.com/zaneway/theone/internal/logging"
 	"github.com/zaneway/theone/internal/mcp"
 	"github.com/zaneway/theone/internal/mcp/tools"
@@ -38,6 +39,7 @@ type App struct {
 	registry          *mcp.Registry
 	worker            *automation.Worker
 	automationService *automation.Service
+	dreamService      *dream.Service
 }
 
 // New 初始化 theone 运行时。
@@ -53,7 +55,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	store, err := sqlite.Open(ctx, cfg.Storage, logger)
 	if err != nil {
 		logger.Error("sqlite open failed", "db_path", cfg.Storage.Path, "error", err)
-		_ = logCloser.Close()
+		_ = closeLogCloser(logCloser)
 		return nil, err
 	}
 	// Step 3: 创建 MCP 工具注册中心，所有工具通过 registry.Register 注册
@@ -63,7 +65,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	if err != nil {
 		logger.Error("processor provider init failed", "provider", cfg.Processor.Provider, "error", err)
 		_ = store.Close()
-		_ = logCloser.Close()
+		_ = closeLogCloser(logCloser)
 		return nil, err
 	}
 	diagnosticOptions := make([]diagnostics.ServiceOption, 0, 1)
@@ -82,7 +84,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	if err != nil {
 		logger.Error("query embedding provider init failed", "provider", cfg.Embedding.Provider, "error", err)
 		_ = store.Close()
-		_ = logCloser.Close()
+		_ = closeLogCloser(logCloser)
 		return nil, err
 	}
 	retrievalOptions := []retrieval.MemoryOrchestratorOption{
@@ -117,6 +119,15 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	)
 	tools.RegisterMemoryTools(registry, memoryService, logger)
 	tools.RegisterAutomationTools(registry, automationService, logger)
+	dreamCurator, err := newDreamCurator(cfg, logger)
+	if err != nil {
+		logger.Error("dream curator init failed", "error", err)
+		_ = store.Close()
+		_ = closeLogCloser(logCloser)
+		return nil, err
+	}
+	dreamService := dream.NewService(dreamRuntimeConfig(cfg.Dream), store, dreamCurator)
+	tools.RegisterDreamTools(registry, dreamService, logger)
 	// Step 8: 注册 MVP 验收模型工具（run.start / task.record）
 	mvpService := mvp.NewService(store)
 	tools.RegisterMVPTools(registry, mvpService, logger)
@@ -146,6 +157,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		registry:          registry,
 		worker:            worker,
 		automationService: automationService,
+		dreamService:      dreamService,
 	}, nil
 }
 
@@ -155,6 +167,13 @@ type queryEmbeddingTextAdapter struct {
 
 func (a queryEmbeddingTextAdapter) EmbedText(ctx context.Context, text string) ([]float32, error) {
 	return a.provider.EmbedQuery(ctx, text)
+}
+
+func closeLogCloser(closer io.Closer) error {
+	if closer == nil {
+		return nil
+	}
+	return closer.Close()
 }
 
 func newQueryEmbeddingProvider(cfg config.Config) (retrieval.QueryEmbeddingProvider, error) {
@@ -232,6 +251,7 @@ func (a *App) Serve(ctx context.Context) error {
 		}()
 	}
 	startRetentionMaintenanceScheduler(ctx, a.cfg.Retention, a.automationService, a.logger)
+	startDreamExportScheduler(ctx, a.cfg.Dream, a.dreamService, a.logger)
 	// 启动标准 MCP stdio 服务器：由官方 SDK 处理 initialize/tools/list/tools/call。
 	server := mcp.NewSDKServer(a.registry, a.version, a.logger)
 	return server.RunStdio(ctx)

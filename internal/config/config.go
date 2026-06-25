@@ -74,6 +74,10 @@ type Config struct {
 	// Automation 自动处理配置
 	// 本地异步 worker 的轮询、批量和重试策略
 	Automation AutomationConfig `yaml:"automation" json:"automation"`
+
+	// Dream Obsidian 只读增量导出配置
+	// 默认关闭；启用后将 SQLite 记忆离线投影为可配置目录结构的 Markdown Vault。
+	Dream DreamConfig `yaml:"dream" json:"dream"`
 }
 
 // StorageConfig 存储配置结构体
@@ -429,6 +433,54 @@ type AutomationConfig struct {
 	RunningTimeoutMS int `yaml:"running_timeout_ms" json:"running_timeout_ms"`
 }
 
+// DreamConfig 描述 Obsidian Dream 只读导出能力。
+// 设计约束：Dream 是离线投影，不参与 memory.search/context 在线路径。
+type DreamConfig struct {
+	Enabled   bool                 `yaml:"enabled" json:"enabled"`
+	Vault     DreamVaultConfig     `yaml:"vault" json:"vault"`
+	Scheduler DreamSchedulerConfig `yaml:"scheduler" json:"scheduler"`
+	Curation  DreamCurationConfig  `yaml:"curation" json:"curation"`
+}
+
+// DreamVaultConfig 描述 Vault 根目录和可配置目录布局。
+type DreamVaultConfig struct {
+	Root           string               `yaml:"root" json:"root"`
+	SystemDir      string               `yaml:"system_dir" json:"system_dir"`
+	Directories    DreamDirectoryConfig `yaml:"directories" json:"directories"`
+	MemoryTypeDirs map[string]string    `yaml:"memory_type_dirs" json:"memory_type_dirs"`
+	TopicDirs      map[string]string    `yaml:"topic_dirs" json:"topic_dirs"`
+	UserNotesDir   string               `yaml:"user_notes_dir" json:"user_notes_dir"`
+}
+
+type DreamDirectoryConfig struct {
+	Inbox     string `yaml:"inbox" json:"inbox"`
+	Projects  string `yaml:"projects" json:"projects"`
+	Knowledge string `yaml:"knowledge" json:"knowledge"`
+	Thinking  string `yaml:"thinking" json:"thinking"`
+	Skills    string `yaml:"skills" json:"skills"`
+	MOC       string `yaml:"moc" json:"moc"`
+	Archive   string `yaml:"archive" json:"archive"`
+}
+
+type DreamSchedulerConfig struct {
+	Enabled               bool    `yaml:"enabled" json:"enabled"`
+	IntervalMS            int     `yaml:"interval_ms" json:"interval_ms"`
+	InitialDelayMS        int     `yaml:"initial_delay_ms" json:"initial_delay_ms"`
+	JitterRatio           float64 `yaml:"jitter_ratio" json:"jitter_ratio"`
+	MaxRunDurationMS      int     `yaml:"max_run_duration_ms" json:"max_run_duration_ms"`
+	SkipIfPreviousRunning bool    `yaml:"skip_if_previous_running" json:"skip_if_previous_running"`
+}
+
+type DreamCurationConfig struct {
+	Enabled                bool `yaml:"enabled" json:"enabled"`
+	MaxInputMemories       int  `yaml:"max_input_memories" json:"max_input_memories"`
+	MaxInputChars          int  `yaml:"max_input_chars" json:"max_input_chars"`
+	TimeoutMS              int  `yaml:"timeout_ms" json:"timeout_ms"`
+	MinGroupSize           int  `yaml:"min_group_size" json:"min_group_size"`
+	RequireSourceMemoryIDs bool `yaml:"require_source_memory_ids" json:"require_source_memory_ids"`
+	FallbackRules          bool `yaml:"fallback_to_rule_export" json:"fallback_to_rule_export"`
+}
+
 // Overrides 命令行覆盖项结构体
 // 表示命令行覆盖项，空值表示不覆盖配置文件和默认值
 type Overrides struct {
@@ -581,6 +633,58 @@ func Default() Config {
 			RetryBaseDelayMS: 1000,
 			RunningTimeoutMS: 300000,
 		},
+		Dream: DreamConfig{
+			Enabled: false,
+			Vault: DreamVaultConfig{
+				Root:         "",
+				SystemDir:    ".theone",
+				UserNotesDir: "99-user-notes",
+				Directories: DreamDirectoryConfig{
+					Inbox:     "00-inbox",
+					Projects:  "10-projects",
+					Knowledge: "20-knowledge",
+					Thinking:  "30-thinking",
+					Skills:    "40-skills",
+					MOC:       "80-moc",
+					Archive:   "90-archive",
+				},
+				MemoryTypeDirs: map[string]string{
+					"decision":          "decisions",
+					"constraint":        "constraints",
+					"failure":           "failures",
+					"review_checkpoint": "reviews",
+					"project_fact":      "facts",
+					"procedure":         "procedures",
+					"preference":        "preferences",
+					"open_issue":        "open-issues",
+				},
+				TopicDirs: map[string]string{
+					"memory-system":      "memory-systems",
+					"distributed-system": "distributed-systems",
+					"pki":                "pki",
+					"security":           "security",
+					"database":           "databases",
+					"ai-agent":           "ai-agents",
+				},
+			},
+			Scheduler: DreamSchedulerConfig{
+				Enabled:               false,
+				IntervalMS:            60 * 60 * 1000,
+				InitialDelayMS:        30 * 1000,
+				JitterRatio:           0.1,
+				MaxRunDurationMS:      5 * 60 * 1000,
+				SkipIfPreviousRunning: true,
+			},
+			Curation: DreamCurationConfig{
+				Enabled:                false,
+				MaxInputMemories:       50,
+				MaxInputChars:          30000,
+				TimeoutMS:              60000,
+				MinGroupSize:           2,
+				RequireSourceMemoryIDs: true,
+				FallbackRules:          true,
+			},
+		},
 	}
 }
 
@@ -715,6 +819,9 @@ func validate(cfg Config) error {
 		cfg.Automation.RetryBaseDelayMS <= 0 || cfg.Automation.RunningTimeoutMS <= 0 {
 		return errors.New("CONFIG_INVALID: automation worker limits must be positive")
 	}
+	if err := validateDream(cfg.Dream); err != nil {
+		return err
+	}
 	if cfg.Server.MCPAddr == "" {
 		return errors.New("CONFIG_INVALID: server.mcp_addr is required")
 	}
@@ -727,6 +834,68 @@ func validate(cfg Config) error {
 		return errors.New("CONFIG_INVALID: logging.path is required")
 	}
 	return nil
+}
+
+func validateDream(cfg DreamConfig) error {
+	if cfg.Enabled && strings.TrimSpace(cfg.Vault.Root) == "" {
+		return errors.New("CONFIG_INVALID: dream.vault.root is required when dream is enabled")
+	}
+	if strings.TrimSpace(cfg.Vault.SystemDir) == "" || strings.TrimSpace(cfg.Vault.UserNotesDir) == "" {
+		return errors.New("CONFIG_INVALID: dream vault directories are required")
+	}
+	if !isVaultRelativePath(cfg.Vault.SystemDir) {
+		return errors.New("CONFIG_INVALID: dream.vault.system_dir must be vault-relative")
+	}
+	if !isVaultRelativePath(cfg.Vault.UserNotesDir) {
+		return errors.New("CONFIG_INVALID: dream.vault.user_notes_dir must be vault-relative")
+	}
+	for name, value := range map[string]string{
+		"inbox":     cfg.Vault.Directories.Inbox,
+		"projects":  cfg.Vault.Directories.Projects,
+		"knowledge": cfg.Vault.Directories.Knowledge,
+		"thinking":  cfg.Vault.Directories.Thinking,
+		"skills":    cfg.Vault.Directories.Skills,
+		"moc":       cfg.Vault.Directories.MOC,
+		"archive":   cfg.Vault.Directories.Archive,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("CONFIG_INVALID: dream.vault.directories.%s is required", name)
+		}
+		if !isVaultRelativePath(value) {
+			return fmt.Errorf("CONFIG_INVALID: dream.vault.directories.%s must be vault-relative", name)
+		}
+	}
+	for name, value := range cfg.Vault.MemoryTypeDirs {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("CONFIG_INVALID: dream.vault.memory_type_dirs.%s is required", name)
+		}
+		if !isVaultRelativePath(value) {
+			return fmt.Errorf("CONFIG_INVALID: dream.vault.memory_type_dirs.%s must be vault-relative", name)
+		}
+	}
+	for name, value := range cfg.Vault.TopicDirs {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("CONFIG_INVALID: dream.vault.topic_dirs.%s is required", name)
+		}
+		if !isVaultRelativePath(value) {
+			return fmt.Errorf("CONFIG_INVALID: dream.vault.topic_dirs.%s must be vault-relative", name)
+		}
+	}
+	if cfg.Scheduler.IntervalMS <= 0 || cfg.Scheduler.InitialDelayMS < 0 || cfg.Scheduler.MaxRunDurationMS <= 0 {
+		return errors.New("CONFIG_INVALID: dream scheduler limits must be positive")
+	}
+	if cfg.Scheduler.JitterRatio < 0 || cfg.Scheduler.JitterRatio > 1 {
+		return errors.New("CONFIG_INVALID: dream.scheduler.jitter_ratio must be between 0 and 1")
+	}
+	if cfg.Curation.MaxInputMemories <= 0 || cfg.Curation.MaxInputChars <= 0 || cfg.Curation.TimeoutMS <= 0 || cfg.Curation.MinGroupSize <= 0 {
+		return errors.New("CONFIG_INVALID: dream curation limits must be positive")
+	}
+	return nil
+}
+
+func isVaultRelativePath(value string) bool {
+	cleaned := filepath.Clean(strings.TrimSpace(value))
+	return cleaned != "" && cleaned != "." && !filepath.IsAbs(cleaned) && cleaned != ".." && !strings.HasPrefix(cleaned, ".."+string(filepath.Separator))
 }
 
 // firstNonEmpty 返回第一个非空字符串；全部为空时返回空串。

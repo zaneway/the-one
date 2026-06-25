@@ -90,6 +90,19 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.AccessLog.RetentionDaysRetrieved != 30 || cfg.AccessLog.RetentionDaysInjected != 180 || !cfg.AccessLog.AggregateBeforeCleanup {
 		t.Fatalf("access log defaults = %+v, want retrieved=30 injected=180 aggregate=true", cfg.AccessLog)
 	}
+	if cfg.Dream.Enabled || cfg.Dream.Scheduler.Enabled {
+		t.Fatalf("dream defaults = %+v, want disabled by default", cfg.Dream)
+	}
+	if cfg.Dream.Vault.SystemDir != ".theone" || cfg.Dream.Vault.Directories.Projects != "10-projects" ||
+		cfg.Dream.Vault.Directories.Knowledge != "20-knowledge" || cfg.Dream.Vault.UserNotesDir != "99-user-notes" {
+		t.Fatalf("dream vault defaults = %+v, want configured readonly vault directories", cfg.Dream.Vault)
+	}
+	if cfg.Dream.Scheduler.IntervalMS != 3600000 || cfg.Dream.Scheduler.MaxRunDurationMS != 300000 || !cfg.Dream.Scheduler.SkipIfPreviousRunning {
+		t.Fatalf("dream scheduler defaults = %+v, want bounded hourly scheduler config", cfg.Dream.Scheduler)
+	}
+	if cfg.Dream.Curation.Enabled || cfg.Dream.Curation.MinGroupSize != 2 || !cfg.Dream.Curation.FallbackRules {
+		t.Fatalf("dream curation defaults = %+v, want disabled curator with rule fallback", cfg.Dream.Curation)
+	}
 }
 
 func TestLoadDataDirSyncsLogPath(t *testing.T) {
@@ -243,6 +256,35 @@ func TestLoadOpenAIAPIKeyFromStandardEnv(t *testing.T) {
 	}
 }
 
+func TestLoadDreamConfigFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "theone.yaml")
+	vaultRoot := filepath.Join(t.TempDir(), "vault")
+	data := []byte("dream:\n  enabled: true\n  vault:\n    root: \"" + vaultRoot + "\"\n    directories:\n      projects: engineering\n      knowledge: domains\n    memory_type_dirs:\n      decision: arch-decisions\n  scheduler:\n    enabled: true\n    interval_ms: 120000\n  curation:\n    enabled: true\n    min_group_size: 3\n")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(Overrides{ConfigPath: path})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Dream.Enabled || cfg.Dream.Vault.Root != vaultRoot {
+		t.Fatalf("dream config = %+v, want enabled vault root", cfg.Dream)
+	}
+	if cfg.Dream.Vault.Directories.Projects != "engineering" || cfg.Dream.Vault.Directories.Knowledge != "domains" {
+		t.Fatalf("dream directories = %+v, want YAML overrides", cfg.Dream.Vault.Directories)
+	}
+	if cfg.Dream.Vault.MemoryTypeDirs["decision"] != "arch-decisions" {
+		t.Fatalf("dream memory_type_dirs = %+v, want decision override", cfg.Dream.Vault.MemoryTypeDirs)
+	}
+	if !cfg.Dream.Scheduler.Enabled || cfg.Dream.Scheduler.IntervalMS != 120000 {
+		t.Fatalf("dream scheduler = %+v, want enabled interval override", cfg.Dream.Scheduler)
+	}
+	if !cfg.Dream.Curation.Enabled || cfg.Dream.Curation.MinGroupSize != 3 {
+		t.Fatalf("dream curation = %+v, want enabled min group override", cfg.Dream.Curation)
+	}
+}
+
 func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 	_, err := Load(Overrides{LogLevel: "verbose"})
 	if err == nil {
@@ -337,5 +379,35 @@ func TestValidateRejectsInvalidDocIndexConfig(t *testing.T) {
 	cfg.DocIndex.MaxSections = 0
 	if err := validate(cfg); err == nil {
 		t.Fatal("validate() error = nil, want invalid docindex config")
+	}
+}
+
+func TestValidateRejectsInvalidDreamSchedulerConfig(t *testing.T) {
+	cfg := Default()
+	cfg.Dream.Enabled = true
+	cfg.Dream.Vault.Root = filepath.Join(t.TempDir(), "vault")
+	cfg.Dream.Scheduler.IntervalMS = 0
+	if err := validate(cfg); err == nil {
+		t.Fatal("validate() error = nil, want invalid dream scheduler config")
+	}
+}
+
+func TestValidateRejectsUnsafeDreamVaultDirectories(t *testing.T) {
+	cfg := Default()
+	cfg.Dream.Enabled = true
+	cfg.Dream.Vault.Root = filepath.Join(t.TempDir(), "vault")
+	cfg.Dream.Vault.SystemDir = "../system"
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "dream.vault.system_dir must be vault-relative") {
+		t.Fatalf("validate() error = %v, want unsafe system dir error", err)
+	}
+
+	cfg = Default()
+	cfg.Dream.Enabled = true
+	cfg.Dream.Vault.Root = filepath.Join(t.TempDir(), "vault")
+	cfg.Dream.Vault.MemoryTypeDirs["decision"] = "../decisions"
+	err = validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "dream.vault.memory_type_dirs.decision must be vault-relative") {
+		t.Fatalf("validate() error = %v, want unsafe memory type dir error", err)
 	}
 }

@@ -30,8 +30,8 @@ func TestSDKServerListsAllRegisteredTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools() error = %v", err)
 	}
-	if len(list.Tools) != 28 {
-		t.Fatalf("tool count = %d, want 28", len(list.Tools))
+	if len(list.Tools) != 29 {
+		t.Fatalf("tool count = %d, want 29", len(list.Tools))
 	}
 	seen := make(map[string]*mcpsdk.Tool, len(list.Tools))
 	for _, tool := range list.Tools {
@@ -212,6 +212,7 @@ func expectedMCPTools() []string {
 		"memory.automation.status",
 		"memory.jobs.reconcile",
 		"memory.retention.run",
+		"memory.dream.export",
 		"memory.mvp.run.start",
 		"memory.mvp.task.record",
 		"memory.mvp.capability.record",
