@@ -38,6 +38,13 @@ logging:
   # 环境变量: THEONE_LOG_PATH
   #   path: "~/.theone/logs/theone.log"
 
+  # serve 启动时清理旧日志文件（仅删除 .log 后缀文件，含子目录）
+  # 环境变量: THEONE_LOG_STARTUP_CLEANUP=0|false 可关闭
+  startup_cleanup_enabled: true
+  # 省略时默认清理 <data-dir>/logs
+  # startup_cleanup_dirs:
+  #   - ".theone-data/logs"
+
 # ── 记忆配置 ──────────────────────────────────────────────
 #  默认身份和工作区，内容边界限制
 memory:
@@ -60,7 +67,7 @@ memory:
   max_salient_span_count: 10
 
 # ── 接入层（ingest / ExpandMode）──────────────────────────
-# the-one dogfood 默认 ；回滚设 legacy。环境变量 THEONE_EXPAND_MODE 优先。
+# theone dogfood 默认 ；回滚设 legacy。环境变量 THEONE_EXPAND_MODE 优先。
 adapter:
   expand_mode: v2
   atomic_strip_turn_fields: false
@@ -117,6 +124,42 @@ retrieval:
 
   # 在线检索超时(毫秒)，外部模型调用不计入此预算
   online_timeout_ms: 100
+
+# ── Embedding / 向量召回配置 ───────────────────────────────
+# 默认关闭，关闭时检索链路降级为 FTS + metadata + relation，不调用外部 embedding API。
+# 当前 embedding provider 使用 OpenAI-compatible /embeddings API。
+# 注意：API key、base_url、timeout 复用 processor.openai 配置；这里仅配置 embedding 自身的开关和模型名。
+embedding:
+  # embedding 提供者。
+  # 可填：
+  #   none     : 关闭 embedding，默认值
+  #   openai   : 使用 OpenAI-compatible embeddings API
+  #   deepseek : 预留别名，当前仍按 OpenAI-compatible 客户端调用
+  #   external : 预留外部兼容 provider，当前仍按 OpenAI-compatible 客户端调用
+  provider: "openai"
+
+  # embedding 模型名称。
+  # provider=none 时留空。
+  # provider=openai/deepseek/external 时必填，例如：
+  #   text-embedding-3-small
+  #   text-embedding-3-large
+  #   或兼容服务实际支持的 embedding 模型名
+  # 这里不复用 processor.openai.model，因为 chat/completion 模型和 embedding 模型通常不是同一个模型。
+  model: "MiniMax-embedding-01"
+
+  # query embedding 进程内 LRU 缓存容量。
+  # 用于减少相同 query 重复调用 /embeddings 的次数；必须大于 0。
+  query_cache_size: 256
+
+  # 是否在 memory.search / memory.context 时在线生成 query embedding。
+  # true 后会调用 processor.openai.base_url + /embeddings，并用 memory_embedding 表做向量召回。
+  # 仅打开本项还不够：memory_embedding 表中必须已有同 model 的 memory 向量。
+  online_query_embedding_enabled: true
+
+  # 是否在 memory 写入、编辑、approve 后异步生成 memory embedding。
+  # true 后会创建 compute_embedding job，由 automation worker 调用同一个 embedding provider 生成 memory 向量。
+  # 启用向量召回通常需要同时打开本项和 online_query_embedding_enabled。
+  memory_embedding_enabled: true
 
 # ── 保留策略 ──────────────────────────────────────────────
 # serve 模式周期性消费 access log，刷新 retention_score 与强化字段。
