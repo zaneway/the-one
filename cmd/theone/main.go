@@ -17,6 +17,7 @@ import (
 	"github.com/zaneway/theone/internal/app"
 	"github.com/zaneway/theone/internal/capture"
 	"github.com/zaneway/theone/internal/config"
+	"github.com/zaneway/theone/internal/logging"
 	"github.com/zaneway/theone/internal/memory"
 )
 
@@ -55,6 +56,9 @@ func run(args []string) error {
 		cfg, err := parseConfig(args[1:], false)
 		if err != nil {
 			return err
+		}
+		if err := cleanupStartupLogs(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "theone: log cleanup warning: %v\n", err)
 		}
 		// 注册 SIGINT/SIGTERM 信号，确保优雅关闭 SQLite 连接和 Worker
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -169,6 +173,20 @@ func parseConfig(args []string, includeStatusFlag bool) (config.Config, error) {
 		return config.Config{}, err
 	}
 	return config.Load(overrides)
+}
+
+func cleanupStartupLogs(cfg config.Config) error {
+	if !cfg.Logging.StartupCleanupEnabled {
+		return nil
+	}
+	removed, err := logging.CleanupLogFiles(cfg.Logging.StartupCleanupDirs)
+	if err != nil {
+		return err
+	}
+	if removed > 0 {
+		fmt.Fprintf(os.Stderr, "theone: removed %d log file(s) from startup cleanup dirs\n", removed)
+	}
+	return nil
 }
 
 // statusIncludeConfig 为 status 子命令单独解析 --include-config flag。
@@ -294,13 +312,15 @@ func runPrefetchContext(ctx context.Context, cfg config.Config) error {
 	if maxInject <= 0 {
 		maxInject = 4000
 	}
+	maxTaskChars := cfg.Adapter.PrefetchTaskMaxChars
 	repoRoot, _ := os.Getwd()
 	processor := &adapter.PrefetchProcessor{
-		Binder:    adapter.NewSessionBinder(stateDir),
-		StateDir:  stateDir,
-		RepoRoot:  repoRoot,
-		Timeout:   timeout,
-		MaxInject: maxInject,
+		Binder:       adapter.NewSessionBinder(stateDir),
+		StateDir:     stateDir,
+		RepoRoot:     repoRoot,
+		Timeout:      timeout,
+		MaxInject:    maxInject,
+		MaxTaskChars: maxTaskChars,
 		Context: func(ctx context.Context, ctxReq memory.ContextRequest) (memory.ContextResponse, error) {
 			result, toolErr := runtime.CallTool(ctx, "memory.context", ctxReq)
 			if toolErr != nil {
