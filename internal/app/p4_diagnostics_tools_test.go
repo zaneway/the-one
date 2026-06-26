@@ -192,8 +192,9 @@ func TestAppStatusReportsP4Capabilities(t *testing.T) {
 	if !status.CodeIndex.Enabled || status.CodeIndex.Provider != "local_basic" || status.CodeIndex.Capabilities.CallGraph {
 		t.Fatalf("code index status = %+v, want local_basic enabled without call graph", status.CodeIndex)
 	}
-	if status.Embedding.Provider != "none" || status.Embedding.QueryCacheSize != 256 || status.Embedding.OnlineQueryEmbeddingEnabled {
-		t.Fatalf("embedding status = %+v, want none with online disabled", status.Embedding)
+	if status.Embedding.Provider != "none" || status.Embedding.QueryCacheSize != 256 ||
+		!status.Embedding.OnlineQueryEmbeddingEnabled || !status.Embedding.MemoryEmbeddingEnabled {
+		t.Fatalf("embedding status = %+v, want none with embedding switches enabled", status.Embedding)
 	}
 	if status.Vector.Backend != "none" || status.Vector.Available {
 		t.Fatalf("vector status = %+v, want disabled vector index", status.Vector)

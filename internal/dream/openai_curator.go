@@ -12,6 +12,9 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"
+
+	"github.com/zaneway/theone/internal/idgen"
+	"github.com/zaneway/theone/internal/logging"
 )
 
 type OpenAICuratorConfig struct {
@@ -26,6 +29,7 @@ type OpenAICuratorConfig struct {
 
 type OpenAICurator struct {
 	client          openai.Client
+	baseURL         string
 	model           string
 	timeout         time.Duration
 	maxOutputTokens int64
@@ -56,6 +60,7 @@ func NewOpenAICurator(cfg OpenAICuratorConfig) (OpenAICurator, error) {
 	}
 	return OpenAICurator{
 		client:          openai.NewClient(opts...),
+		baseURL:         strings.TrimSpace(cfg.BaseURL),
 		model:           model,
 		timeout:         cfg.Timeout,
 		maxOutputTokens: cfg.MaxOutputTokens,
@@ -82,10 +87,21 @@ func (c OpenAICurator) Curate(ctx context.Context, input CurationInput) (Curatio
 	if err != nil {
 		return CurationResult{}, fmt.Errorf("PROVIDER_INPUT_INVALID: encode dream curation payload: %w", err)
 	}
+	requestID, err := idgen.New("dreq")
+	if err != nil {
+		requestID = fmt.Sprintf("dreq_%d", time.Now().UnixNano())
+	}
+	startedAt := time.Now()
+	commonFields := c.curatorLogFields(requestID, len(memories), string(data))
+	c.logInfo(logging.ExternalModelRequestStartMsg,
+		append(commonFields,
+			"timeout_ms", c.timeout.Milliseconds(),
+			"input_body", logging.ExternalModelLogBody(string(data)),
+		)...,
+	)
 	reqCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	format := shared.NewResponseFormatJSONObjectParam()
-	startedAt := time.Now()
 	resp, err := c.client.Chat.Completions.New(reqCtx, openai.ChatCompletionNewParams{
 		Model: shared.ChatModel(c.model),
 		Messages: []openai.ChatCompletionMessageParamUnion{
@@ -99,32 +115,127 @@ func (c OpenAICurator) Curate(ctx context.Context, input CurationInput) (Curatio
 		},
 	}, option.WithRequestTimeout(c.timeout))
 	if err != nil {
+		c.logError(logging.ExternalModelRequestFailedMsg,
+			append(commonFields,
+				"duration_ms", time.Since(startedAt).Milliseconds(),
+				"failure_reason", classifyDreamCuratorFailure(err),
+				"error", err.Error(),
+			)...,
+		)
 		return CurationResult{}, fmt.Errorf("PROVIDER_UNAVAILABLE: openai dream curation request failed: %w", err)
 	}
 	if len(resp.Choices) == 0 {
+		c.logError(logging.ExternalModelResponseInvalidMsg,
+			append(commonFields,
+				"duration_ms", time.Since(startedAt).Milliseconds(),
+				"output_body", logging.ExternalModelLogBody(""),
+				"response_body", dreamChatCompletionLogBody(resp, ""),
+				"error", "choices is empty",
+			)...,
+		)
 		return CurationResult{}, fmt.Errorf("PROVIDER_INVALID_OUTPUT: openai dream curation response choices is empty")
 	}
 	raw := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if raw == "" {
+		c.logError(logging.ExternalModelResponseInvalidMsg,
+			append(commonFields,
+				"duration_ms", time.Since(startedAt).Milliseconds(),
+				"output_body", logging.ExternalModelLogBody(""),
+				"response_body", dreamChatCompletionLogBody(resp, ""),
+				"error", "message content is empty",
+			)...,
+		)
 		return CurationResult{}, fmt.Errorf("PROVIDER_INVALID_OUTPUT: openai dream curation response message content is empty")
 	}
 	normalized, err := normalizeDreamCuratorJSON(raw)
 	if err != nil {
+		c.logError(logging.ExternalModelResponseInvalidMsg,
+			append(commonFields,
+				"duration_ms", time.Since(startedAt).Milliseconds(),
+				"output_body", logging.ExternalModelLogBody(raw),
+				"response_body", dreamChatCompletionLogBody(resp, raw),
+				"error", err.Error(),
+			)...,
+		)
 		return CurationResult{}, fmt.Errorf("PROVIDER_INVALID_OUTPUT: normalize dream curation response: %w", err)
 	}
 	var decoded CurationResult
 	if err := json.Unmarshal([]byte(normalized), &decoded); err != nil {
+		c.logError(logging.ExternalModelResponseInvalidMsg,
+			append(commonFields,
+				"duration_ms", time.Since(startedAt).Milliseconds(),
+				"output_body", logging.ExternalModelLogBody(normalized),
+				"response_body", dreamChatCompletionLogBody(resp, raw),
+				"error", err.Error(),
+			)...,
+		)
 		return CurationResult{}, fmt.Errorf("PROVIDER_INVALID_OUTPUT: decode dream curation response: %w", err)
 	}
 	result := sanitizeCurationResult(decoded, input.Memories, input.Config)
-	if c.logger != nil {
-		c.logger.Info("dream curation completed",
-			"input_memory_count", len(memories),
-			"output_group_count", len(result.Groups),
+	c.logInfo(logging.ExternalModelResponseOKMsg,
+		append(commonFields,
 			"duration_ms", time.Since(startedAt).Milliseconds(),
-		)
-	}
+			"output_body", logging.ExternalModelLogBody(normalized),
+			"response_body", dreamChatCompletionLogBody(resp, normalized),
+			"output_group_count", len(result.Groups),
+		)...,
+	)
 	return result, nil
+}
+
+func (c OpenAICurator) curatorLogFields(requestID string, inputMemoryCount int, inputJSON string) []any {
+	fields := []any{
+		"request_id", requestID,
+		"task", "dream_curate_memories",
+		"model", c.model,
+		"input_memory_count", inputMemoryCount,
+		"input_bytes", len(inputJSON),
+	}
+	if c.baseURL != "" {
+		fields = append(fields, "base_url", c.baseURL)
+	}
+	return fields
+}
+
+func dreamChatCompletionLogBody(resp *openai.ChatCompletion, outputText string) string {
+	if resp == nil {
+		return logging.ExternalModelLogBody(fmt.Sprintf(`{"content":%q}`, outputText))
+	}
+	body, err := json.Marshal(map[string]any{
+		"response_id": resp.ID,
+		"model":       resp.Model,
+		"content":     outputText,
+		"usage":       resp.Usage,
+	})
+	if err != nil {
+		return logging.ExternalModelLogBody(fmt.Sprintf(`{"marshal_error":%q}`, err.Error()))
+	}
+	return logging.ExternalModelLogBody(string(body))
+}
+
+func classifyDreamCuratorFailure(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "context deadline exceeded") || strings.Contains(message, "timeout") {
+		return "client_timeout"
+	}
+	return "provider_error"
+}
+
+func (c OpenAICurator) logInfo(msg string, args ...any) {
+	if c.logger == nil {
+		return
+	}
+	c.logger.Info(msg, args...)
+}
+
+func (c OpenAICurator) logError(msg string, args ...any) {
+	if c.logger == nil {
+		return
+	}
+	c.logger.Error(msg, args...)
 }
 
 func dreamCuratorInstructions() string {

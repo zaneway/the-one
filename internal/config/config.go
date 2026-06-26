@@ -14,7 +14,7 @@ import (
 
 // Config theone 主配置结构体
 // theone 的最小配置模型，保持默认可启动
-// 设计原则：embedding 和 retention 默认关闭，保证无外部依赖也能启动
+// 设计原则：embedding 检索开关默认开启，但未配置 provider 时安全降级，保证无外部依赖也能启动
 type Config struct {
 	// Storage 存储配置
 	// SQLite后端配置，包括数据库路径、WAL模式等
@@ -178,6 +178,9 @@ type AdapterConfig struct {
 	// PromptCacheUserSummaryMaxChars beforeSubmitPrompt 本地 prompt-cache 用户摘要最大字符数
 	PromptCacheUserSummaryMaxChars int `yaml:"prompt_cache_user_summary_max_chars" json:"prompt_cache_user_summary_max_chars"`
 
+	// PrefetchTaskMaxChars prefetch-context 传给 memory.context 的任务查询最大字符数。
+	PrefetchTaskMaxChars int `yaml:"prefetch_task_max_chars" json:"prefetch_task_max_chars"`
+
 	// SuppressRawEventTypes ingest 平面不写 raw_event 的事件类型列表。
 	// 省略时使用内置默认；显式配置 [] 表示不抑制任何事件类型。
 	SuppressRawEventTypes []string `yaml:"suppress_raw_event_types,omitempty" json:"suppress_raw_event_types,omitempty"`
@@ -284,10 +287,10 @@ type EmbeddingConfig struct {
 	// QueryCacheSize 查询 embedding 进程内缓存容量，默认 256。
 	QueryCacheSize int `yaml:"query_cache_size" json:"query_cache_size"`
 
-	// OnlineQueryEmbeddingEnabled 是否允许在线生成 query embedding，默认 false。
+	// OnlineQueryEmbeddingEnabled 是否允许在线生成 query embedding，默认 true；provider 未配置时安全降级。
 	OnlineQueryEmbeddingEnabled bool `yaml:"online_query_embedding_enabled" json:"online_query_embedding_enabled"`
 
-	// MemoryEmbeddingEnabled 是否允许异步生成 memory embedding(K)，默认 false。
+	// MemoryEmbeddingEnabled 是否允许异步生成 memory embedding(K)，默认 true；provider 未配置时不入队。
 	MemoryEmbeddingEnabled bool `yaml:"memory_embedding_enabled" json:"memory_embedding_enabled"`
 }
 
@@ -564,6 +567,7 @@ func Default() Config {
 			PrefetchTimeoutMS:              3000,
 			MaxInjectChars:                 4000,
 			PromptCacheUserSummaryMaxChars: 3000,
+			PrefetchTaskMaxChars:           3000,
 		},
 		Capture: CaptureConfig{
 			RequireSessionForAgentEvents: true,
@@ -593,8 +597,8 @@ func Default() Config {
 			Provider:                    "none",
 			Model:                       "",
 			QueryCacheSize:              256,
-			OnlineQueryEmbeddingEnabled: false,
-			MemoryEmbeddingEnabled:      false,
+			OnlineQueryEmbeddingEnabled: true,
+			MemoryEmbeddingEnabled:      true,
 		},
 		CodeIndex: CodeIndexConfig{
 			Provider:       "local_basic",
@@ -801,7 +805,8 @@ func validate(cfg Config) error {
 		cfg.Capture.MaxSalientSpanCount <= 0 || cfg.Capture.MaxKeywordCount <= 0 {
 		return errors.New("CONFIG_INVALID: capture content limits must be positive")
 	}
-	if cfg.Adapter.PrefetchTimeoutMS <= 0 || cfg.Adapter.MaxInjectChars <= 0 || cfg.Adapter.PromptCacheUserSummaryMaxChars <= 0 {
+	if cfg.Adapter.PrefetchTimeoutMS <= 0 || cfg.Adapter.MaxInjectChars <= 0 ||
+		cfg.Adapter.PromptCacheUserSummaryMaxChars <= 0 || cfg.Adapter.PrefetchTaskMaxChars <= 0 {
 		return errors.New("CONFIG_INVALID: adapter content limits must be positive")
 	}
 	if strings.TrimSpace(cfg.Capture.DefaultAgentType) == "" {

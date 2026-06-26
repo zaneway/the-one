@@ -80,7 +80,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	if cfg.CodeIndex.Provider != "none" {
 		codeIndexAdapter = codeindex.NewLocalBasicAdapter(cfg.CodeIndex, "")
 	}
-	queryEmbeddingProvider, err := newQueryEmbeddingProvider(cfg)
+	queryEmbeddingProvider, err := newQueryEmbeddingProvider(cfg, logger)
 	if err != nil {
 		logger.Error("query embedding provider init failed", "provider", cfg.Embedding.Provider, "error", err)
 		_ = store.Close()
@@ -176,13 +176,13 @@ func closeLogCloser(closer io.Closer) error {
 	return closer.Close()
 }
 
-func newQueryEmbeddingProvider(cfg config.Config) (retrieval.QueryEmbeddingProvider, error) {
+func newQueryEmbeddingProvider(cfg config.Config, logger *slog.Logger) (retrieval.QueryEmbeddingProvider, error) {
 	if !cfg.Embedding.OnlineQueryEmbeddingEnabled && !cfg.Embedding.MemoryEmbeddingEnabled {
 		return nil, nil
 	}
 	providerName := strings.TrimSpace(cfg.Embedding.Provider)
 	if providerName == "" || providerName == "none" {
-		return nil, fmt.Errorf("CONFIG_INVALID: embedding.provider is required when online query or memory embedding is enabled")
+		return nil, nil
 	}
 	var provider retrieval.QueryEmbeddingProvider
 	switch providerName {
@@ -192,6 +192,7 @@ func newQueryEmbeddingProvider(cfg config.Config) (retrieval.QueryEmbeddingProvi
 			BaseURL: cfg.Processor.OpenAI.BaseURL,
 			Model:   cfg.Embedding.Model,
 			Timeout: time.Duration(cfg.Processor.OpenAI.TimeoutMS) * time.Millisecond,
+			Logger:  logger,
 		})
 		if err != nil {
 			return nil, err

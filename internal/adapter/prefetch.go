@@ -50,13 +50,14 @@ type ContextFunc func(ctx context.Context, req memory.ContextRequest) (memory.Co
 
 // PrefetchProcessor P3 读路径：binding + BindTaskFromPrompt + context + Surface 元数据。
 type PrefetchProcessor struct {
-	Binder    *SessionBinder
-	Context   ContextFunc
-	Observe   ObserveFunc
-	Timeout   time.Duration
-	StateDir  string
-	RepoRoot  string
-	MaxInject int
+	Binder       *SessionBinder
+	Context      ContextFunc
+	Observe      ObserveFunc
+	Timeout      time.Duration
+	StateDir     string
+	RepoRoot     string
+	MaxInject    int
+	MaxTaskChars int
 }
 
 // Run 执行 prefetch-context 主流程。
@@ -137,7 +138,7 @@ func (p *PrefetchProcessor) Run(ctx context.Context, req PrefetchRequest) Prefet
 	}
 
 	ctxReq := memory.ContextRequest{
-		Task:                   truncate(normalizedTask, 1000),
+		Task:                   compressTaskForContext(normalizedTask, p.MaxTaskChars),
 		WorkspaceID:            scopeOrDefault(req.WorkspaceID, "local_default_workspace"),
 		ProjectID:              projectIDFromPayload(scopePayload),
 		RepoID:                 repoIDFromPayload(scopePayload),
@@ -271,6 +272,42 @@ func scopeOrDefault(value, fallback string) string {
 		return strings.TrimSpace(value)
 	}
 	return fallback
+}
+
+func compressTaskForContext(task string, maxChars int) string {
+	task = strings.TrimSpace(task)
+	if maxChars <= 0 {
+		return task
+	}
+	runes := []rune(task)
+	if len(runes) <= maxChars {
+		return task
+	}
+	marker := []rune(" [truncated] ")
+	if maxChars <= len(marker)+2 {
+		return string(runes[:maxChars])
+	}
+	remaining := maxChars - len(marker)
+	headLen := (remaining + 1) / 2
+	tailLen := remaining - headLen
+	tailStart := len(runes) - tailLen
+	for tailStart > headLen && tailStart > 0 && !isPromptBoundary(runes[tailStart-1]) {
+		tailStart--
+	}
+	tailLen = len(runes) - tailStart
+	headLen = maxInt(0, remaining-tailLen)
+	return string(runes[:headLen]) + string(marker) + string(runes[tailStart:])
+}
+
+func isPromptBoundary(r rune) bool {
+	return r == ' ' || r == '\n' || r == '\t'
+}
+
+func maxInt(left, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 // BindTaskFromPromptInput BindTaskFromPrompt 入参。

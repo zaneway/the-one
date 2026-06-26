@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/zaneway/theone/internal/capture"
@@ -113,5 +114,52 @@ func TestPrefetchProcessorBindAndContext(t *testing.T) {
 	}
 	if out.GenerationID != "gen_p3_001" || out.InjectMarkdown == "" {
 		t.Fatalf("generation/inject missing: %+v", out)
+	}
+}
+
+func TestPrefetchProcessorCompressesContextTaskWithHeadAndTail(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "runtime-state")
+	b := NewSessionBinder(dir)
+	conv := "conv_prefetch_long_task"
+	_, _ = b.Resolve(ResolveInput{
+		AgentType: "cursor",
+		EventType: "session.start",
+		Producer:  "cursor_hook:sessionStart",
+		Envelope: IngestEnvelope{
+			SessionID: conv,
+			Payload:   map[string]any{"agent_type": "cursor", "conversation_id": conv},
+		},
+	})
+
+	prompt := "HEAD-critical architecture context " +
+		"middle details that may be compressed because they are less important for retrieval " +
+		"TAIL-critical doc/path.md final constraint"
+	var gotTask string
+	p := &PrefetchProcessor{
+		Binder:       b,
+		StateDir:     dir,
+		MaxTaskChars: 96,
+		Context: func(ctx context.Context, req memory.ContextRequest) (memory.ContextResponse, error) {
+			gotTask = req.Task
+			return memory.ContextResponse{ContextPack: memory.ContextPack{Summary: "ok"}}, nil
+		},
+	}
+
+	out := p.Run(context.Background(), PrefetchRequest{
+		Task:           prompt,
+		ConversationID: conv,
+		AgentType:      "cursor",
+	})
+	if !out.OK {
+		t.Fatalf("out=%+v", out)
+	}
+	if len([]rune(gotTask)) > 96 {
+		t.Fatalf("context task length = %d, want <= 96: %q", len([]rune(gotTask)), gotTask)
+	}
+	if !strings.Contains(gotTask, "HEAD-critical") || !strings.Contains(gotTask, "TAIL-critical") {
+		t.Fatalf("context task should preserve head and tail, got %q", gotTask)
+	}
+	if !strings.Contains(gotTask, "[truncated]") {
+		t.Fatalf("context task should mark compression, got %q", gotTask)
 	}
 }

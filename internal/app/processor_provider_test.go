@@ -40,14 +40,14 @@ func TestNewProcessorProviderUsesConfiguredOpenAIKey(t *testing.T) {
 	}
 }
 
-func TestNewQueryEmbeddingProviderDisabledByDefault(t *testing.T) {
+func TestNewQueryEmbeddingProviderDefaultsToNilWhenProviderUnconfigured(t *testing.T) {
 	cfg := config.Default()
-	provider, err := newQueryEmbeddingProvider(cfg)
+	provider, err := newQueryEmbeddingProvider(cfg, slog.Default())
 	if err != nil {
 		t.Fatalf("newQueryEmbeddingProvider() error = %v", err)
 	}
 	if provider != nil {
-		t.Fatalf("provider = %#v, want nil when online query embedding is disabled", provider)
+		t.Fatalf("provider = %#v, want nil when embedding provider is unconfigured", provider)
 	}
 }
 
@@ -56,7 +56,7 @@ func TestNewQueryEmbeddingProviderRequiresOpenAIKeyWhenEnabled(t *testing.T) {
 	cfg.Embedding.Provider = "openai"
 	cfg.Embedding.Model = "text-embedding-3-small"
 	cfg.Embedding.OnlineQueryEmbeddingEnabled = true
-	_, err := newQueryEmbeddingProvider(cfg)
+	_, err := newQueryEmbeddingProvider(cfg, slog.Default())
 	if err == nil {
 		t.Fatal("newQueryEmbeddingProvider() error = nil, want missing API key error")
 	}

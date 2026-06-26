@@ -81,8 +81,8 @@ func TestLoadDefaults(t *testing.T) {
 		cfg.Retrieval.MaxRelationExpansion != 20 || cfg.Retrieval.MaxCandidatesBeforeRerank != 80 {
 		t.Fatalf("retrieval retrieval defaults = %+v, want enabled bounded retrieval", cfg.Retrieval)
 	}
-	if cfg.Embedding.QueryCacheSize != 256 || cfg.Embedding.OnlineQueryEmbeddingEnabled || cfg.Embedding.MemoryEmbeddingEnabled {
-		t.Fatalf("embedding retrieval defaults = %+v, want cache=256 and online disabled", cfg.Embedding)
+	if cfg.Embedding.QueryCacheSize != 256 || !cfg.Embedding.OnlineQueryEmbeddingEnabled || !cfg.Embedding.MemoryEmbeddingEnabled {
+		t.Fatalf("embedding retrieval defaults = %+v, want cache=256 and embedding enabled", cfg.Embedding)
 	}
 	if cfg.VectorIndex.Backend != "none" || cfg.VectorIndex.SQLiteVecEnabled != "auto" {
 		t.Fatalf("vector index defaults = %+v, want none/auto", cfg.VectorIndex)
@@ -198,6 +198,22 @@ func TestLoadAdapterPromptCacheUserSummaryLimitFromYAML(t *testing.T) {
 	}
 	if cfg.Adapter.PromptCacheUserSummaryMaxChars != 42 {
 		t.Fatalf("adapter prompt cache user summary max chars = %d, want 42", cfg.Adapter.PromptCacheUserSummaryMaxChars)
+	}
+}
+
+func TestLoadAdapterPrefetchTaskMaxCharsFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "theone.yaml")
+	data := []byte("adapter:\n  prefetch_task_max_chars: 2048\n")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(Overrides{ConfigPath: path})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Adapter.PrefetchTaskMaxChars != 2048 {
+		t.Fatalf("adapter prefetch task max chars = %d, want 2048", cfg.Adapter.PrefetchTaskMaxChars)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zaneway/theone/internal/capture"
+	"github.com/zaneway/theone/internal/logging"
 	"github.com/zaneway/theone/internal/memory"
 )
 
@@ -680,13 +681,14 @@ func TestOpenAIProviderLogsRequestAndResponseBodies(t *testing.T) {
 
 	logs := buf.String()
 	for _, want := range []string{
-		"openai provider request",
-		"openai provider response",
+		logging.ExternalModelRequestStartMsg,
+		logging.ExternalModelResponseOKMsg,
 		"theone_evidence",
 		"request_id",
 		"raw_event_id",
 		"evt_log_1",
-		"input_preview",
+		"input_body",
+		"output_body",
 		"request_body",
 		"response_body",
 		"以后先设计再实现。",
@@ -728,8 +730,8 @@ func TestOpenAIProviderLogsFailedRequest(t *testing.T) {
 
 	logs := buf.String()
 	for _, want := range []string{
-		"openai provider request",
-		"openai provider request failed",
+		logging.ExternalModelRequestStartMsg,
+		logging.ExternalModelRequestFailedMsg,
 		"request_id",
 		"raw_event_id",
 		"evt_log_2",
@@ -915,13 +917,13 @@ func TestOpenAIProviderCheckHealthAcceptsThinkWrappedJSON(t *testing.T) {
 }
 
 func TestProviderLogBodyTruncatesLongPayload(t *testing.T) {
-	long := strings.Repeat("a", providerLogBodyMaxChars+10)
-	got := providerLogBody(long)
+	long := strings.Repeat("a", logging.ExternalModelBodyMaxChars+10)
+	got := logging.ExternalModelLogBody(long)
 	if !strings.HasSuffix(got, "...(truncated)") {
-		t.Fatalf("providerLogBody() = %q, want truncated suffix", got)
+		t.Fatalf("ExternalModelLogBody() = %q, want truncated suffix", got)
 	}
-	if len(got) != providerLogBodyMaxChars+len("...(truncated)") {
-		t.Fatalf("truncated length = %d, want %d", len(got), providerLogBodyMaxChars+len("...(truncated)"))
+	if len(got) != logging.ExternalModelBodyMaxChars+len("...(truncated)") {
+		t.Fatalf("truncated length = %d, want %d", len(got), logging.ExternalModelBodyMaxChars+len("...(truncated)"))
 	}
 }
 

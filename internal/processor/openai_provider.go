@@ -16,17 +16,16 @@ import (
 
 	"github.com/zaneway/theone/internal/capture"
 	"github.com/zaneway/theone/internal/idgen"
+	"github.com/zaneway/theone/internal/logging"
 	"github.com/zaneway/theone/internal/memory"
 	"github.com/zaneway/theone/internal/prompts"
 	"github.com/zaneway/theone/internal/scoring"
 )
 
 const (
-	OpenAIProviderName = "openai"
-	// providerLogBodyMaxChars 限制单条日志字段长度，避免 prompt/事件正文撑爆日志文件。
-	providerLogBodyMaxChars = 32000
-	providerReasoningOpen   = "<" + "think" + ">"
-	providerReasoningClose  = "</" + "think" + ">"
+	OpenAIProviderName     = "openai"
+	providerReasoningOpen  = "<" + "think" + ">"
+	providerReasoningClose = "</" + "think" + ">"
 )
 
 // OpenAIProviderConfig 是 OpenAI processor 的运行时配置。
@@ -568,10 +567,11 @@ func (p OpenAIProvider) callStructured(ctx context.Context, instructions string,
 	}
 	startedAt := time.Now()
 	commonFields := p.providerLogFields(ctx, requestID, schemaName, meta, len(data), string(data))
-	p.logInfo("openai provider request",
+	p.logInfo(logging.ExternalModelRequestStartMsg,
 		append(commonFields,
 			"timeout_ms", p.timeout.Milliseconds(),
-			"request_body", providerLogBody(string(requestBody)),
+			"input_body", logging.ExternalModelLogBody(string(data)),
+			"request_body", logging.ExternalModelLogBody(string(requestBody)),
 		)...,
 	)
 	reqCtx, cancel := context.WithTimeout(ctx, p.timeout)
@@ -600,13 +600,14 @@ func (p OpenAIProvider) callStructured(ctx context.Context, instructions string,
 				"hint", "model did not return within configured processor.openai.timeout_ms; consider increasing timeout or using a faster model variant",
 			)
 		}
-		p.logError("openai provider request failed", failureFields...)
+		p.logError(logging.ExternalModelRequestFailedMsg, failureFields...)
 		return "", fmt.Errorf("PROVIDER_UNAVAILABLE: openai chat completions request failed: %w", err)
 	}
 	if len(resp.Choices) == 0 {
-		p.logError("openai provider response invalid",
+		p.logError(logging.ExternalModelResponseInvalidMsg,
 			append(commonFields,
 				"duration_ms", time.Since(startedAt).Milliseconds(),
+				"output_body", logging.ExternalModelLogBody(""),
 				"response_body", providerChatCompletionLogBody(resp, ""),
 				"error", "choices is empty",
 			)...,
@@ -615,26 +616,29 @@ func (p OpenAIProvider) callStructured(ctx context.Context, instructions string,
 	}
 	out := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if out == "" {
-		p.logError("openai provider response invalid",
+		p.logError(logging.ExternalModelResponseInvalidMsg,
 			append(commonFields,
 				"duration_ms", time.Since(startedAt).Milliseconds(),
+				"output_body", logging.ExternalModelLogBody(""),
 				"response_body", providerChatCompletionLogBody(resp, ""),
 				"error", "message content is empty",
 			)...,
 		)
 		return "", fmt.Errorf("PROVIDER_INVALID_OUTPUT: openai response message content is empty")
 	}
-	p.logInfo("openai provider response",
+	p.logInfo(logging.ExternalModelResponseOKMsg,
 		append(commonFields,
 			"duration_ms", time.Since(startedAt).Milliseconds(),
+			"output_body", logging.ExternalModelLogBody(out),
 			"response_body", providerChatCompletionLogBody(resp, out),
 		)...,
 	)
 	normalized, err := normalizeStructuredProviderOutput(out)
 	if err != nil {
-		p.logError("openai provider response invalid",
+		p.logError(logging.ExternalModelResponseInvalidMsg,
 			append(commonFields,
 				"duration_ms", time.Since(startedAt).Milliseconds(),
+				"output_body", logging.ExternalModelLogBody(out),
 				"response_body", providerChatCompletionLogBody(resp, out),
 				"error", err.Error(),
 			)...,
@@ -807,19 +811,19 @@ func providerInputPreview(payloadJSON string) string {
 		if rawEvent, ok := decoded["raw_event"].(map[string]any); ok {
 			for _, key := range []string{"content_summary", "input_summary", "output_summary"} {
 				if value, ok := rawEvent[key].(string); ok && strings.TrimSpace(value) != "" {
-					return providerLogBody(strings.TrimSpace(value))
+					return logging.ExternalModelLogBody(strings.TrimSpace(value))
 				}
 			}
 		}
 		if input, ok := decoded["input"].(map[string]any); ok {
 			for _, key := range []string{"content_summary", "input_summary", "output_summary", "event_type"} {
 				if value, ok := input[key].(string); ok && strings.TrimSpace(value) != "" {
-					return providerLogBody(strings.TrimSpace(value))
+					return logging.ExternalModelLogBody(strings.TrimSpace(value))
 				}
 			}
 		}
 	}
-	return providerLogBody(payloadJSON)
+	return logging.ExternalModelLogBody(payloadJSON)
 }
 
 // classifyProviderFailure 把 provider 调用错误归类为 client_timeout 或 provider_error。
@@ -858,7 +862,7 @@ func chatCompletionSystemContent(instructions, schemaName string, schema map[str
 
 func providerChatCompletionLogBody(resp *openai.ChatCompletion, outputText string) string {
 	if resp == nil {
-		return providerLogBody(fmt.Sprintf(`{"content":%q}`, outputText))
+		return logging.ExternalModelLogBody(fmt.Sprintf(`{"content":%q}`, outputText))
 	}
 	body, err := json.Marshal(map[string]any{
 		"response_id": resp.ID,
@@ -867,19 +871,9 @@ func providerChatCompletionLogBody(resp *openai.ChatCompletion, outputText strin
 		"usage":       resp.Usage,
 	})
 	if err != nil {
-		return providerLogBody(fmt.Sprintf(`{"marshal_error":%q}`, err.Error()))
+		return logging.ExternalModelLogBody(fmt.Sprintf(`{"marshal_error":%q}`, err.Error()))
 	}
-	return providerLogBody(string(body))
-}
-
-// providerLogBody 限制单条日志字段长度（providerLogBodyMaxChars），超长尾部追加 ...(truncated)。
-// 用于 request/response 日志写入，避免 prompt/事件正文撑爆日志文件。
-// 设计约束：超过 32KB 一律截断，长度为 0 或负数时禁用截断（保留原文）。
-func providerLogBody(value string) string {
-	if providerLogBodyMaxChars <= 0 || len(value) <= providerLogBodyMaxChars {
-		return value
-	}
-	return value[:providerLogBodyMaxChars] + "...(truncated)"
+	return logging.ExternalModelLogBody(string(body))
 }
 
 // logInfo 封装 slog.Logger.Info 调用，logger 为 nil 时静默返回。

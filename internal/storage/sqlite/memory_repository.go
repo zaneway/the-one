@@ -662,13 +662,12 @@ func (s *Store) searchByLike(ctx context.Context, req memory.SearchRequest, limi
 	startedAt := time.Now()
 	// LIKE 降级路径：FTS5 无命中或不可用时，用 LIKE 模糊匹配 search_text
 	// rank 固定为 0.0（无 BM25 分数），排序依赖 metadata 权重
-	likePattern := "%" + strings.ToLower(req.Query) + "%"
 	query := `select id, memory_type, scope, coalesce(title, ''), content,
 		coalesce(keywords_json, ''), coalesce(retrieval_cues_json, ''),
 		confidence, importance, state, tier, updated_at, 0.0 as rank
 		from memory_item
-		where lower(search_text) like ?`
-	args := []any{likePattern}
+		where `
+	query, args := appendLikeSearchCondition(query, nil, req.Query)
 	// tableOnly=true：直接查 memory_item 表，列名不加 "m." 前缀
 	query, args = appendSearchFilters(query, args, req, true)
 	// 无 BM25 时按 updated_at 降序，优先返回最近更新的记忆
@@ -677,7 +676,7 @@ func (s *Store) searchByLike(ctx context.Context, req memory.SearchRequest, limi
 
 	s.logger.Debug("searchByLike 执行查询",
 		"query", req.Query,
-		"like_pattern", likePattern,
+		"like_terms", likeFallbackTerms(req.Query),
 		"fetch_limit", limit*3,
 	)
 
@@ -712,6 +711,79 @@ func (s *Store) searchByLike(ctx context.Context, req memory.SearchRequest, limi
 	)
 
 	return results, memory.SearchDiagnostics{Fallback: "metadata_like"}, nil
+}
+
+func appendLikeSearchCondition(query string, args []any, value string) (string, []any) {
+	lowerSearchText := "lower(search_text)"
+	fullPattern := "%" + escapeLike(strings.ToLower(strings.TrimSpace(value))) + "%"
+	clauses := []string{lowerSearchText + " like ? escape '\\'"}
+	args = append(args, fullPattern)
+
+	terms := likeFallbackTerms(value)
+	if len(terms) > 1 {
+		termClauses := make([]string, 0, len(terms))
+		for _, term := range terms {
+			termClauses = append(termClauses, lowerSearchText+" like ? escape '\\'")
+			args = append(args, "%"+escapeLike(term)+"%")
+		}
+		clauses = append(clauses, "("+strings.Join(termClauses, " and ")+")")
+	}
+	return query + "(" + strings.Join(clauses, " or ") + ")", args
+}
+
+func likeFallbackTerms(query string) []string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil
+	}
+	hasPathSeparator := strings.ContainsAny(query, `/\`)
+	terms := make([]string, 0)
+	var current []rune
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		term := strings.ToLower(strings.TrimSpace(string(current)))
+		if term != "" && !shouldDropFTSTerm(term, hasPathSeparator) {
+			terms = append(terms, term)
+		}
+		current = nil
+	}
+	for _, r := range query {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r > unicode.MaxASCII {
+			current = append(current, r)
+			continue
+		}
+		flush()
+	}
+	flush()
+	if len(terms) == 1 {
+		if chunks := splitCJKPairs(terms[0]); len(chunks) > 1 {
+			terms = chunks
+		}
+	}
+	return compactUniqueStrings(terms)
+}
+
+func splitCJKPairs(term string) []string {
+	runes := []rune(term)
+	if len(runes) < 4 {
+		return nil
+	}
+	for _, r := range runes {
+		if r <= unicode.MaxASCII {
+			return nil
+		}
+	}
+	out := make([]string, 0, (len(runes)+1)/2)
+	for i := 0; i < len(runes); i += 2 {
+		end := i + 2
+		if end > len(runes) {
+			end = len(runes)
+		}
+		out = append(out, string(runes[i:end]))
+	}
+	return out
 }
 
 // searchByMemoryKey 使用 Q/K/V 投影层的 K 表做兜底召回。
