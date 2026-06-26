@@ -192,7 +192,7 @@ processor:
     # 国内密钥（platform.minimaxi.com）用 api.minimaxi.com；国际密钥（platform.minimax.io）用 api.minimax.io
     #      model: "MiniMax-M3"
     base_url: "https://api.minimaxi.com/v1"
-    api_key: "sk-cp-62SI"
+    api_key: "sk-cp-Lvtc6XhNZe8Dki5_kNrqgmBeNTyxdr_B0zyYrphpCSdvRi3Wd92NnNd3h4peSEKvFOpOxJbSF0MRomH5mOTZMrAC32fI5aABrqFzVhgoFABQKQmEIf662SI"
     timeout_ms: 120000
     max_output_tokens: 30000
     # 可选：覆盖 evidence 抽取提示词；留空使用内置默认值
@@ -219,3 +219,99 @@ automation:
 
   # running 状态任务的恢复超时(毫秒)，进程崩溃遗留的 job 超过此时间可恢复
   running_timeout_ms: 300000
+
+# ── Dream 只读 Markdown 导出 ───────────────────────────────
+# 将 SQLite 中的持久化记忆离线投影为 Obsidian 可打开的 Markdown Vault。
+# 设计约束：
+#   - Dream 是离线投影视图，不参与 memory.search / memory.context 在线检索；
+#   - SQLite 是唯一事实源，Vault 中的 .md 修改不会回写数据库；
+#   - 导出通过 MCP 工具 memory.dream.export 触发，或启用下方 scheduler 定时执行。
+# 详细设计见 doc/shared/obsidian-dream-readonly-export-design.md
+dream:
+  # 总开关。启用时 dream.vault.root 必填；默认关闭。
+  enabled: true
+
+  vault:
+    # Markdown Vault 根目录，支持 ~ 展开。
+    # 启用 dream 后，所有 .md 都写在此目录下；可指向独立目录或现有 Obsidian Vault。
+    # 示例（单条记忆）：
+    #   <root>/10-projects/the-one/decisions/<slug>--<memory_id>.md
+    # 示例（MOC 索引）：
+    #   <root>/80-moc/all-dream-projections.md
+    root: "/Users/zaneway/Downloads/obsidian-drame"
+
+    # 系统元数据目录（相对 vault.root），存放 dream-manifest.json 等，Dream 自行维护。
+    system_dir: ".theone-data"
+
+    # 用户手写笔记目录（相对 vault.root）；Dream 不写入、不覆盖此目录下的文件。
+    user_notes_dir: "99-user-notes"
+
+    # Vault 顶层分区目录（均相对 vault.root）。
+    # 路由规则（简化）：
+    #   - 有 project_id/repo_id 的记忆 -> projects/<项目>/<记忆类型>/
+    #   - state=archived 的记忆         -> archive/<项目>/<记忆类型>/
+    #   - 无项目归属的记忆               -> inbox/ungrouped/<记忆类型>/
+    #   - Curator 归类的主题笔记         -> knowledge|thinking|skills/<主题>/<类型>/
+    directories:
+      inbox: "00-inbox"
+      projects: "10-projects"
+      knowledge: "20-knowledge"
+      thinking: "30-thinking"
+      skills: "40-skills"
+      moc: "80-moc"
+      archive: "90-archive"
+
+    # memory_type -> 子目录名映射（相对上述分区目录）。
+    # 未列出的类型回退为 notes/。
+    memory_type_dirs:
+      decision: "decisions"
+      constraint: "constraints"
+      failure: "failures"
+      review_checkpoint: "reviews"
+      project_fact: "facts"
+      procedure: "procedures"
+      preference: "preferences"
+      open_issue: "open-issues"
+
+    # Curator 主题键 -> 子目录名映射（用于 knowledge/thinking/skills 分区）。
+    # 未列出的 topic_key 会按 slug 自动生成目录名。
+    topic_dirs:
+      memory-system: "memory-systems"
+      distributed-system: "distributed-systems"
+      pki: "pki"
+      security: "security"
+      database: "databases"
+      ai-agent: "ai-agents"
+
+  # 后台定时导出；关闭时仅通过 MCP memory.dream.export 手动触发。
+  scheduler:
+    enabled: true
+    # 定时间隔(毫秒)，默认 1 小时
+    interval_ms: 3600000
+    # serve 启动后首次执行延迟(毫秒)，默认 30 秒
+    initial_delay_ms: 30000
+    # 抖动比例 [0,1]，避免多实例同时导出
+    jitter_ratio: 0.1
+    # 单次导出最长运行时间(毫秒)，默认 5 分钟
+    max_run_duration_ms: 300000
+    # 上一轮仍在运行时跳过本次 tick
+    skip_if_previous_running: true
+
+  # 导出前可选的外部模型整理：将同主题碎片记忆聚类合并为主题笔记。
+  # 需要 processor.provider=openai；关闭时按规则逐条导出。
+  # decision/constraint/failure/preference/review_checkpoint 等高价值类型始终单独成文件，不参与合并。
+  curation:
+    enabled: true
+    # 单次整理最多输入记忆条数
+    max_input_memories: 50
+    # 单次整理最多输入字符数
+    max_input_chars: 30000
+    # Curator 调用超时(毫秒)；0 时回退 processor.openai.timeout_ms
+    timeout_ms: 60000
+    # 合并组最少记忆条数，低于此值不生成 consolidated 笔记
+    min_group_size: 2
+    # 要求 Curator 输出必须带 source_memory_ids，否则丢弃该组
+    require_source_memory_ids: true
+    # Curator 失败时是否降级为规则导出（逐条 memory 文件）
+    fallback_to_rule_export: true
+
