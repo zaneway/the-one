@@ -1,8 +1,8 @@
-# The One
+# theone
 
 > 最终目标，我是另外一个你。
 
-The One 是一个本地优先的 AI Memory Runtime。它试图回答一个问题：如果 AI Agent 要长期陪你写代码、做设计、查问题、复盘决策，它应该怎样逐渐理解“你”？
+theone 是一个本地优先的 AI Memory Runtime。它试图回答一个问题：如果 AI Agent 要长期陪你写代码、做设计、查问题、复盘决策，它应该怎样逐渐理解“你”？
 
 这里的“另一个你”不是人格复制，也不是让 AI 替代用户做判断。它指的是一个长期、可追溯、可纠正的记忆系统：能记住你的项目背景、技术偏好、架构原则、历史决策、踩坑经验和学习轨迹，并在新的任务里把这些记忆变成有用的上下文。
 
@@ -17,11 +17,11 @@ The One 是一个本地优先的 AI Memory Runtime。它试图回答一个问题
 - 哪些安全边界、团队规范和部署约束不能碰。
 - 你在哪些技术方向上正在学习、反复卡住或逐渐变强。
 
-The One 希望把这些长期状态沉淀下来，让 AI 不只是“会回答问题”，而是能在证据允许的范围内越来越像你的长期工程搭档。
+theone 希望把这些长期状态沉淀下来，让 AI 不只是“会回答问题”，而是能在证据允许的范围内越来越像你的长期工程搭档。
 
 ## 它要记住什么
 
-The One 不追求保存所有聊天记录。它关注的是长期有价值、可复用、可治理的记忆。
+theone 不追求保存所有聊天记录。它关注的是长期有价值、可复用、可治理的记忆。
 
 典型记忆包括：
 
@@ -36,7 +36,7 @@ The One 不追求保存所有聊天记录。它关注的是长期有价值、可
 
 ## 设计思路
 
-The One 的核心不是“聊天历史 + 向量库”，而是 Memory Lifecycle Control。
+theone 的核心不是“聊天历史 + 向量库”，而是 Memory Lifecycle Control。
 
 一条记忆从出现到被遗忘，会经过完整生命周期：
 
@@ -74,7 +74,7 @@ AI 工具事件
 
 ## 系统架构
 
-The One 在存储上分为**事实层**（`raw_event`）与**记忆层**（`memory_item`），在写入上分为**显式写入**（`memory.remember`）与**事件捕获 + 异步管道**（`memory.observe` → P3）。
+theone 在存储上分为**事实层**（`raw_event`）与**记忆层**（`memory_item`），在写入上分为**显式写入**（`memory.remember`）与**事件捕获 + 异步管道**（`memory.observe` → P3）。
 
 ### 总体数据流
 
@@ -198,7 +198,7 @@ make run-status DATA_DIR=/tmp/theone
 
 ### Agent 接入
 
-The One 当前作为本地 `stdio` MCP server 运行，适合被 Codex、Cursor、Claude Code 这类 Agent 以子进程方式拉起。接入前建议先完成编译：
+theone 当前作为本地 `stdio` MCP server 运行，适合被 Codex、Cursor、Claude Code 这类 Agent 以子进程方式拉起。接入前建议先完成编译：
 
 ```bash
 make build
@@ -231,7 +231,7 @@ args = [
   "--config",
   "/Users/zaneway/SynologyDrive/code-space/GolandProjects/the-one/theone.yaml",
   "--data-dir",
-  "/Users/zaneway/.theone"
+  "/Users/zaneway/.theone-data"
 ]
 ```
 
@@ -340,7 +340,7 @@ P5 synthetic 验收只验证 Engine MVP，不启动真实 Agent。三 Agent 真�
 
 计划中的增强项与已知局限见 [doc/后续完善规划.md](doc/后续完善规划.md)（含基于大模型的记忆价值判断、多厂商模型对接等）。
 
-The One 的长期愿景是成为一个个人与团队都能使用的认知状态层。
+theone 的长期愿景是成为一个个人与团队都能使用的认知状态层。
 
 第一步，它是本地个人记忆 runtime：让 AI Agent 记住你的偏好、项目和经验。
 
